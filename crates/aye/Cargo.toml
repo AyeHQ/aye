@@ -1,0 +1,18 @@
+[package]
+name = "aye"
+description = "A universal test runner for Python: faster and clearer, with token-efficient output for coding agents."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+keywords = ["python", "pytest", "unittest", "testing", "test-runner"]
+categories = ["command-line-utilities", "development-tools::testing"]
+default-run = "aye"
+
+[[bin]]
+name = "aye"
+path = "src/main.rs"

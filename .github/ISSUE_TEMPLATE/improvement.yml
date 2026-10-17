@@ -1,0 +1,38 @@
+name: Improvement
+description: Make something aye already does faster, clearer or more reliable
+labels: [enhancement]
+body:
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behaviour
+      description: What aye does today, with the command and output if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed improvement
+      description: What it should do instead, and why that's better.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Speed
+        - Output (text, JSON lines, -v and -q)
+        - Reliability (flakiness, hangs, isolation)
+        - Explainability (collection, fixtures, config)
+        - pytest compatibility
+        - Installation and packaging
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Suite size, timings, or anything else that shows the impact.

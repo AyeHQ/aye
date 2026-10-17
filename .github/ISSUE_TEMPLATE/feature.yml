@@ -1,0 +1,33 @@
+name: New feature
+description: Something aye doesn't do yet
+labels: [feature]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What pain does this solve? Describe the problem first, then the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed feature
+      description: How it should work, including the command line or `[tool.aye]` config you have in mind.
+      placeholder: |
+        aye --changed
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives today
+      description: How you handle this now, for example a pytest plugin or a script.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      description: aye has no model inside it (no test generation, AI fixes or LLM explanations) and no hosted service in v0/v1.
+      options:
+        - label: This fits within that scope
+          required: true

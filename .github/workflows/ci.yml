@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+      - run: make lint
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.94
+      - uses: Swatinem/rust-cache@v2
+      # `+1.94` because rust-toolchain.toml would otherwise select stable.
+      - run: cargo +1.94 check --workspace --locked
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.14"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      - name: Python environment for the end-to-end tests
+        run: uv sync --locked --python ${{ matrix.python }}
+      - run: cargo test --workspace --locked --no-fail-fast
+      # The engine's, the runner's and every adapter's, as `make test` runs them.
+      - name: Python tests
+        shell: bash
+        run: uv run --no-sync pytest -q crates/*/python/tests
+      # What each suite's and example's own runner does, recorded by `make
+      # expected`, must be current: the comparison harness diffs aye against it.
+      - name: Recorded results are current
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14'
+        run: |
+          make expected
+          git status --porcelain -- crates/aye/tests examples
+          test -z "$(git status --porcelain -- crates/aye/tests examples)"
+
+  wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      - name: Build the sdist, and the wheel from it
+        run: uv build
+      - name: Smoke-test the wheel
+        run: |
+          uvx --from dist/*.whl aye --version
+          uv run --isolated --no-project --with dist/*.whl python -m aye --version

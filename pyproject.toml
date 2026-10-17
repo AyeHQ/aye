@@ -1,0 +1,75 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "aye"
+description = "A fast, pytest-compatible test runner for Python, with token-efficient output for coding agents. Written in Rust."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+keywords = ["pytest", "testing", "test-runner", "rust", "agents"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Framework :: Pytest",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Testing",
+]
+
+dependencies = []
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://aye.run"
+Repository = "https://github.com/AyeHQ/aye"
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "crates/aye/Cargo.toml"
+module-name = "aye"
+python-source = "python"
+strip = true
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.2",
+    "pytest>=8",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+# The demo project's tests fail on purpose; they exercise aye's reporting.
+extend-exclude = ["crates/aye/tests/fixtures", "crates/aye/tests/suites"]
+force-exclude = true
+# Each example is a project of its own: its packages (`shop`) are first-party.
+src = [".", "src", "examples/*"]
+
+[tool.ruff.lint]
+extend-select = ["B", "BLE", "I", "PL", "RUF", "UP"]
+
+[tool.ruff.lint.pylint]
+# Engine objects take several keyword-only options.
+max-args = 8
+
+[tool.ruff.lint.per-file-ignores]
+# Tests compare against literal values and build failures on purpose.
+"crates/*/python/tests/**" = ["PLR2004", "PLR0133", "S101", "S102"]
+# The examples' tests read as tests are written: `assert stock == 6`.
+"examples/*/tests/**" = ["PLR2004"]
+
+[tool.uv]
+# Cargo builds the Rust binary; uv only manages the Python environment the
+# end-to-end tests run in. `uv build` still produces the wheel through maturin.
+package = false
+
+[tool.uv.workspace]
+members = [
+    "python",
+]

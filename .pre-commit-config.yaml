@@ -1,0 +1,58 @@
+# The single source of truth for checks: run on commit, by `make lint`, and in CI.
+default_install_hook_types: [pre-commit, commit-msg]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: check-toml
+      - id: check-yaml
+      - id: check-json
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets --locked -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+  - repo: https://github.com/EmbarkStudios/cargo-deny
+    rev: 0.20.2
+    hooks:
+      - id: cargo-deny
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.12.24
+    hooks:
+      - id: uv-lock
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+
+  # release-please builds versions and the changelog from Conventional Commits.
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]

@@ -1,0 +1,72 @@
+name: Bug report
+description: aye crashed, gave a wrong result, or behaved differently from pytest
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The fastest bugs to fix come with a small test file that reproduces the problem.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The command you ran and the smallest test file or project that triggers it.
+      placeholder: |
+        aye tests/test_example.py -k login
+
+        # tests/test_example.py
+        def test_login():
+            ...
+    validations:
+      required: true
+  - type: dropdown
+    id: pytest
+    attributes:
+      label: Does plain pytest behave correctly on the same tests?
+      options:
+        - "Yes: only aye gets it wrong"
+        - "No: pytest has the same problem"
+        - Haven't checked
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The full output. `--output json -vvv` gives the complete event stream, which helps most.
+      render: shell
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Collection
+        - Selection (-k, -m, --lf, node ids)
+        - Running and workers (-n, -x, crashes, hangs)
+        - Output (text, JSON lines, -v and -q)
+        - Configuration
+        - pytest plugin or fixture compatibility
+        - Installation and packaging
+        - Not sure
+  - type: input
+    id: aye-version
+    attributes:
+      label: aye version
+      placeholder: output of `aye --version`
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Python version, pytest version, OS, and how aye was installed.
+      placeholder: Python 3.13.1, pytest 9.1.1, macOS 26 (arm64), uv tool install
+    validations:
+      required: true

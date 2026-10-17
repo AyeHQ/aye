@@ -1,0 +1,107 @@
+name: Release
+
+# release-please keeps a release PR open on main: it bumps the version in
+# Cargo.toml and Cargo.lock and writes CHANGELOG.md from Conventional Commits.
+# Merging that PR tags the release, and this same run builds and publishes it.
+# (Tags pushed with GITHUB_TOKEN can't trigger another workflow, so it has to
+# be one workflow.)
+#
+# Credentials come only from environment variables, set from repository
+# secrets:
+# - CARGO_REGISTRY_TOKEN: a crates.io token scoped to `aye*`
+# - UV_PUBLISH_TOKEN: a PyPI token for the `aye` project
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      created: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+
+  wheels:
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64, manylinux: auto }
+          - { os: ubuntu-latest, target: aarch64, manylinux: auto }
+          - { os: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2 }
+          - { os: ubuntu-latest, target: aarch64, manylinux: musllinux_1_2 }
+          - { os: macos-latest, target: x86_64 }
+          - { os: macos-latest, target: aarch64 }
+          - { os: windows-latest, target: x64 }
+          - { os: windows-11-arm, target: aarch64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      # maturin-action handles cross-compilation and manylinux containers,
+      # which `uv build` doesn't.
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --locked --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.target }}-${{ matrix.manylinux || 'native' }}
+          path: dist
+
+  sdist:
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build --sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+  publish-pypi:
+    needs: [release-please, wheels, sdist]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # attach the distributions to the GitHub release
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: astral-sh/setup-uv@v6
+      - run: make publish-pypi
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.UV_PUBLISH_TOKEN }}
+      - run: gh release upload ${{ needs.release-please.outputs.tag }} dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  publish-crates:
+    needs: [release-please, wheels, sdist]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: make publish-crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

@@ -1,0 +1,55 @@
+# Weekly dependency updates. Minor and patch bumps are grouped into one PR per
+# ecosystem; major bumps get their own PRs. Commit prefixes are Conventional
+# Commits for release-please: Rust dependency bumps ship in the binary, so they
+# are `fix(deps)` and trigger a release, and everything else is `chore(deps)`.
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: fix
+      include: scope
+    ignore:
+      # Pinned on purpose: every release raises the MSRV. Bump them together
+      # with rust-version (see Cargo.toml).
+      - dependency-name: "ruff_*"
+      - dependency-name: get-size2
+    groups:
+      cargo:
+        update-types: [minor, patch]
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      python:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      actions:
+        update-types: [minor, patch]
+
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      pre-commit:
+        update-types: [minor, patch]

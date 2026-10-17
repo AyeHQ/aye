@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.94"
+license = "Apache-2.0"
+repository = "https://github.com/RonsenbergVI/aye"
+homepage = "https://aye.run"
+authors = ["René-Jean Corneille"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+struct_excessive_bools = "allow"
+too_many_lines = "allow"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

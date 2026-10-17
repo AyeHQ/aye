@@ -1,0 +1,5 @@
+# Contributors build with current stable. The minimum supported version is
+# `rust-version` in Cargo.toml, checked by CI's msrv job.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
