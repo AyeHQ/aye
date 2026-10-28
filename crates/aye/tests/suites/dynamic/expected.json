@@ -1,0 +1,30 @@
+{
+  "referee": "pytest",
+  "collected": [
+    "tests/test_computed.py::test_squares[0]",
+    "tests/test_computed.py::test_squares[1]",
+    "tests/test_computed.py::test_squares[4]",
+    "tests/test_computed.py::test_callable_ids[n0]",
+    "tests/test_computed.py::test_callable_ids[n1]",
+    "tests/test_computed.py::test_alpha",
+    "tests/test_computed.py::test_beta",
+    "tests/test_generated.py::test_generated[g1]",
+    "tests/test_generated.py::test_generated[g2]",
+    "tests/test_generated.py::test_backend[sqlite]",
+    "tests/test_generated.py::test_backend[postgres]"
+  ],
+  "outcomes": {
+    "tests/test_computed.py::test_alpha": "passed",
+    "tests/test_computed.py::test_beta": "passed",
+    "tests/test_computed.py::test_callable_ids[n0]": "passed",
+    "tests/test_computed.py::test_callable_ids[n1]": "passed",
+    "tests/test_computed.py::test_squares[0]": "passed",
+    "tests/test_computed.py::test_squares[1]": "passed",
+    "tests/test_computed.py::test_squares[4]": "passed",
+    "tests/test_generated.py::test_backend[postgres]": "passed",
+    "tests/test_generated.py::test_backend[sqlite]": "passed",
+    "tests/test_generated.py::test_generated[g1]": "passed",
+    "tests/test_generated.py::test_generated[g2]": "passed"
+  },
+  "exit_code": 0
+}
