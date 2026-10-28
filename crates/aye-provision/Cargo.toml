@@ -1,0 +1,16 @@
+[package]
+name = "aye-provision"
+description = "Environments for aye: the Provisioner contract, uv as a subprocess, bring-your-own interpreters"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+aye-events = { workspace = true }
+
+[lints]
+workspace = true

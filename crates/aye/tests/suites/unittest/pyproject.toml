@@ -1,0 +1,10 @@
+[project]
+name = "suite-unittest"
+version = "0"
+
+[tool.aye]
+adapters = ["unittest"]
+
+[tool.aye.unittest]
+start-directory = "tests"
+top-level-directory = "."

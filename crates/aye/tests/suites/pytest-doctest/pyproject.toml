@@ -1,0 +1,9 @@
+[project]
+name = "suite-pytest-doctest"
+version = "0"
+
+# No [tool.aye] adapters: aye chooses them from pytest's configuration, which
+# turns doctests on in every module and, by default, in test*.txt files.
+[tool.pytest.ini_options]
+addopts = "--doctest-modules"
+pythonpath = ["."]

@@ -1,0 +1,8 @@
+A walkthrough with a mistake in it
+==================================
+
+    >>> from calc import mean
+    >>> mean([2, 4])
+    3.0
+    >>> mean([1, 2])
+    1
