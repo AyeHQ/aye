@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use aye_engine::{LineIndex, SourceFile, TextSize, ast};
-use aye_events::{Diagnostic, Severity, Span};
+use aye_events::{Diagnostic, ProjectPath, Severity, Span};
 use ruff_python_parser::ParseError;
 
 use crate::codes;
@@ -29,9 +29,13 @@ impl Source {
     }
 
     /// The file as recognizers see it, when it parsed.
-    pub(crate) fn file<'a>(&'a self, rel: &'a str, abs: &'a Path) -> Option<SourceFile<'a>> {
+    pub(crate) fn file<'a>(
+        &'a self,
+        rel: &'a ProjectPath,
+        abs: &'a Path,
+    ) -> Option<SourceFile<'a>> {
         Some(SourceFile {
-            rel,
+            rel: rel.as_path(),
             abs,
             source: &self.text,
             module: self.module.as_ref()?,

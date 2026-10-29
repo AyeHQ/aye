@@ -50,7 +50,7 @@ impl Parsed {
 
     fn file(&self) -> SourceFile<'_> {
         SourceFile {
-            rel: &self.rel,
+            rel: aye_events::ProjectPathRef::as_written(&self.rel),
             abs: &self.abs,
             source: &self.source,
             module: self.ast.syntax(),

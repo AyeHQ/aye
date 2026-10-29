@@ -173,7 +173,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use aye_events::{BatchId, Case, Diagnostic, Record, Span, TestId};
+use aye_events::{BatchId, Case, Diagnostic, ProjectPathRef, Record, Span, TestId};
 use serde::{Deserialize, Serialize};
 
 pub use ruff_python_ast as ast;
@@ -344,7 +344,7 @@ impl Claim {
 #[derive(Clone, Copy)]
 pub struct SourceFile<'a> {
     /// Relative to the project root, `/` separators.
-    pub rel: &'a str,
+    pub rel: ProjectPathRef<'a>,
     pub abs: &'a Path,
     pub source: &'a str,
     pub module: &'a ast::ModModule,
@@ -359,7 +359,7 @@ impl SourceFile<'_> {
 
     pub fn span(&self, range: TextRange) -> Span {
         Span {
-            path: self.rel.to_string(),
+            path: self.rel.as_str().to_string(),
             start: range.start().to_u32(),
             end: range.end().to_u32(),
             line: Some(self.line(range.start())),

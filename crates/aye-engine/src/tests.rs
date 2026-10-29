@@ -145,7 +145,7 @@ fn source_files_turn_ranges_into_spans() {
     let lines = LineIndex::from_source_text(source);
     let path = Path::new("/repo/t.py");
     let file = SourceFile {
-        rel: "t.py",
+        rel: ProjectPathRef::as_written("t.py"),
         abs: path,
         source,
         module: parsed.syntax(),

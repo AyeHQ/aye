@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use aye_engine::{RefineRequest, Refined, Refiner, Setting};
-use aye_events::{Diagnostic, Severity};
+use aye_events::{Diagnostic, ProjectPath, Severity};
 
 use crate::source::Source;
 use crate::standalone::{self, Scope};
@@ -126,7 +126,7 @@ impl Collector<'_> {
                 };
                 let key = cache.as_ref().zip(found.digest).zip(packages).map(
                     |((cache, content), packages)| {
-                        let chain: Vec<(String, u128)> = job
+                        let chain: Vec<(ProjectPath, u128)> = job
                             .chain(i)
                             .iter()
                             .filter_map(|&at| {
@@ -138,7 +138,7 @@ impl Collector<'_> {
                             .chain(packages)
                             .collect();
                         cache.key(
-                            &tree.entries[job.at].rel,
+                            tree.entries[job.at].rel.as_str(),
                             content,
                             chain.iter().map(|(rel, hash)| (rel.as_str(), *hash)),
                         )
@@ -174,7 +174,7 @@ impl Collector<'_> {
                 adapter: (*adapter).to_string(),
                 files: misses
                     .iter()
-                    .map(|(at, _, _)| tree.entries[*at].rel.clone())
+                    .map(|(at, _, _)| tree.entries[*at].rel.as_str().to_owned())
                     .collect(),
                 context,
                 digests_only: false,
@@ -250,7 +250,7 @@ impl Collector<'_> {
         recognizer: usize,
         scope: &Scope<'_>,
         memo: &mut HashMap<(PathBuf, usize), Option<u128>>,
-    ) -> Option<Vec<(String, u128)>> {
+    ) -> Option<Vec<(ProjectPath, u128)>> {
         let root = self.project.root;
         let mut out = Vec::new();
         for dir in abs
@@ -262,9 +262,9 @@ impl Collector<'_> {
             if init == abs || !init.is_file() {
                 continue;
             }
-            let rel = aye_fs::relative_through_root(&init, root);
+            let rel = ProjectPath::as_written(aye_fs::relative_through_root(&init, root));
             let hash = *memo.entry((init.clone(), recognizer)).or_insert_with(|| {
-                let (source, _) = crate::source::load(&init, &rel);
+                let (source, _) = crate::source::load(&init, rel.as_str());
                 let source = source.filter(|s| !s.is_lossy())?;
                 let file = source.file(&rel, &init)?;
                 standalone::dependence(file.module, &init, scope)
@@ -288,7 +288,7 @@ fn fallback(
     Diagnostic {
         severity,
         code: code.to_string(),
-        path: tree.entries[at].rel.clone(),
+        path: tree.entries[at].rel.as_str().to_owned(),
         span: None,
         message,
     }

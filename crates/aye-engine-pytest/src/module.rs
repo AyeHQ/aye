@@ -838,7 +838,7 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
                 }
             }
         }
-        let reached = reached(module, self.scope, self.file.rel);
+        let reached = reached(module, self.scope, self.file.rel.as_str());
         if !reached.is_empty() {
             for reason in reached {
                 self.doubt(reason);

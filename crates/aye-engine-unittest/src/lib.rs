@@ -524,12 +524,7 @@ impl UnittestRecognizer {
         certainty: Certainty,
     ) -> Vec<Case> {
         let mut cases = Vec::new();
-        let parts: Vec<String> = file
-            .rel
-            .split('/')
-            .filter(|p| !p.is_empty())
-            .map(str::to_string)
-            .collect();
+        let parts: Vec<String> = file.rel.components().map(str::to_string).collect();
         for class in loaded {
             // The name the loader found the class under, as pytest names it.
             let class_names = [class.name.as_str()];

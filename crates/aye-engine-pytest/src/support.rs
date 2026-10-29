@@ -2661,7 +2661,7 @@ def helper(): pass
         let parsed = ruff_python_parser::parse_module(source).unwrap();
         let lines = aye_engine::LineIndex::from_source_text(source);
         let file = SourceFile {
-            rel: "conftest.py",
+            rel: aye_events::ProjectPathRef::as_written("conftest.py"),
             abs: &abs,
             source,
             module: parsed.syntax(),

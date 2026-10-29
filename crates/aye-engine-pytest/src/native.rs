@@ -198,8 +198,17 @@ impl Recognizer for NativeRecognizer {
     /// doctest adapter only.
     fn recognize(&self, file: &SourceFile<'_>, support: &[SourceFile<'_>]) -> Recognition {
         if self.inner.doctests.is_some() {
-            let explicit = self.inner.explicit.lock().expect("lock").contains(file.rel);
-            if self.inner.doctest_file(file.rel, explicit).is_some() {
+            let explicit = self
+                .inner
+                .explicit
+                .lock()
+                .expect("lock")
+                .contains(file.rel.as_str());
+            if self
+                .inner
+                .doctest_file(file.rel.as_str(), explicit)
+                .is_some()
+            {
                 return Recognition {
                     diagnostics: vec![Diagnostic {
                         severity: Severity::Error,
@@ -1206,7 +1215,7 @@ mod tests {
         let parsed = ruff_python_parser::parse_module(source).unwrap();
         let lines = aye_engine::LineIndex::from_source_text(source);
         let file = SourceFile {
-            rel: "test_a.py",
+            rel: aye_events::ProjectPathRef::as_written("test_a.py"),
             abs: &root.join("test_a.py"),
             source,
             module: parsed.syntax(),
@@ -1240,7 +1249,7 @@ mod tests {
         let parsed = ruff_python_parser::parse_module("").unwrap();
         let lines = aye_engine::LineIndex::from_source_text(source);
         let file = SourceFile {
-            rel: "test_notes.txt",
+            rel: aye_events::ProjectPathRef::as_written("test_notes.txt"),
             abs: &root.join("test_notes.txt"),
             source,
             module: parsed.syntax(),
@@ -1299,7 +1308,7 @@ mod tests {
             let parsed = ruff_python_parser::parse_module(source).unwrap();
             let lines = aye_engine::LineIndex::from_source_text(source);
             let file = SourceFile {
-                rel,
+                rel: aye_events::ProjectPathRef::as_written(rel),
                 abs: &root.join(rel),
                 source,
                 module: parsed.syntax(),
@@ -1332,7 +1341,7 @@ mod tests {
         let parsed = ruff_python_parser::parse_module(exact).unwrap();
         let lines = aye_engine::LineIndex::from_source_text(exact);
         let file = SourceFile {
-            rel: "test_a.py",
+            rel: aye_events::ProjectPathRef::as_written("test_a.py"),
             abs: &root.join("test_a.py"),
             source: exact,
             module: parsed.syntax(),

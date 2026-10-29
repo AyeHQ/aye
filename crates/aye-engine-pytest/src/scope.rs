@@ -5362,7 +5362,7 @@ mod tests {
         let lines = LineIndex::from_source_text(source);
         let abs = dir.path().join("test_x.py");
         let file = SourceFile {
-            rel: "test_x.py",
+            rel: aye_events::ProjectPathRef::as_written("test_x.py"),
             abs: &abs,
             source,
             module: parsed.syntax(),

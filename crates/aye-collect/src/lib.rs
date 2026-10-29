@@ -181,7 +181,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_engine::{Project, Recognition, Recognizer, Refiner, SourceFile};
-use aye_events::{Case, Diagnostic, Severity, TestId};
+use aye_events::{Case, Diagnostic, ProjectPathRef, Severity, TestId};
 
 mod environment;
 mod parallel;
@@ -447,7 +447,7 @@ impl<'a> Collector<'a> {
         let support_files = tree.support_files();
         let loaded = parallel::map(&support_files, |&at| {
             let entry = &tree.entries[at];
-            source::load(&entry.abs, &entry.rel)
+            source::load(&entry.abs, entry.rel.as_str())
         });
         let mut support = HashMap::new();
         for (at, (source, diagnostic)) in support_files.into_iter().zip(loaded) {
@@ -632,7 +632,7 @@ impl<'a> Collector<'a> {
         let (owned, diagnostic) = if entry.support != 0 {
             (None, None)
         } else {
-            source::load(&entry.abs, &entry.rel)
+            source::load(&entry.abs, entry.rel.as_str())
         };
         let mut recognized = Recognized {
             diagnostic,
@@ -743,7 +743,7 @@ impl<'a> Collector<'a> {
                         recognition
                             .diagnostics
                             .into_iter()
-                            .filter(|d| d.severity != Severity::Error || d.path != *rel),
+                            .filter(|d| d.severity != Severity::Error || d.path != rel.as_str()),
                     );
                     notes.extend(result.diagnostics);
                     result.cases
@@ -762,34 +762,37 @@ impl<'a> Collector<'a> {
             // framework skipped or ignored it, a class it won't collect),
             // or a directory it is in (a conftest skipped it), has had its
             // explanation.
-            let quiet = notes.iter().all(|d| d.path != *rel)
-                && !explained.iter().any(|dir| within(rel, dir));
+            let quiet = notes.iter().all(|d| d.path != rel.as_str())
+                && !explained.iter().any(|dir| {
+                    rel.as_path()
+                        .starts_with_dir(ProjectPathRef::as_written(dir))
+                });
             if found.parsed
                 && quiet
                 && !fell_back
                 && !anchored.contains_key(&job.at)
                 && groups.iter().all(|(_, c)| c.is_empty())
-                && groups
-                    .iter()
-                    .any(|(i, _)| !claims_any_name(&mut probes, &self.recognizers[*i], *i, rel))
+                && groups.iter().any(|(i, _)| {
+                    !claims_any_name(&mut probes, &self.recognizers[*i], *i, rel.as_str())
+                })
             {
                 let names: Vec<&str> = groups.iter().map(|(i, _)| self.recognizers[*i].0).collect();
                 notes.push(Diagnostic {
                     severity: Severity::Info,
                     code: codes::NO_TESTS.to_string(),
-                    path: tree.entries[job.at].rel.clone(),
+                    path: rel.as_str().to_owned(),
                     span: None,
                     message: format!("claimed for tests by {}, but has none", names.join(", ")),
                 });
             }
             files.push(Merged {
-                rel: rel.clone(),
+                rel: rel.as_str().to_owned(),
                 notes,
                 groups,
             });
         }
         for (anchor, cases) in anchored {
-            let package = &tree.entries[anchor].rel;
+            let package = tree.entries[anchor].rel.as_str();
             let package = &package[..package.len() - INIT.len()];
             // By file, in walk order; by recognizer within each.
             let mut by_file: BTreeMap<WalkKey, Vec<(usize, Vec<Case>)>> = BTreeMap::new();
@@ -802,7 +805,10 @@ impl<'a> Collector<'a> {
                     None => groups.push((i, vec![case])),
                 }
             }
-            let Some(start) = files.iter().position(|f| f.rel == tree.entries[anchor].rel) else {
+            let Some(start) = files
+                .iter()
+                .position(|f| f.rel == tree.entries[anchor].rel.as_str())
+            else {
                 continue;
             };
             for (key, groups) in by_file {
@@ -904,18 +910,12 @@ fn package_anchor(tree: &Tree<'_>, requested: &[usize], path: &str) -> Option<us
     requested
         .iter()
         .filter_map(|&at| {
-            let package = tree.entries[at].rel.strip_suffix(INIT)?;
+            let package = tree.entries[at].rel.as_str().strip_suffix(INIT)?;
             let holds = (package.is_empty() || package.ends_with('/')) && path.starts_with(package);
             holds.then_some((package.len(), at))
         })
         .max_by_key(|(len, _)| *len)
         .map(|(_, at)| at)
-}
-
-/// Whether the file `rel` is `path`, or below the directory `path`.
-fn within(rel: &str, path: &str) -> bool {
-    rel.strip_prefix(path)
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
 /// A path's place in the walk ([`tree::walk_order`] at each level), with

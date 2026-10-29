@@ -1062,7 +1062,7 @@ impl DoctestRecognizer {
                 .components()
                 .map(|c| c.as_os_str().to_string_lossy().into_owned())
                 .collect(),
-            Err(_) => file.rel.split('/').map(str::to_string).collect(),
+            Err(_) => file.rel.as_str().split('/').map(str::to_string).collect(),
         }
     }
 
@@ -1101,7 +1101,7 @@ impl DoctestRecognizer {
             if let Some(why) = self.skipping_conftest(file.abs) {
                 recognition.refine = Some(why);
             }
-            let name = file.rel.rsplit('/').next().unwrap_or(file.rel);
+            let name = file.rel.file_name();
             let span = Span {
                 path: file.rel.to_string(),
                 start: 0,

@@ -201,7 +201,7 @@ fn recognize_text(recognizer: &PytestRecognizer, root: &Path, rel: &str) -> Reco
     let empty = ruff_python_parser::parse_module("").unwrap();
     let lines = LineIndex::from_source_text(&source);
     let file = SourceFile {
-        rel,
+        rel: aye_events::ProjectPathRef::as_written(rel),
         abs: &abs,
         source: &source,
         module: empty.syntax(),
