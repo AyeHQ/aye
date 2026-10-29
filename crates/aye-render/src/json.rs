@@ -1212,11 +1212,7 @@ impl<W: Write> JsonLines<W> {
     /// An error diagnostic's `collection_error`; from level 2, a warning's
     /// or info's `diagnostic`. Each once.
     fn diagnostic(&mut self, diagnostic: &Diagnostic) -> io::Result<()> {
-        let severity = match diagnostic.severity {
-            Severity::Error => "error",
-            Severity::Warning => "warning",
-            Severity::Info => "info",
-        };
+        let severity = diagnostic.severity.as_str();
         if (diagnostic.severity != Severity::Error && !self.detailed())
             || !self.diagnostics.insert((
                 severity,
