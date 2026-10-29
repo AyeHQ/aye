@@ -467,7 +467,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_engine::{AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile};
-use aye_events::{Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
+use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 use aye_fs::normalize_absolute;
 use aye_static::EnvVars;
 
@@ -1385,13 +1385,13 @@ impl PytestRecognizer {
     /// `consider_namespace_packages` the name depends on `sys.path` at
     /// runtime; the file's stem stands in, which groups every file that
     /// could clash (and some that can't).
-    fn import_key(&self, file: &Path) -> String {
+    fn import_key(&self, file: &Path) -> AffinityKey {
         let stem = file
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
         if self.config.consider_namespace_packages {
-            return format!("import:{stem}");
+            return AffinityKey::import(&stem);
         }
         let packaged = package_path(file)
             .and_then(|package| module_name(package.parent().unwrap_or(&package), file));
@@ -1423,7 +1423,7 @@ impl PytestRecognizer {
             }
             (None, _) => stem,
         };
-        format!("import:{name}")
+        AffinityKey::import(&name)
     }
 
     /// Whether pytest ignores `path` (`collect_ignore`, `--ignore` and
@@ -1968,7 +1968,7 @@ impl Recognizer for PytestRecognizer {
             }
             // Test modules that import it run in one session, as pytest
             // runs them.
-            key = format!("import:{name}");
+            key = AffinityKey::import(&name);
         }
         for case in &mut recognition.cases {
             case.affinity.insert(0, key.clone());

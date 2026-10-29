@@ -51,7 +51,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
-use aye_events::{AdapterName, BatchId, Case, TestId, WorkerId};
+use aye_events::{AdapterName, AffinityKey, BatchId, Case, TestId, WorkerId};
 
 use crate::worker::lock;
 
@@ -89,7 +89,7 @@ struct Group<'a> {
 /// a free case (kept apart from affinity keys, which may be file names).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Key<'a> {
-    Affinity(&'a str),
+    Affinity(&'a AffinityKey),
     Free(&'a str),
 }
 
@@ -106,7 +106,7 @@ pub(crate) fn plan(
     let weigh = Weights::new(durations);
     // A file's free cases go with its first lifetime group, if it has one,
     // so that they keep their place among its other cases.
-    let mut lifetimes: HashMap<(&AdapterName, &str), &str> = HashMap::new();
+    let mut lifetimes: HashMap<(&AdapterName, &str), &AffinityKey> = HashMap::new();
     for case in cases {
         if let Some(key) = case.affinity.first() {
             lifetimes
@@ -657,7 +657,7 @@ mod tests {
     /// engine declare.
     fn case(id: &str) -> Case {
         let mut case = free(id);
-        case.affinity = vec![case.id.path().to_string()];
+        case.affinity = vec![AffinityKey::file(case.id.path())];
         case
     }
 
@@ -917,7 +917,7 @@ mod tests {
     fn with_one_worker_free_cases_keep_their_place_among_their_files_cases() {
         let module = |id: &str| {
             let mut case = free(id);
-            case.affinity = vec![format!("module:{}", case.id.path())];
+            case.affinity = vec![AffinityKey::module(case.id.path())];
             case
         };
         let cases = [
@@ -1009,7 +1009,7 @@ mod tests {
             .collect();
         cases.extend(["x.txt::d", "y.txt::d"].iter().map(|id| {
             let mut case = Case::new(*id, "doctest");
-            case.affinity = vec![case.id.path().to_string()];
+            case.affinity = vec![AffinityKey::file(case.id.path())];
             case
         }));
         let durations = history(&[

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use aye_engine::ast::{Expr, ExprLambda, Stmt, StmtClassDef, StmtFunctionDef};
 use aye_engine::{Ranged, Recognition, SourceFile, TextRange, TextSize};
-use aye_events::{Case, Certainty, Diagnostic, DiagnosticCode, Severity};
+use aye_events::{AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity};
 
 use crate::fnmatch::matches_prefix_or_glob;
 use crate::ids::{IdOptions, parameterset_ids};
@@ -2741,9 +2741,10 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
         }
         case.keywords = keywords;
         case.tags = tags;
-        case.affinity.push(self.file.rel.to_string());
+        case.affinity.push(AffinityKey::file(self.file.rel));
         for i in 1..=item.classes.len() {
-            case.affinity.push(self.nodeid(&item.classes[..i]));
+            case.affinity
+                .push(AffinityKey::file_class(self.file.rel, &item.classes[..i]));
         }
         case.certainty = item.certainty;
         self.cases.push(case);

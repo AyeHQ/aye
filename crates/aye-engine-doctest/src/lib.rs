@@ -321,7 +321,9 @@ use aye_engine::{
     Adapter, AdapterError, Claim, EmbeddedModule, Executor, Project, Recognition, Recognizer,
     Setting, SourceFile,
 };
-use aye_events::{AdapterName, Case, Certainty, Diagnostic, DiagnosticCode, Severity, Span};
+use aye_events::{
+    AdapterName, AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity, Span,
+};
 use aye_static::EnvVars;
 
 pub use config::{DoctestConfig, ImportMode};
@@ -1073,7 +1075,13 @@ impl DoctestRecognizer {
         }
     }
 
-    fn case(&self, file: &SourceFile<'_>, name: &str, span: Span, affinity: Vec<String>) -> Case {
+    fn case(
+        &self,
+        file: &SourceFile<'_>,
+        name: &str,
+        span: Span,
+        affinity: Vec<AffinityKey>,
+    ) -> Case {
         let mut case = Case::new(format!("{}::{name}", file.rel), NAME);
         case.span = Some(span);
         let mut keywords = self.path_keywords(file);
@@ -1115,7 +1123,7 @@ impl DoctestRecognizer {
                 end: 0,
                 line: Some(1),
             };
-            let case = self.case(file, name, span, vec![file.rel.to_string()]);
+            let case = self.case(file, name, span, vec![AffinityKey::file(file.rel)]);
             recognition.cases.push(case);
         }
         recognition
@@ -1214,7 +1222,7 @@ impl DoctestRecognizer {
             // its collection error.
             reasons.push(NO_STATIC_DOCTESTS.to_string());
         }
-        let affinity = vec![format!("import:{name}"), file.rel.to_string()];
+        let affinity = vec![AffinityKey::import(&name), AffinityKey::file(file.rel)];
         for test in finding.tests {
             let span = file.span(test.range);
             let case = self.case(file, &test.name, span, affinity.clone());

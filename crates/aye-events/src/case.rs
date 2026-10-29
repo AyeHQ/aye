@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::affinity::AffinityKey;
 use crate::id::{AdapterName, TestId};
 use crate::path::Span;
 
@@ -41,7 +42,7 @@ pub struct Case {
     /// Keys of the lifetimes this test runs inside, outermost first. Tests
     /// sharing a key are kept together when that lifetime is expensive.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub affinity: Vec<String>,
+    pub affinity: Vec<AffinityKey>,
     /// Must not run concurrently with other serial tests.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub serial: bool,

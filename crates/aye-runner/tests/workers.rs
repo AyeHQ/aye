@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 
 use aye_engine::{EmbeddedModule, Executor, Policy, RefineRequest, Refiner, Reply, Request};
 use aye_events::{
-    AdapterName, Case, DiagnosticCode, Event, Outcome, ProjectPath, Record, TestId, TestResult,
+    AdapterName, AffinityKey, Case, DiagnosticCode, Event, Outcome, ProjectPath, Record, TestId,
+    TestResult,
 };
 #[cfg(unix)]
 use aye_runner::Worker;
@@ -336,7 +337,7 @@ fn cases(ids: &[&str]) -> Vec<Case> {
     free_cases(ids)
         .into_iter()
         .map(|mut case| {
-            case.affinity = vec![case.id.path().to_string()];
+            case.affinity = vec![AffinityKey::file(case.id.path())];
             case
         })
         .collect()

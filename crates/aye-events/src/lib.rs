@@ -27,6 +27,7 @@
 //!
 //! Depends on: serde only. Must not depend on any other aye crate.
 
+mod affinity;
 mod case;
 mod diagnostic;
 mod event;
@@ -38,6 +39,7 @@ mod path;
 mod result;
 mod serde_ext;
 
+pub use affinity::{AffinityKey, AffinityKind};
 pub use case::{Case, Certainty};
 pub use diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticOrigin, ErrorClass, Severity, SummaryKind,
