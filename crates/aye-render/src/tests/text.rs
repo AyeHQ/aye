@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use aye_events::{
-    Assertion, BatchIndex, Captured, Counts, Event, ExitCode, Failure, Outcome, Phase, Record,
-    TestId, TestResult, WorkerIndex,
+    Assertion, BatchIndex, Captured, Counts, Event, ExitCode, Failure, FailureSignature, Outcome,
+    Phase, Record, TestId, TestResult, WorkerIndex,
 };
 
 use super::{feed, lines, streams};
@@ -773,7 +773,7 @@ fn subtest_failure_stream() -> Vec<Record> {
     parent.failures.push(Failure {
         phase: Some(Phase::Test),
         message: "contains 1 failed subtest".into(),
-        signature: "16b555694f3fa454".into(),
+        signature: FailureSignature::new("16b555694f3fa454"),
         detail: Some("contains 1 failed subtest".into()),
         ..Failure::default()
     });
@@ -795,7 +795,7 @@ fn subtest_failure_stream() -> Vec<Record> {
                     path: "tests/test_s.py".into(),
                     line: 4,
                 }),
-                signature: "5ca1ab1e".into(),
+                signature: FailureSignature::new("5ca1ab1e"),
                 ..Failure::default()
             }),
             duration: Duration::ZERO,

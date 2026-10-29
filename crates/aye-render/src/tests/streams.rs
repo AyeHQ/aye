@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use aye_events::{
     Assertion, Captured, Case, Certainty, Columns, Counts, Diagnostic, Envelope, Event, ExitCode,
-    Failure, Frame, Local, Location, Outcome, Phase, Record, Reproduce, RunNumber, SCHEMA_VERSION,
-    Scope, Severity, Span, TestId, TestResult, WorkerIndex,
+    Failure, FailureSignature, Frame, Local, Location, Outcome, Phase, Record, Reproduce,
+    RunNumber, SCHEMA_VERSION, Scope, Severity, Span, TestId, TestResult, WorkerIndex,
 };
 
 const fn ms(n: u64) -> Duration {
@@ -184,7 +184,7 @@ fn assertion_failure() -> Failure {
             "test_total",
             "assert cart.name() == 'eggs'",
         )],
-        signature: "sig-spam".into(),
+        signature: FailureSignature::new("sig-spam"),
         detail: Some("tests/test_cart.py:12: in test_total\nAssertionError".into()),
         ..Default::default()
     }
@@ -215,7 +215,7 @@ fn setup_failure() -> Failure {
                 "raise exceptions[0]",
             ),
         ],
-        signature: "sig-refused".into(),
+        signature: FailureSignature::new("sig-refused"),
         detail: None,
         ..Default::default()
     }
@@ -232,7 +232,7 @@ fn key_error(id_number: u32) -> Failure {
             line: 41,
         }),
         frames: vec![frame("src/app/users.py", 41, "find", "return USERS[name]")],
-        signature: "sig-key".into(),
+        signature: FailureSignature::new("sig-key"),
         detail: None,
         ..Default::default()
     }
@@ -263,7 +263,7 @@ pub(crate) fn mixed() -> Vec<Record> {
             exception: Some("AssertionError".into()),
             message: "assert False".into(),
             frames: vec![frame("tests/test_io.py", 20, "test_write", "assert False")],
-            signature: "sig-false".into(),
+            signature: FailureSignature::new("sig-false"),
             ..Failure::default()
         },
         Failure {
@@ -276,7 +276,7 @@ pub(crate) fn mixed() -> Vec<Record> {
                 "tmp",
                 "raise RuntimeError('cleanup failed')",
             )],
-            signature: "sig-cleanup".into(),
+            signature: FailureSignature::new("sig-cleanup"),
             ..Failure::default()
         },
     ];
@@ -352,7 +352,7 @@ pub(crate) fn identical(n: u32) -> Vec<Record> {
                 "test_call",
                 "client.get('/')",
             )],
-            signature: "sig-timeout".into(),
+            signature: FailureSignature::new("sig-timeout"),
             ..Failure::default()
         }];
         events.push(test(result));
@@ -427,7 +427,7 @@ pub(crate) fn lifetime() -> Vec<Record> {
                     "setUpClass",
                     "cls.conn = connect()",
                 )],
-                signature: "sig-nodb".into(),
+                signature: FailureSignature::new("sig-nodb"),
                 detail: Some(
                     "Traceback (most recent call last):\nRuntimeError: no database".into(),
                 ),
@@ -452,7 +452,7 @@ pub(crate) fn lifetime() -> Vec<Record> {
                     "tearDownModule",
                     "shutil.rmtree(TMP)",
                 )],
-                signature: "sig-busy".into(),
+                signature: FailureSignature::new("sig-busy"),
                 ..Failure::default()
             }),
             duration: ms(2),
@@ -604,7 +604,7 @@ fn raised(phase: Phase, exception: &str, message: &str, at: &Raised<'_>) -> Fail
             line: at.line,
         }),
         frames: vec![at.frame()],
-        signature: format!("sig-{}-{}", at.path, at.line),
+        signature: FailureSignature::new(format!("sig-{}-{}", at.path, at.line)),
         ..Failure::default()
     }
 }
@@ -1053,7 +1053,7 @@ fn library(id: &str) -> TestResult {
         path: format!("{site}/requests/adapters.py").into(),
         line: 700,
     });
-    failure.signature = "sig-requests".into();
+    failure.signature = FailureSignature::new("sig-requests");
     let mut result = bad(id, Outcome::Error, 2004, vec![failure]);
     result.output.log =
         "WARNING urllib3: Retrying (Retry(total=0)) after connection broken\n".into();

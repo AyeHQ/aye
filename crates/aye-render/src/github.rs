@@ -14,8 +14,8 @@ use std::fmt::Write as _;
 use std::io::{self, Write};
 
 use aye_events::{
-    Diagnostic, DiagnosticCode, Event, Failure, LifetimeId, Outcome, Phase, Record, Severity,
-    TestId, TestResult, WorkerIndex,
+    Diagnostic, DiagnosticCode, Event, Failure, FailureSignature, LifetimeId, Outcome, Phase,
+    Record, Severity, TestId, TestResult, WorkerIndex,
 };
 
 use aye_static::EnvVars;
@@ -45,7 +45,7 @@ pub struct GithubAnnotations<W: Write> {
     lines: HashMap<String, u32>,
     annotations: Vec<Annotation>,
     /// Index of the annotation for each failure signature.
-    signatures: HashMap<String, usize>,
+    signatures: HashMap<FailureSignature, usize>,
     /// Index of the annotation for each failed lifetime.
     lifetimes: HashMap<LifetimeId, usize>,
     /// Per lifetime: the first test it kept from running, and how many.
@@ -183,9 +183,7 @@ impl<W: Write> GithubAnnotations<W> {
         failure: Option<&Failure>,
         outcome: Outcome,
     ) {
-        let signature = failure
-            .map(|failure| failure.signature.as_str())
-            .filter(|signature| !signature.is_empty());
+        let signature = failure.and_then(|failure| failure.signature.as_ref());
         if let Some(&at) = signature.and_then(|signature| self.signatures.get(signature)) {
             self.annotations[at].repeats += 1;
             return;
@@ -194,7 +192,7 @@ impl<W: Write> GithubAnnotations<W> {
         let message = failure.map_or_else(|| outcome.as_str().to_owned(), message);
         if let Some(signature) = signature {
             self.signatures
-                .insert(signature.to_owned(), self.annotations.len());
+                .insert(signature.clone(), self.annotations.len());
         }
         self.annotations.push(Annotation {
             title,

@@ -1,4 +1,6 @@
-use aye_events::{DiagnosticCode, Event, Failure, Outcome, Record, TestId, TestResult};
+use aye_events::{
+    DiagnosticCode, Event, Failure, FailureSignature, Outcome, Record, TestId, TestResult,
+};
 
 use super::{feed, lines, streams};
 use crate::{GithubAnnotations, Reporter};
@@ -109,7 +111,7 @@ fn annotations_are_capped() {
         let mut result = TestResult::new(TestId::new(format!("t.py::test_{i}")), Outcome::Failed);
         result.failures = vec![Failure {
             message: format!("failure {i}"),
-            signature: format!("sig-{i}"),
+            signature: FailureSignature::new(format!("sig-{i}")),
             ..Failure::default()
         }];
         records.push(Record::new(Event::TestFinished(Box::new(result))));

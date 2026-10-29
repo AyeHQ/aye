@@ -145,8 +145,8 @@ use anstream::stream::{AsLockedWrite, RawStream};
 use anstyle::{AnsiColor, Style};
 use aye_events::{
     Assertion, Captured, Certainty, Columns, Compare, CompareKind, Counts, Diagnostic,
-    DiagnosticCode, Event, ExitCode, Failure, Frame, LifetimeId, Local, Outcome, Phase, Record,
-    RunNumber, Severity, StopReason, TestId, TestResult, WorkerIndex,
+    DiagnosticCode, Event, ExitCode, Failure, FailureSignature, Frame, LifetimeId, Local, Outcome,
+    Phase, Record, RunNumber, Severity, StopReason, TestId, TestResult, WorkerIndex,
 };
 
 use crate::tally::{self, Noted, Tally, Tone};
@@ -263,7 +263,7 @@ pub struct Text<W: RawStream> {
     pythons: HashMap<Option<WorkerIndex>, String>,
     /// The first bad outcome shown with each signature: its key and
     /// message.
-    signatures: HashMap<String, (String, String)>,
+    signatures: HashMap<FailureSignature, (String, String)>,
     warnings: Vec<Diagnostic>,
     /// Skip reasons, with how many tests (or modules) each, in order.
     skips: Vec<(String, u32)>,
@@ -272,7 +272,7 @@ pub struct Text<W: RawStream> {
     /// order they finished, to be listed under it.
     pending: Vec<(LifetimeId, Vec<NotRun>)>,
     /// Lifetime failures already shown, by lifetime and signature.
-    lifetimes: HashSet<(LifetimeId, String)>,
+    lifetimes: HashSet<(LifetimeId, Option<FailureSignature>)>,
     /// Lifetimes whose failure was shown.
     shown_lifetimes: HashSet<LifetimeId>,
     /// Bad sub-outcomes held until their test finishes, by test.
@@ -1120,10 +1120,10 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     fn bad(&mut self, bad: &Bad<'_>) -> io::Result<bool> {
         let level = if bad.brief { Level::L1 } else { self.level() };
         if let Some(first) = bad.failures.first()
-            && !first.signature.is_empty()
+            && let Some(signature) = &first.signature
             && self.level() < Level::L3
         {
-            match self.signatures.entry(first.signature.clone()) {
+            match self.signatures.entry(signature.clone()) {
                 Entry::Occupied(seen) => {
                     let (same, message) = seen.get().clone();
                     self.same_as(bad, first, &same, &message)?;

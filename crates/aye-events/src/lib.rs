@@ -53,7 +53,8 @@ pub use diagnostic::{
 };
 pub use event::{Envelope, Event, Record};
 pub use failure::{
-    Assertion, Columns, Compare, CompareKind, ComparisonOp, Difference, Failure, Frame, Local, Side,
+    Assertion, Columns, Compare, CompareKind, ComparisonOp, Difference, Failure, FailureSignature,
+    Frame, Local, Side,
 };
 pub use id::{AdapterName, InvalidKey, KeyPrefix, TestId, TestIdParts, TestKey};
 pub use lifetime::{LifetimeId, Scope};

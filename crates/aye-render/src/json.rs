@@ -136,8 +136,8 @@ use std::time::Duration;
 
 use aye_events::{
     Captured, Certainty, Compare, Counts, Diagnostic, DiagnosticCode, Event, ExitCode, Failure,
-    LifetimeId, Local, Outcome, Record, RunNumber, Severity, StopReason, TestId, TestResult,
-    WorkerIndex,
+    FailureSignature, LifetimeId, Local, Outcome, Record, RunNumber, Severity, StopReason, TestId,
+    TestResult, WorkerIndex,
 };
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
@@ -199,12 +199,12 @@ pub struct JsonLines<W: Write> {
     pythons: HashMap<Option<WorkerIndex>, String>,
     /// The first bad outcome reported with each signature: its key and
     /// message.
-    signatures: HashMap<String, (String, String)>,
+    signatures: HashMap<FailureSignature, (String, String)>,
     /// Tests blocked by a lifetime whose `lifetime_finished` has not
     /// arrived, with their keys.
     pending: BTreeMap<LifetimeId, Vec<(TestId, String)>>,
     /// Lifetimes reported, and the signature they were reported with.
-    reported: HashMap<LifetimeId, String>,
+    reported: HashMap<LifetimeId, Option<FailureSignature>>,
     /// Bad sub-outcomes of tests that haven't finished, held so that the
     /// first can carry the test's output and rerun.
     held: BTreeMap<TestId, Vec<HeldSub>>,
@@ -808,14 +808,15 @@ impl<W: Write> JsonLines<W> {
     /// sub-outcome's `<key> › <name>`), and its message; records `key` as
     /// the first when there is none yet (none is grouped at L3).
     fn first_with(&mut self, failure: &Failure, key: &str) -> Option<(String, String)> {
-        if failure.signature.is_empty() || self.all() {
+        let signature = failure.signature.as_ref()?;
+        if self.all() {
             return None;
         }
-        if let Some(first) = self.signatures.get(&failure.signature) {
+        if let Some(first) = self.signatures.get(signature) {
             return Some(first.clone());
         }
         self.signatures.insert(
-            failure.signature.clone(),
+            signature.clone(),
             (key.to_owned(), shared::message(failure).to_owned()),
         );
         None
@@ -1096,9 +1097,8 @@ impl<W: Write> JsonLines<W> {
         worker: Option<WorkerIndex>,
     ) -> io::Result<()> {
         let blocked = self.pending.remove(lifetime).unwrap_or_default();
-        let fresh = failure.filter(|failure| {
-            self.reported.get(lifetime).map(String::as_str) != Some(failure.signature.as_str())
-        });
+        let fresh =
+            failure.filter(|failure| self.reported.get(lifetime) != Some(&failure.signature));
         let Some(failure) = fresh else {
             for (id, key) in blocked {
                 self.caused(&id, key, Outcome::Error, lifetime)?;

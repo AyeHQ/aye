@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use aye_events::{
-    Assertion, Captured, Counts, DiagnosticCode, Event, ExitCode, Failure, Frame, Location,
-    Outcome, Phase, Record, RunNumber, TestId, TestResult,
+    Assertion, Captured, Counts, DiagnosticCode, Event, ExitCode, Failure, FailureSignature, Frame,
+    Location, Outcome, Phase, Record, RunNumber, TestId, TestResult,
 };
 use serde_json::Value;
 
@@ -417,7 +417,7 @@ fn a_test_failed_only_by_its_subtests_gets_no_second_line() {
     parent.failures.push(Failure {
         phase: Some(Phase::Test),
         message: "contains 1 failed subtest".into(),
-        signature: "16b555694f3fa454".into(),
+        signature: FailureSignature::new("16b555694f3fa454"),
         detail: Some("contains 1 failed subtest".into()),
         ..Failure::default()
     });
@@ -453,7 +453,7 @@ fn sub_failed(id: &TestId, name: &str, message: &str, signature: &str) -> Record
         failure: Some(Failure {
             phase: Some(Phase::Test),
             message: message.into(),
-            signature: signature.into(),
+            signature: FailureSignature::new(signature),
             ..Failure::default()
         }),
         duration: Duration::ZERO,
@@ -467,7 +467,7 @@ fn a_test_failed_only_by_its_subtests_puts_its_output_and_rerun_on_the_first() {
     parent.failures.push(Failure {
         phase: Some(Phase::Test),
         message: "contains 2 failed subtests".into(),
-        signature: "16b555694f3fa454".into(),
+        signature: FailureSignature::new("16b555694f3fa454"),
         detail: Some("contains 2 failed subtests".into()),
         ..Failure::default()
     });

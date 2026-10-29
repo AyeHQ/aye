@@ -1,7 +1,8 @@
 //! Structured failures: the exception, the assertion and how its operands
-//! differ, and the frames it was raised through.
+//! differ, the frames it was raised through, and the signature that groups
+//! identical ones.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::outcome::Phase;
 use crate::path::{FramePath, Location};
@@ -24,10 +25,13 @@ pub struct Failure {
     /// are removed by the adapter.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frames: Vec<Frame>,
-    /// Groups identical failures: exception type, normalised message and the
-    /// innermost user frame, hashed.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub signature: String,
+    /// Groups identical failures; `None` for a failure never grouped.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "FailureSignature::read"
+    )]
+    pub signature: Option<FailureSignature>,
     /// The framework's own full text, bounded, for renderers that want it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
@@ -39,6 +43,38 @@ pub struct Failure {
     /// resource (`did you mean cart?`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+}
+
+/// What groups identical failures: the exception's type, its message with
+/// numbers and addresses blanked out, and where it was raised (else the
+/// adapter's own place for it, a doctest's example), hashed: the first 16
+/// hex digits of a SHA-1 (`aye_engine.signature`). The renderers show the
+/// first failure of a signature, and say of the others that they are the
+/// same.
+///
+/// It is never empty: a failure whose `signature` is `""` on the wire has
+/// none, and is written back without it. Any other text is kept as
+/// written. It serializes as its text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(transparent)]
+pub struct FailureSignature(Box<str>);
+
+impl FailureSignature {
+    /// The signature `text` spells; `None` for the empty text, which groups
+    /// nothing.
+    pub fn new(text: impl Into<Box<str>>) -> Option<Self> {
+        let text = text.into();
+        (!text.is_empty()).then_some(Self(text))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// A failure's `signature`: a string, `""` being none.
+    fn read<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Self>, D::Error> {
+        Box::<str>::deserialize(deserializer).map(Self::new)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -312,6 +348,31 @@ mod tests {
         );
         assert_eq!(Assertion::default().op.as_str(), "");
         assert_eq!(Compare::default().kind.as_str(), "");
+    }
+
+    /// An empty signature is none, and is left out when written; any other
+    /// is kept as written.
+    #[test]
+    fn an_empty_signature_is_none() {
+        let read = |json: &str| serde_json::from_str::<Failure>(json).unwrap();
+        let failure = read(r#"{"phase":null,"message":"m","signature":""}"#);
+        assert_eq!(failure.signature, None);
+        assert_eq!(
+            serde_json::to_string(&failure).unwrap(),
+            r#"{"phase":null,"message":"m"}"#
+        );
+        assert_eq!(read(r#"{"phase":null,"message":"m"}"#).signature, None);
+        let failure = read(r#"{"phase":null,"message":"m","signature":"not hex"}"#);
+        assert_eq!(failure.signature, FailureSignature::new("not hex"));
+        assert_eq!(
+            serde_json::to_string(&failure).unwrap(),
+            r#"{"phase":null,"message":"m","signature":"not hex"}"#
+        );
+        assert!(
+            serde_json::from_str::<Failure>(r#"{"phase":null,"message":"m","signature":null}"#)
+                .is_err()
+        );
+        assert_eq!(FailureSignature::new(""), None);
     }
 
     #[test]

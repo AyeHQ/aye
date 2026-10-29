@@ -32,7 +32,7 @@ fn every_event() -> Vec<Event> {
             source: Some("assert add(2, 2) == 5".into()),
             ..Default::default()
         }],
-        signature: "abc".into(),
+        signature: FailureSignature::new("abc"),
         detail: None,
         ..Default::default()
     };

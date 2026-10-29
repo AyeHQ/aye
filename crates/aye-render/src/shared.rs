@@ -586,7 +586,7 @@ pub(crate) fn is_bare(failure: &Failure) -> bool {
 /// message. The unittest and doctest adapters fail a test with the very
 /// failures its subtests or examples reported.
 pub(crate) fn same_failure(a: &Failure, b: &Failure) -> bool {
-    a == b || (!a.signature.is_empty() && a.signature == b.signature && a.message == b.message)
+    a == b || (a.signature.is_some() && a.signature == b.signature && a.message == b.message)
 }
 
 /// Whether a test's own failure only repeats what its bad sub-outcomes
