@@ -1,5 +1,7 @@
 use std::sync::atomic::AtomicU32;
 
+use aye_events::BatchIndex;
+
 use super::*;
 
 fn selector(cwd: &Path, root: &Path, arg: &str) -> String {
@@ -427,7 +429,7 @@ fn diagnostic_codes_choose_the_exit_code() {
     let mut errors = Errors::default();
     errors.see(
         &diagnostic(Severity::Error, "not-found"),
-        DiagnosticOrigin::Batch(0),
+        DiagnosticOrigin::Batch(BatchIndex::from_u32(0)),
     );
     assert!(errors.any && !errors.usage);
 }
@@ -501,7 +503,7 @@ fn every_code_decides_the_exit_code_as_before() {
         assert_eq!(
             (
                 decides(code, DiagnosticOrigin::BeforeBatches),
-                decides(code, DiagnosticOrigin::Batch(0))
+                decides(code, DiagnosticOrigin::Batch(BatchIndex::from_u32(0)))
             ),
             (before, from_batch),
             "{code}"
@@ -1288,7 +1290,7 @@ fn unreadable_framework_args_leave_every_adapter_the_command_lines() {
 fn a_file_two_adapters_load_in_one_module_is_one_collection_error() {
     let batch = |batch: u32, event: Event| {
         let mut record = Record::new(event);
-        record.envelope.batch = Some(batch);
+        record.envelope.batch = Some(BatchIndex::from_u32(batch));
         record
     };
     let started = |id: u32, adapter: &'static str| {
@@ -1384,11 +1386,11 @@ fn a_collection_error_from_refinement_counts_as_the_pytest_adapters() {
         adapter: "unittest".into(),
         cases: 1,
     });
-    started.envelope.batch = Some(3);
+    started.envelope.batch = Some(BatchIndex::from_u32(3));
     once.see(&mut started);
     let severity = |path: &str, once: &mut OneModuleErrors| {
         let mut record = Record::new(Event::Diagnostic(error(path)));
-        record.envelope.batch = Some(3);
+        record.envelope.batch = Some(BatchIndex::from_u32(3));
         once.see(&mut record);
         match record.event {
             Event::Diagnostic(d) => (d.severity, d.message),
@@ -1581,7 +1583,7 @@ fn a_conftest_two_adapters_fail_to_load_is_one_error() {
     // another adapter's is an info.
     let batch = |batch: u32, event: Event| {
         let mut record = Record::new(event);
-        record.envelope.batch = Some(batch);
+        record.envelope.batch = Some(BatchIndex::from_u32(batch));
         record
     };
     let mut once = OneConftestError::default();

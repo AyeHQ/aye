@@ -1,5 +1,5 @@
-//! Identities: of a test, its key, an adapter's name, and the aliases for
-//! environments, workers and batches.
+//! Identities: of a test, its key, an adapter's name, and the alias for
+//! environments.
 
 use std::borrow::{Borrow, Cow};
 use std::fmt;
@@ -342,10 +342,6 @@ impl PartialEq<&str> for AdapterName {
 
 /// Identifies one environment (interpreter plus dependencies) within a run.
 pub type EnvironmentId = String;
-/// Dense worker index within a run, from 0.
-pub type WorkerId = u32;
-/// Dense batch index within a run, from 0.
-pub type BatchId = u32;
 
 #[cfg(test)]
 mod tests {

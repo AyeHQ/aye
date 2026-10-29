@@ -226,7 +226,7 @@ fn stamped(events: Vec<(Option<u32>, Event)>) -> Vec<Record> {
         .map(|((worker, event), seq)| {
             let mut record = Record::new(event);
             record.envelope.run = Some("r".into());
-            record.envelope.worker = worker;
+            record.envelope.worker = worker.map(WorkerIndex::from_u32);
             record.envelope.seq = Some(seq);
             record
         })

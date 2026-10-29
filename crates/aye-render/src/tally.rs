@@ -264,7 +264,7 @@ impl ErrorKinds {
 
 #[cfg(test)]
 mod tests {
-    use aye_events::DiagnosticPath;
+    use aye_events::{BatchIndex, DiagnosticPath};
 
     use super::*;
 
@@ -332,7 +332,7 @@ mod tests {
             assert_eq!(
                 (
                     counted(code, DiagnosticOrigin::BeforeBatches),
-                    counted(code, DiagnosticOrigin::Batch(0))
+                    counted(code, DiagnosticOrigin::Batch(BatchIndex::from_u32(0)))
                 ),
                 (before, from_batch),
                 "{code}"

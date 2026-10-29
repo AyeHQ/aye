@@ -145,8 +145,8 @@ fn every_event_round_trips() {
             envelope: Envelope {
                 run: Some("r1".into()),
                 environment: Some("py313".into()),
-                worker: Some(0),
-                batch: Some(0),
+                worker: Some(WorkerIndex::FIRST),
+                batch: Some(BatchIndex::from_u32(0)),
                 seq: Some(7),
                 t_ms: Some(1.25),
             },

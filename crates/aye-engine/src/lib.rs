@@ -174,8 +174,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use aye_events::{
-    AdapterName, BatchId, Case, Diagnostic, LineNumber, ProjectPath, ProjectPathRef, Record, Span,
-    TestId,
+    AdapterName, BatchIndex, Case, Diagnostic, LineNumber, ProjectPath, ProjectPathRef, Record,
+    Span, TestId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -517,7 +517,7 @@ impl Default for Policy {
 /// engine's; everything around it is the runner's.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Batch {
-    pub id: BatchId,
+    pub id: BatchIndex,
     pub adapter: AdapterName,
     pub ids: Vec<TestId>,
     pub policy: Policy,
@@ -602,7 +602,7 @@ pub enum Reply {
     /// The batch is over; every test in it has a `test_finished` event,
     /// except those after a `maxfail` stop.
     BatchDone {
-        batch: BatchId,
+        batch: BatchIndex,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         status: Option<i32>,
     },

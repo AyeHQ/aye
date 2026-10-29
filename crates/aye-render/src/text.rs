@@ -146,7 +146,7 @@ use anstyle::{AnsiColor, Style};
 use aye_events::{
     Assertion, Captured, Certainty, Columns, Compare, Counts, Diagnostic, DiagnosticCode, Event,
     ExitCode, Failure, Frame, LifetimeId, Local, Outcome, Phase, Record, Severity, TestId,
-    TestResult,
+    TestResult, WorkerIndex,
 };
 
 use crate::tally::{self, Noted, Tally, Tone};
@@ -260,7 +260,7 @@ pub struct Text<W: RawStream> {
     /// From `-vv`, the `collected` line, held to follow the header.
     collected: Option<String>,
     /// Each worker's Python version, from its `worker_started`.
-    pythons: HashMap<Option<u32>, String>,
+    pythons: HashMap<Option<WorkerIndex>, String>,
     /// The first bad outcome shown with each signature: its key and
     /// message.
     signatures: HashMap<String, (String, String)>,
@@ -316,7 +316,7 @@ struct HeldSub {
     outcome: Outcome,
     failure: Option<Failure>,
     duration: Duration,
-    worker: Option<u32>,
+    worker: Option<WorkerIndex>,
 }
 
 /// A bad outcome to show.
@@ -335,7 +335,7 @@ struct Bad<'a> {
     /// The test's result: its resources, history and output.
     result: Option<&'a TestResult>,
     rerun: Option<String>,
-    worker: Option<u32>,
+    worker: Option<WorkerIndex>,
     /// Tests a failed lifetime kept from running.
     not_run: &'a [NotRun],
     /// At most L1 (a test's fourth bad sub-outcome and later, below L3).
@@ -547,7 +547,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
 
     /// The header, once, at the first worker: `aye · <root> · python 3.13.1
     /// · 15 tests · 1 worker`.
-    fn header(&mut self, worker: Option<u32>) -> io::Result<()> {
+    fn header(&mut self, worker: Option<WorkerIndex>) -> io::Result<()> {
         if self.header_shown || self.show.is_some() || self.collect_only || self.quiet() {
             return Ok(());
         }
@@ -831,7 +831,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         )
     }
 
-    fn test(&mut self, result: &TestResult, worker: Option<u32>) -> io::Result<()> {
+    fn test(&mut self, result: &TestResult, worker: Option<WorkerIndex>) -> io::Result<()> {
         let outcome = result.outcome;
         let id = result.id.as_str();
         let key = self.key(id);
@@ -1056,7 +1056,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         lifetime: &LifetimeId,
         failure: &Failure,
         duration: Duration,
-        worker: Option<u32>,
+        worker: Option<WorkerIndex>,
     ) -> io::Result<()> {
         if !self
             .lifetimes
@@ -1754,7 +1754,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
 
     fn worker_error(
         &mut self,
-        worker: Option<u32>,
+        worker: Option<WorkerIndex>,
         status: Option<i32>,
         error: &str,
     ) -> io::Result<()> {

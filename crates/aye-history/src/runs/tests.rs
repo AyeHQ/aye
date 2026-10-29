@@ -4,8 +4,8 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use aye_events::{
-    Case, Counts, Diagnostic, Event, ExitCode, Failure, Outcome, Phase, Record, Severity, TestId,
-    TestResult,
+    BatchIndex, Case, Counts, Diagnostic, Event, ExitCode, Failure, Outcome, Phase, Record,
+    Severity, TestId, TestResult,
 };
 
 use super::*;
@@ -624,7 +624,7 @@ fn every_code_shows_as_before() {
     for (code, before, from_batch) in SHOWS {
         let mut record = Record::new(error(code, "tests/t.py"));
         let before_batches = shows(&record);
-        record.envelope.batch = Some(0);
+        record.envelope.batch = Some(BatchIndex::from_u32(0));
         assert_eq!(
             (before_batches, shows(&record)),
             (before, from_batch),
@@ -682,7 +682,7 @@ fn a_run_with_nothing_to_show_leaves_no_trace() {
     );
     for record in &mut missing {
         if matches!(record.event, Event::Diagnostic(_)) {
-            record.envelope.batch = Some(0);
+            record.envelope.batch = Some(BatchIndex::from_u32(0));
         }
     }
     assert_eq!(keep(&dir, 10, &missing).as_deref(), Some("r3"));

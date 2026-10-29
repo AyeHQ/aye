@@ -6,8 +6,8 @@
 
 use crate::diagnostic::{Diagnostic, DiagnosticCode, Severity};
 use crate::event::Envelope;
-use crate::id::BatchId;
 use crate::outcome::ExitCode;
+use crate::run::BatchIndex;
 
 /// Where a diagnostic came from, as its envelope says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,7 +16,7 @@ pub enum DiagnosticOrigin {
     /// any batch.
     BeforeBatches,
     /// The batch that reported it.
-    Batch(BatchId),
+    Batch(BatchIndex),
 }
 
 impl DiagnosticOrigin {
@@ -191,7 +191,7 @@ mod tests {
             assert_eq!(
                 (
                     code.class(DiagnosticOrigin::BeforeBatches),
-                    code.class(DiagnosticOrigin::Batch(3))
+                    code.class(DiagnosticOrigin::Batch(BatchIndex::from_u32(3)))
                 ),
                 (before, from_batch),
                 "{code}"
@@ -252,8 +252,11 @@ mod tests {
             diagnostic.error_class(DiagnosticOrigin::of(&envelope)),
             Some(CommandLine)
         );
-        envelope.batch = Some(2);
-        assert_eq!(DiagnosticOrigin::of(&envelope), DiagnosticOrigin::Batch(2));
+        envelope.batch = Some(BatchIndex::from_u32(2));
+        assert_eq!(
+            DiagnosticOrigin::of(&envelope),
+            DiagnosticOrigin::Batch(BatchIndex::from_u32(2))
+        );
         assert_eq!(
             diagnostic.error_class(DiagnosticOrigin::of(&envelope)),
             Some(Collection)

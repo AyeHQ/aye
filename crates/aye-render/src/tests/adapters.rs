@@ -400,7 +400,7 @@ fn a_module_skip_a_batch_reports_or_a_repeat_is_not_counted_again() {
         .cloned()
         .unwrap();
     let mut from_batch = skip.clone();
-    from_batch.envelope.batch = Some(0);
+    from_batch.envelope.batch = Some(aye_events::BatchIndex::from_u32(0));
     records.insert(3, skip);
     records.insert(3, from_batch);
     for verbosity in -1..=1 {
@@ -608,7 +608,7 @@ fn a_failed_lifetime_that_blocked_tests_counts_through_them_alone() {
 /// not crashed or been stopped.
 fn closed(records: &[Record]) -> Vec<Record> {
     use aye_events::Event;
-    let mut open: Vec<(Option<u32>, aye_events::LifetimeId)> = Vec::new();
+    let mut open: Vec<(Option<aye_events::BatchIndex>, aye_events::LifetimeId)> = Vec::new();
     let mut out = Vec::new();
     for record in records {
         match &record.event {

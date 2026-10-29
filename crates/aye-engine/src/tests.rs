@@ -29,7 +29,7 @@ fn requests_round_trip() {
             digests_only: true,
         }),
         Request::Run(Batch {
-            id: 3,
+            id: BatchIndex::from_u32(3),
             adapter: "pytest".into(),
             ids: vec![TestId::new("tests/t.py::test_x")],
             policy: Policy {
@@ -42,7 +42,7 @@ fn requests_round_trip() {
             ends_session: false,
         }),
         Request::Run(Batch {
-            id: 4,
+            id: BatchIndex::from_u32(4),
             adapter: "pytest".into(),
             ids: Vec::new(),
             policy: Policy::default(),
@@ -73,7 +73,7 @@ fn worker_lines_are_replies_or_records() {
     let WorkerLine::Record(record) = serde_json::from_str::<WorkerLine>(event).unwrap() else {
         panic!("expected a record");
     };
-    assert_eq!(record.envelope.batch, Some(0));
+    assert_eq!(record.envelope.batch, Some(BatchIndex::from_u32(0)));
     let Event::TestFinished(result) = record.event else {
         panic!("expected test_finished");
     };
@@ -82,9 +82,9 @@ fn worker_lines_are_replies_or_records() {
     assert!(matches!(
         serde_json::from_str::<WorkerLine>(done).unwrap(),
         WorkerLine::Reply(Reply::BatchDone {
-            batch: 0,
+            batch,
             status: Some(1)
-        })
+        }) if batch == BatchIndex::from_u32(0)
     ));
 }
 
@@ -174,7 +174,7 @@ fn the_engine_module_is_embedded() {
 #[test]
 fn a_batch_ends_the_session_only_when_it_says_so() {
     let batch = Batch {
-        id: 1,
+        id: BatchIndex::from_u32(1),
         adapter: "pytest".into(),
         ids: vec![TestId::new("t.py::test_x")],
         policy: Policy::default(),

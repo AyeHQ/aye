@@ -136,7 +136,7 @@ use std::time::Duration;
 
 use aye_events::{
     Captured, Certainty, Compare, Counts, Diagnostic, DiagnosticCode, Event, ExitCode, Failure,
-    LifetimeId, Local, Outcome, Record, Severity, TestId, TestResult,
+    LifetimeId, Local, Outcome, Record, Severity, TestId, TestResult, WorkerIndex,
 };
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
@@ -195,7 +195,7 @@ pub struct JsonLines<W: Write> {
     /// From `collection_finished`.
     selected: Option<u32>,
     /// Each worker's Python version, from its `worker_started`.
-    pythons: HashMap<Option<u32>, String>,
+    pythons: HashMap<Option<WorkerIndex>, String>,
     /// The first bad outcome reported with each signature: its key and
     /// message.
     signatures: HashMap<String, (String, String)>,
@@ -229,7 +229,7 @@ struct HeldSub {
     outcome: Outcome,
     failure: Option<Failure>,
     duration: Duration,
-    worker: Option<u32>,
+    worker: Option<WorkerIndex>,
 }
 
 #[derive(Serialize)]
@@ -251,7 +251,7 @@ enum Line<'a> {
     },
     WorkerError {
         #[serde(skip_serializing_if = "Option::is_none")]
-        worker: Option<u32>,
+        worker: Option<WorkerIndex>,
         error: Cow<'a, str>,
     },
     Test {
@@ -792,7 +792,7 @@ impl<W: Write> JsonLines<W> {
 
     /// What `aye show`'s details add to a bad outcome's line about `path`,
     /// run by `worker`.
-    fn shown(&self, path: &str, worker: Option<u32>) -> Option<Shown> {
+    fn shown(&self, path: &str, worker: Option<WorkerIndex>) -> Option<Shown> {
         if self.show != Some(ShowMode::Details) {
             return None;
         }
@@ -941,7 +941,7 @@ impl<W: Write> JsonLines<W> {
         }
     }
 
-    fn test(&mut self, result: &TestResult, worker: Option<u32>) -> io::Result<()> {
+    fn test(&mut self, result: &TestResult, worker: Option<WorkerIndex>) -> io::Result<()> {
         // A test that failed only through its sub-outcomes gets no line of
         // its own: the first of theirs carries its output and rerun. What
         // they reported (the unittest and doctest adapters fail the test
@@ -977,7 +977,7 @@ impl<W: Write> JsonLines<W> {
         &mut self,
         result: &TestResult,
         own: &[Failure],
-        worker: Option<u32>,
+        worker: Option<WorkerIndex>,
     ) -> io::Result<()> {
         let key = self.key(result.id.as_str());
         if let Some(lifetime) = &result.cause {
@@ -1092,7 +1092,7 @@ impl<W: Write> JsonLines<W> {
         lifetime: &LifetimeId,
         failure: Option<&Failure>,
         duration: Duration,
-        worker: Option<u32>,
+        worker: Option<WorkerIndex>,
     ) -> io::Result<()> {
         let blocked = self.pending.remove(lifetime).unwrap_or_default();
         let fresh = failure.filter(|failure| {
@@ -1244,7 +1244,7 @@ impl<W: Write> JsonLines<W> {
         })
     }
 
-    fn worker_error(&mut self, worker: Option<u32>, error: &str) -> io::Result<()> {
+    fn worker_error(&mut self, worker: Option<WorkerIndex>, error: &str) -> io::Result<()> {
         self.line(&Line::WorkerError {
             worker,
             error: shared::tail(error.trim_end(), WORKER_ERROR_MAX),

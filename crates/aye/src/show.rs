@@ -52,7 +52,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use aye_config::AyeConfig;
 use aye_events::{
     AdapterName, Case, Certainty, Counts, Diagnostic, Event, ExitCode, LifetimeId, Outcome,
-    ProjectPath, Record, Severity, TestId, TestResult,
+    ProjectPath, Record, Severity, TestId, TestResult, WorkerIndex,
 };
 use aye_history::{Change, RunMeta, RunStore};
 use aye_render::{
@@ -670,7 +670,7 @@ enum What<'a> {
 
 /// A test's records before its `test_finished`: the worker that runs it,
 /// and their places in the log.
-type Open = (Option<u32>, Vec<usize>);
+type Open = (Option<WorkerIndex>, Vec<usize>);
 
 /// What `aye show` reads of a stored log.
 struct Log<'a> {
@@ -867,7 +867,7 @@ fn feed(
     if mode == ShowMode::Details {
         // The `worker_started` of each worker that ran a result shown: it
         // says which Python ran it.
-        let workers: HashSet<u32> = places
+        let workers: HashSet<WorkerIndex> = places
             .iter()
             .filter_map(|at| records[*at].envelope.worker)
             .collect();

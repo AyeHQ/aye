@@ -6,10 +6,11 @@ use serde::{Deserialize, Serialize};
 use crate::case::Case;
 use crate::diagnostic::Diagnostic;
 use crate::failure::Failure;
-use crate::id::{AdapterName, BatchId, EnvironmentId, TestId, WorkerId};
+use crate::id::{AdapterName, EnvironmentId, TestId};
 use crate::lifetime::{LifetimeId, Scope};
 use crate::outcome::{ExitCode, Outcome};
 use crate::result::{Counts, TestResult};
+use crate::run::{BatchIndex, WorkerIndex};
 use crate::serde_ext::{is_zero, millis};
 
 /// Who stamped what on an event. All fields are optional on the wire so
@@ -24,9 +25,9 @@ pub struct Envelope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<EnvironmentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worker: Option<WorkerId>,
+    pub worker: Option<WorkerIndex>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub batch: Option<BatchId>,
+    pub batch: Option<BatchIndex>,
     /// Position in the run's log, assigned by the runner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seq: Option<u64>,

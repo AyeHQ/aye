@@ -26,7 +26,8 @@
 //! Owns: the schema and its version, and what an error diagnostic means for
 //! a run (`diagnostic/classify.rs`). No traits, no I/O.
 //!
-//! Depends on: serde only. Must not depend on any other aye crate.
+//! Depends on: serde, and aye-index for the index types. Must not depend on
+//! any other aye crate.
 
 mod affinity;
 mod case;
@@ -38,6 +39,7 @@ mod lifetime;
 mod outcome;
 mod path;
 mod result;
+mod run;
 mod serde_ext;
 
 pub use affinity::{AffinityKey, AffinityKind};
@@ -47,10 +49,7 @@ pub use diagnostic::{
 };
 pub use event::{Envelope, Event, Record};
 pub use failure::{Assertion, Columns, Compare, Difference, Failure, Frame, Local, Side};
-pub use id::{
-    AdapterName, BatchId, EnvironmentId, InvalidKey, KeyPrefix, TestId, TestIdParts, TestKey,
-    WorkerId,
-};
+pub use id::{AdapterName, EnvironmentId, InvalidKey, KeyPrefix, TestId, TestIdParts, TestKey};
 pub use lifetime::{LifetimeId, Scope};
 pub use outcome::{ExitCode, Outcome, Phase};
 pub use path::{
@@ -58,6 +57,7 @@ pub use path::{
     ProjectPathRef, Span,
 };
 pub use result::{Captured, Counts, Previous, Reproduce, Resource, TestResult};
+pub use run::{BatchIndex, WorkerIndex};
 
 /// Bumped only when a field is removed or renamed, or its meaning changes.
 ///

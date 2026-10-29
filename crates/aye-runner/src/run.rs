@@ -18,9 +18,9 @@ use aye_engine::{
     WorkerLine,
 };
 use aye_events::{
-    AdapterName, BatchId, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, EnvironmentId,
-    Event, Failure, LifetimeId, Outcome, ProjectPath, Record, Severity, TestId, TestResult,
-    WorkerId,
+    AdapterName, BatchIndex, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath,
+    EnvironmentId, Event, Failure, LifetimeId, Outcome, ProjectPath, Record, Severity, TestId,
+    TestResult, WorkerIndex,
 };
 use aye_static::EnvVars;
 
@@ -188,9 +188,9 @@ impl fmt::Display for StopReason {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchSummary {
-    pub id: BatchId,
+    pub id: BatchIndex,
     pub adapter: AdapterName,
-    pub worker: WorkerId,
+    pub worker: WorkerIndex,
     pub cases: u32,
     /// The framework's own status, from `batch_done`.
     pub status: Option<i32>,
@@ -213,8 +213,8 @@ pub enum BatchEnd {
 /// A worker that died before finishing its batch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Crash {
-    pub worker: WorkerId,
-    pub batch: BatchId,
+    pub worker: WorkerIndex,
+    pub batch: BatchIndex,
     /// The test that was running, if any.
     pub test: Option<TestId>,
     /// `exit status 3`, `killed by signal 11 (SIGSEGV)`.
@@ -363,7 +363,7 @@ struct Warm {
 #[derive(Debug)]
 struct Prelisting {
     adapter: AdapterName,
-    lane: WorkerId,
+    lane: WorkerIndex,
     /// The lanes its environment was made for (see [`lane_env`]).
     lanes: u32,
     /// Starts the worker and sends it its listings, in the background.
@@ -622,7 +622,7 @@ impl Runner {
         let (tx, rx) = mpsc::channel();
         thread::scope(|scope| {
             scope.spawn(move || shut_down(unused, false));
-            for lane in 0..lanes {
+            for lane in (0..lanes).map(WorkerIndex::from_u32) {
                 let tx = tx.clone();
                 let shared = &shared;
                 scope.spawn(move || shared.lane(lane, &tx));
@@ -691,7 +691,7 @@ impl Runner {
             digests_only: true,
             ..request.clone()
         };
-        for lane in 1..lanes {
+        for lane in (1..lanes).map(WorkerIndex::from_u32) {
             let listing = listing.clone();
             // A worker that died shows up as the end of its stream when its
             // answer is read.
@@ -766,7 +766,7 @@ impl Refiner for Runner {
                     other.worker.shutdown();
                 }
                 let mut spec = self.spec(vec![executor]);
-                spec.env.extend(lane_env(0, lanes));
+                spec.env.extend(lane_env(WorkerIndex::FIRST, lanes));
                 Warm {
                     adapter: request.adapter.clone(),
                     worker: spawn(&spec).map_err(|e| RefineError(e.to_string()))?,
@@ -863,12 +863,12 @@ fn refined_by(worker: &Worker, stopped: &dyn Fn() -> bool) -> Result<Refined, Un
 /// The environment variables of lane `lane`'s workers among `lanes`:
 /// `AYE_WORKER`, and with several lanes pytest-xdist's, so that per-worker
 /// resources are reused.
-fn lane_env(lane: WorkerId, lanes: u32) -> Vec<(OsString, OsString)> {
+fn lane_env(lane: WorkerIndex, lanes: u32) -> Vec<(OsString, OsString)> {
     let mut env = vec![(EnvVars::AYE_WORKER.into(), lane.to_string().into())];
     if lanes > 1 {
         env.push((
             EnvVars::PYTEST_XDIST_WORKER.into(),
-            format!("gw{lane}").into(),
+            lane.xdist_name().into(),
         ));
         env.push((
             EnvVars::PYTEST_XDIST_WORKER_COUNT.into(),
@@ -941,19 +941,19 @@ impl Listings {
 #[derive(Debug)]
 enum Message {
     WorkerStarted {
-        worker: WorkerId,
+        worker: WorkerIndex,
         pid: u32,
         python: String,
         version: String,
     },
     /// A worker could not start.
     WorkerFailed {
-        worker: WorkerId,
+        worker: WorkerIndex,
         error: String,
     },
     BatchStarted {
-        worker: WorkerId,
-        batch: BatchId,
+        worker: WorkerIndex,
+        batch: BatchIndex,
         adapter: AdapterName,
         cases: u32,
         /// The batch's share of `maxfail`.
@@ -964,8 +964,8 @@ enum Message {
     /// Something the worker sent that breaks the protocol, or an adapter
     /// that raised outside any test.
     Problem {
-        worker: WorkerId,
-        batch: BatchId,
+        worker: WorkerIndex,
+        batch: BatchIndex,
         code: DiagnosticCode,
         path: DiagnosticPath,
         message: String,
@@ -973,12 +973,12 @@ enum Message {
     Crashed(Crash),
     /// A warning outside any batch (a lane's `listing-differs`).
     Warning {
-        worker: WorkerId,
+        worker: WorkerIndex,
         diagnostic: Diagnostic,
     },
     BatchFinished {
-        worker: WorkerId,
-        batch: BatchId,
+        worker: WorkerIndex,
+        batch: BatchIndex,
         status: Option<i32>,
         end: BatchEnd,
         /// What the framework's end of the batch means for the run.
@@ -988,7 +988,7 @@ enum Message {
         not_run: Vec<TestId>,
     },
     WorkerFinished {
-        worker: WorkerId,
+        worker: WorkerIndex,
         exit_status: Option<i32>,
         error: Option<String>,
     },
@@ -1001,7 +1001,7 @@ struct Log<'a> {
     on_record: &'a mut dyn FnMut(Record),
     summary: RunSummary,
     /// Each batch between its started and finished.
-    running: HashMap<BatchId, Running>,
+    running: HashMap<BatchIndex, Running>,
     /// The run stopped (`maxfail`, the stop handle): workers' records are
     /// dropped.
     halted: bool,
@@ -1040,7 +1040,7 @@ impl Running {
 }
 
 impl Log<'_> {
-    fn deliver(&mut self, worker: Option<WorkerId>, batch: Option<BatchId>, event: Event) {
+    fn deliver(&mut self, worker: Option<WorkerIndex>, batch: Option<BatchIndex>, event: Event) {
         let mut record = Record::new(event);
         record.envelope.worker = worker;
         record.envelope.batch = batch;
@@ -1246,7 +1246,7 @@ impl Log<'_> {
 struct Shared<'a> {
     queue: Queue,
     /// Workers in a handshake or a batch, to stop when the run stops.
-    busy: Mutex<HashMap<WorkerId, Busy>>,
+    busy: Mutex<HashMap<WorkerIndex, Busy>>,
     /// Bad outcomes the lanes have passed on so far. The run stops on its
     /// own count; lanes read this one to stop taking batches without
     /// waiting for it, and to size each batch's `maxfail`.
@@ -1271,13 +1271,13 @@ struct Shared<'a> {
     warm: Mutex<Option<Warm>>,
     /// By lane, the worker started for it during refinement, until the
     /// lane takes it ([`Shared::start`]) or ends.
-    prelisted: Mutex<HashMap<WorkerId, Prelisting>>,
+    prelisted: Mutex<HashMap<WorkerIndex, Prelisting>>,
     lanes: u32,
     stop: &'a StopHandle,
 }
 
 /// Tells the queue a lane is done taking batches, however it ends.
-struct LaneDone<'q>(&'q Queue, WorkerId);
+struct LaneDone<'q>(&'q Queue, WorkerIndex);
 
 impl Drop for LaneDone<'_> {
     fn drop(&mut self) {
@@ -1364,7 +1364,7 @@ impl Shared<'_> {
 
     /// Mark a worker busy; false if the run has stopped, in which case it
     /// must not start anything.
-    fn busy(&self, lane: WorkerId, killer: Killer) -> bool {
+    fn busy(&self, lane: WorkerIndex, killer: Killer) -> bool {
         let busy = Busy {
             killer,
             stopping: Stopping::No,
@@ -1376,7 +1376,7 @@ impl Shared<'_> {
     /// The lane's batch reached its own `maxfail`: its framework ends it,
     /// so the run doesn't interrupt it. Marked before the bad outcome is
     /// passed on, so before the run can stop for it.
-    fn ends_by_itself(&self, lane: WorkerId) {
+    fn ends_by_itself(&self, lane: WorkerIndex) {
         if let Some(busy) = lock(&self.busy).get_mut(&lane)
             && busy.stopping == Stopping::No
         {
@@ -1390,7 +1390,7 @@ impl Shared<'_> {
     }
 
     /// Mark a worker idle; whether the run interrupted it.
-    fn idle(&self, lane: WorkerId) -> bool {
+    fn idle(&self, lane: WorkerIndex) -> bool {
         lock(&self.busy)
             .remove(&lane)
             .is_some_and(|busy| busy.stopping == Stopping::Interrupted)
@@ -1443,7 +1443,7 @@ impl Shared<'_> {
     /// ([`Shared::early_start`]). A lane other than the first leaves the
     /// tests of the files it lists otherwise to the first lane
     /// ([`Queue::pin`]).
-    fn lane(&self, lane: WorkerId, tx: &Sender<Message>) {
+    fn lane(&self, lane: WorkerIndex, tx: &Sender<Message>) {
         let send = |message| {
             let _ = tx.send(message);
         };
@@ -1609,7 +1609,7 @@ impl Shared<'_> {
     /// from `worker` ([`Shared::crashed`]).
     fn execute(
         &self,
-        lane: WorkerId,
+        lane: WorkerIndex,
         worker: &mut Option<Worker>,
         batch: &Assigned,
         send: &dyn Fn(Message),
@@ -1692,7 +1692,7 @@ impl Shared<'_> {
     /// does, and the log keeps what it reports as it keeps a halted run's.
     fn end_session(
         &self,
-        lane: WorkerId,
+        lane: WorkerIndex,
         worker: &mut Option<Worker>,
         adapter: &AdapterName,
         send: &dyn Fn(Message),
@@ -1720,7 +1720,7 @@ impl Shared<'_> {
     /// refinement, if it is of that adapter ([`Shared::prelisted`]).
     fn start(
         &self,
-        lane: WorkerId,
+        lane: WorkerIndex,
         adapter: &AdapterName,
     ) -> Result<(Worker, Option<Digests>), String> {
         let prelisted = {
@@ -1757,7 +1757,7 @@ impl Shared<'_> {
     /// answered its listings and listed the rest of the session.
     fn take_prelisted(
         &self,
-        lane: WorkerId,
+        lane: WorkerIndex,
         prelisted: Prelisting,
     ) -> Result<(Worker, Option<Digests>), String> {
         let Prelisting {
@@ -1805,11 +1805,11 @@ impl Shared<'_> {
     /// what the others compare theirs with.
     fn early_start(
         &self,
-        lane: WorkerId,
+        lane: WorkerIndex,
     ) -> Result<Option<(Worker, AdapterName, Option<Digests>)>, String> {
-        if lane != 0 {
+        if !lane.is_first() {
             return match &self.reference {
-                Some(adapter) if lane < self.early => self
+                Some(adapter) if lane.as_u32() < self.early => self
                     .start(lane, adapter)
                     .map(|(worker, digests)| Some((worker, adapter.clone(), digests))),
                 _ => Ok(None),
@@ -1824,17 +1824,17 @@ impl Shared<'_> {
                     digests,
                     ..
                 } = warm;
-                let listed = if self.busy(0, worker.killer()) {
+                let listed = if self.busy(WorkerIndex::FIRST, worker.killer()) {
                     self.list(worker, &adapter, digests)
                 } else {
                     worker.kill();
                     Err("interrupted".into())
                 };
-                self.idle(0);
+                self.idle(WorkerIndex::FIRST);
                 listed.map(|(worker, digests)| (worker, adapter, digests))
             }
             (None, Some(adapter)) => self
-                .start(0, adapter)
+                .start(WorkerIndex::FIRST, adapter)
                 .map(|(worker, digests)| (worker, adapter.clone(), digests)),
             (None, None) => return Ok(None),
         };
@@ -1902,12 +1902,12 @@ impl Shared<'_> {
     /// both listings.
     fn compare(
         &self,
-        lane: WorkerId,
+        lane: WorkerIndex,
         adapter: &AdapterName,
         digests: Option<&Digests>,
         send: &dyn Fn(Message),
     ) -> HashSet<ProjectPath> {
-        let Some(digests) = digests.filter(|_| lane != 0) else {
+        let Some(digests) = digests.filter(|_| !lane.is_first()) else {
             return HashSet::new();
         };
         let Some(reference) = self.listings.reference(adapter, &|| self.stopping()) else {
@@ -1945,7 +1945,7 @@ impl Shared<'_> {
     /// Run `batch` on `worker`, with `maxfail` its share of the run's.
     fn run_batch(
         &self,
-        lane: WorkerId,
+        lane: WorkerIndex,
         worker: &mut Worker,
         batch: &Assigned,
         maxfail: Option<u32>,
@@ -2048,7 +2048,7 @@ impl Shared<'_> {
     /// that the adapter runs only the rest, and none twice.
     fn crashed(
         &self,
-        lane: WorkerId,
+        lane: WorkerIndex,
         dead: Worker,
         batch: &Assigned,
         track: Track,
@@ -2140,7 +2140,12 @@ impl Shared<'_> {
 /// Send lane `lane`'s `worker_started` for `worker`, unless `announced`
 /// says it was (with one lane, a worker that listed the session is
 /// announced when it is first used).
-fn announce(lane: WorkerId, worker: Option<&Worker>, announced: &mut bool, send: &dyn Fn(Message)) {
+fn announce(
+    lane: WorkerIndex,
+    worker: Option<&Worker>,
+    announced: &mut bool,
+    send: &dyn Fn(Message),
+) {
     if let Some(worker) = worker
         && !*announced
     {
@@ -2299,8 +2304,8 @@ mod tests {
     fn stamps_run_seq_and_time_and_keeps_worker_and_batch() {
         let mut stamper = Stamper::with_run("r1").environment("py313");
         let mut record = Record::new(Event::CollectionStarted);
-        record.envelope.worker = Some(2);
-        record.envelope.batch = Some(5);
+        record.envelope.worker = Some(WorkerIndex::from_u32(2));
+        record.envelope.batch = Some(BatchIndex::from_u32(5));
         record.envelope.seq = Some(99);
         record.envelope.t_ms = Some(123_456.0);
         let first = stamper.stamp(record);
@@ -2309,7 +2314,10 @@ mod tests {
         assert_eq!(first.envelope.environment.as_deref(), Some("py313"));
         assert_eq!(
             (first.envelope.worker, first.envelope.batch),
-            (Some(2), Some(5))
+            (
+                Some(WorkerIndex::from_u32(2)),
+                Some(BatchIndex::from_u32(5))
+            )
         );
         assert_eq!(
             (first.envelope.seq, second.envelope.seq),

@@ -530,7 +530,7 @@ pub(crate) fn diagnostics() -> Vec<Record> {
             ms(90),
         ),
     ]);
-    records[8].envelope.worker = Some(1);
+    records[8].envelope.worker = Some(aye_events::WorkerIndex::from_u32(1));
     records
 }
 
@@ -1143,7 +1143,7 @@ pub(crate) fn full() -> Vec<Record> {
             record.event,
             Event::WorkerStarted { .. } | Event::TestFinished(_) | Event::WorkerFinished { .. }
         ) {
-            record.envelope.worker = Some(0);
+            record.envelope.worker = Some(aye_events::WorkerIndex::FIRST);
         }
     }
     records

@@ -15,7 +15,7 @@ use std::io::{self, Write};
 
 use aye_events::{
     Diagnostic, DiagnosticCode, Event, Failure, LifetimeId, Outcome, Phase, Record, Severity,
-    TestId, TestResult,
+    TestId, TestResult, WorkerIndex,
 };
 
 use aye_static::EnvVars;
@@ -257,7 +257,7 @@ impl<W: Write> GithubAnnotations<W> {
         writeln!(self.out, "{command}")
     }
 
-    fn worker_error(&mut self, worker: Option<u32>, error: &str) -> io::Result<()> {
+    fn worker_error(&mut self, worker: Option<WorkerIndex>, error: &str) -> io::Result<()> {
         let title = worker.map_or_else(
             || "a worker failed".to_owned(),
             |w| format!("worker {w} failed"),

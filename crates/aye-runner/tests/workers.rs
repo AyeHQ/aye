@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 
 use aye_engine::{EmbeddedModule, Executor, Policy, RefineRequest, Refiner, Reply, Request};
 use aye_events::{
-    AdapterName, AffinityKey, Case, DiagnosticCode, Event, Outcome, ProjectPath, Record, TestId,
-    TestResult,
+    AdapterName, AffinityKey, BatchIndex, Case, DiagnosticCode, Event, Outcome, ProjectPath,
+    Record, TestId, TestResult, WorkerIndex,
 };
 #[cfg(unix)]
 use aye_runner::Worker;
@@ -599,9 +599,13 @@ fn records_are_stamped_and_ordered() {
         let envelope = &record.envelope;
         assert_eq!(envelope.seq, Some(seq));
         assert_eq!(envelope.run.as_deref(), Some("run-1"));
-        assert_eq!(envelope.worker, Some(0));
+        assert_eq!(envelope.worker, Some(WorkerIndex::FIRST));
         let in_batch = !record.event.kind().starts_with("worker_");
-        assert_eq!(envelope.batch, in_batch.then_some(0), "{record:?}");
+        assert_eq!(
+            envelope.batch,
+            in_batch.then_some(BatchIndex::from_u32(0)),
+            "{record:?}"
+        );
     }
     assert!(
         records
@@ -658,8 +662,16 @@ fn batches_are_handed_out_as_workers_free_up() {
     assert_eq!(summary.batches.len(), 4);
     let slow = &summary.batches[0];
     assert_eq!(slow.cases, 1);
-    let others: Vec<_> = summary.batches[1..].iter().map(|b| b.worker).collect();
-    assert_eq!(others, [1 - slow.worker; 3], "{:?}", summary.batches);
+    let others: Vec<u32> = summary.batches[1..]
+        .iter()
+        .map(|b| b.worker.as_u32())
+        .collect();
+    assert_eq!(
+        others,
+        [1 - slow.worker.as_u32(); 3],
+        "{:?}",
+        summary.batches
+    );
 
     for result in results(&records) {
         if result.id.as_str().ends_with("test_env") {
@@ -778,11 +790,11 @@ fn maxfail_stops_every_worker() {
         summary
             .batches
             .iter()
-            .all(|b| b.id <= 1 && matches!(b.end, BatchEnd::Done | BatchEnd::Stopped)),
+            .all(|b| b.id.as_u32() <= 1 && matches!(b.end, BatchEnd::Done | BatchEnd::Stopped)),
         "{:#?}",
         summary.batches
     );
-    if let Some(slow) = summary.batches.iter().find(|b| b.id == 0) {
+    if let Some(slow) = summary.batches.iter().find(|b| b.id.as_u32() == 0) {
         assert_eq!(slow.end, BatchEnd::Stopped);
     }
     assert_eq!(
@@ -936,7 +948,11 @@ fn maxfail_interrupts_the_other_workers_which_tear_down() {
         outcomes(&records),
         [("a.py::test_await_fail", Outcome::Failed)]
     );
-    let ends: Vec<(u32, BatchEnd)> = summary.batches.iter().map(|b| (b.id, b.end)).collect();
+    let ends: Vec<(u32, BatchEnd)> = summary
+        .batches
+        .iter()
+        .map(|b| (b.id.as_u32(), b.end))
+        .collect();
     assert_eq!(ends, [(0, BatchEnd::Stopped), (1, BatchEnd::Done)]);
     assert!(!summary.internal_error);
     // Both lifetimes are closed in the log where the interrupted one tore
@@ -967,7 +983,11 @@ fn maxfail_kills_an_interrupted_worker_that_does_not_stop() {
         outcomes(&records),
         [("a.py::test_await_fail", Outcome::Failed)]
     );
-    let ends: Vec<(u32, BatchEnd)> = summary.batches.iter().map(|b| (b.id, b.end)).collect();
+    let ends: Vec<(u32, BatchEnd)> = summary
+        .batches
+        .iter()
+        .map(|b| (b.id.as_u32(), b.end))
+        .collect();
     assert_eq!(ends, [(0, BatchEnd::Stopped), (1, BatchEnd::Done)]);
 }
 
@@ -1011,7 +1031,7 @@ fn a_crash_fails_the_running_test_and_requeues_the_rest() {
     let ends: Vec<(u32, BatchEnd, u32)> = summary
         .batches
         .iter()
-        .map(|b| (b.id, b.end, b.cases))
+        .map(|b| (b.id.as_u32(), b.end, b.cases))
         .collect();
     assert_eq!(ends, [(0, BatchEnd::Crashed, 4), (1, BatchEnd::Done, 2)]);
 
@@ -1963,7 +1983,7 @@ fn one_worker_is_replaced_between_adapters() {
             "worker_finished"
         ]
     );
-    assert!(summary.batches.iter().all(|b| b.worker == 0));
+    assert!(summary.batches.iter().all(|b| b.worker.is_first()));
 }
 
 /// A test that replaces `os.getpid` or `json.dumps` and never puts it back
@@ -2099,7 +2119,7 @@ fn started_pids(records: &[Record]) -> HashMap<u32, u32> {
     records
         .iter()
         .filter_map(|r| match r.event {
-            Event::WorkerStarted { pid, .. } => Some((r.envelope.worker.unwrap(), pid)),
+            Event::WorkerStarted { pid, .. } => Some((r.envelope.worker.unwrap().as_u32(), pid)),
             _ => None,
         })
         .collect()
@@ -2209,12 +2229,12 @@ fn a_file_listed_otherwise_runs_on_the_first_lane_with_one_warning() {
             unreachable!()
         };
         if t.id.path() == "differs.py" {
-            assert_eq!(result.envelope.worker, Some(0), "{}", t.id);
+            assert_eq!(result.envelope.worker, Some(WorkerIndex::FIRST), "{}", t.id);
         }
     }
     let lanes: std::collections::HashSet<u32> = find(&records, "test_finished")
         .iter()
-        .filter_map(|r| r.envelope.worker)
+        .filter_map(|r| r.envelope.worker.map(u32::from))
         .collect();
     assert!(lanes.len() > 1, "z.py spreads across lanes: {lanes:?}");
     let warnings: Vec<&Record> = find(&records, "diagnostic");
@@ -2262,7 +2282,7 @@ fn free_cases_spread_across_lanes_and_affinity_groups_stay_whole() {
         find(&records, "test_finished")
             .iter()
             .filter(|r| matches!(&r.event, Event::TestFinished(t) if t.id.path() == path))
-            .filter_map(|r| r.envelope.batch)
+            .filter_map(|r| r.envelope.batch.map(u32::from))
             .collect()
     };
     assert!(batches_of("big.py").len() >= 4, "{:?}", summary.batches);
@@ -2270,7 +2290,7 @@ fn free_cases_spread_across_lanes_and_affinity_groups_stay_whole() {
     let lanes: std::collections::HashSet<u32> = find(&records, "test_finished")
         .iter()
         .filter(|r| matches!(&r.event, Event::TestFinished(t) if t.id.path() == "big.py"))
-        .filter_map(|r| r.envelope.worker)
+        .filter_map(|r| r.envelope.worker.map(u32::from))
         .collect();
     assert!(lanes.len() >= 2, "{lanes:?}");
 }

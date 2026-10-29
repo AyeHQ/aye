@@ -836,7 +836,7 @@ impl Here<'_> {
 #[derive(Debug, Default)]
 struct OneModuleErrors {
     /// Each batch's adapter, from its `batch_started`.
-    adapters: HashMap<aye_events::BatchId, AdapterName>,
+    adapters: HashMap<aye_events::BatchIndex, AdapterName>,
     /// By file, how many collection errors each adapter reported for it,
     /// in the order the adapters first did.
     reported: HashMap<String, Vec<(AdapterName, usize)>>,
@@ -932,7 +932,7 @@ impl OneModuleErrors {
 #[derive(Debug, Default)]
 struct OneConftestError {
     /// Each batch's adapter, from its `batch_started`.
-    adapters: HashMap<aye_events::BatchId, AdapterName>,
+    adapters: HashMap<aye_events::BatchIndex, AdapterName>,
     /// By code and path, who reported the error first (an adapter, or
     /// `None` for refinement), and its message.
     first: HashMap<(DiagnosticCode, String), (Option<AdapterName>, String)>,
