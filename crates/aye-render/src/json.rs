@@ -1080,10 +1080,10 @@ impl<W: Write> JsonLines<W> {
         id: &TestId,
         key: String,
         outcome: Outcome,
-        lifetime: &str,
+        lifetime: &LifetimeId,
     ) -> io::Result<()> {
         let mut fail = Fail::new(key, id, outcome);
-        fail.cause = Some(shared::head(lifetime, ID_MAX));
+        fail.cause = Some(shared::head(lifetime.as_str(), ID_MAX));
         self.line(&Line::Fail(Box::new(fail)))
     }
 
@@ -1106,15 +1106,15 @@ impl<W: Write> JsonLines<W> {
         };
         self.reported
             .insert(lifetime.clone(), failure.signature.clone());
-        let key = self.key(lifetime);
+        let key = self.key(lifetime.as_str());
         let mut line = LifetimeFail {
             key: key.clone(),
-            lifetime: shared::head(lifetime, ID_MAX),
+            lifetime: shared::head(lifetime.as_str(), ID_MAX),
             phase: failure.phase.map(shared::phase),
             same_as: None,
             at: at(failure),
             why: None,
-            shown: self.shown(shared::file_of(lifetime), worker),
+            shown: self.shown(lifetime.file().as_str(), worker),
             detail: Detail::default(),
             blocked: blocked
                 .iter()
@@ -1145,8 +1145,8 @@ impl<W: Write> JsonLines<W> {
         self.reported
             .insert(lifetime.clone(), failure.signature.clone());
         self.line(&Line::LifetimeFail(Box::new(LifetimeFail {
-            key: self.key(lifetime),
-            lifetime: shared::head(lifetime, ID_MAX),
+            key: self.key(lifetime.as_str()),
+            lifetime: shared::head(lifetime.as_str(), ID_MAX),
             phase: failure.phase.map(shared::phase),
             same_as: None,
             at: at(failure),
@@ -1180,8 +1180,8 @@ impl<W: Write> JsonLines<W> {
                 .map(|reason| shared::head(reason, REASON_MAX)),
             cause: result
                 .cause
-                .as_deref()
-                .map(|cause| shared::head(cause, ID_MAX)),
+                .as_ref()
+                .map(|cause| shared::head(cause.as_str(), ID_MAX)),
         })
     }
 
@@ -1323,7 +1323,7 @@ impl<W: Write> JsonLines<W> {
                 lifetime,
                 failure: Some(_),
                 ..
-            } => self.note_bad(lifetime),
+            } => self.note_bad(lifetime.as_str()),
             _ => {}
         }
     }

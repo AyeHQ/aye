@@ -385,7 +385,7 @@ fn listed(records: &[Record]) -> Vec<Record> {
     records
         .iter()
         .filter(|record| match &record.event {
-            Event::LifetimeFinished { lifetime, .. } => lifetime.starts_with("module:"),
+            Event::LifetimeFinished { lifetime, .. } => lifetime.as_str().starts_with("module:"),
             Event::RunStarted { .. } | Event::TestFinished(_) | Event::RunFinished { .. } => true,
             _ => false,
         })

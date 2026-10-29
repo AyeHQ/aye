@@ -1,5 +1,5 @@
 //! Identities: of a test, its key, an adapter's name, and the aliases for
-//! environments, lifetimes, workers and batches.
+//! environments, workers and batches.
 
 use std::borrow::{Borrow, Cow};
 use std::fmt;
@@ -342,8 +342,6 @@ impl PartialEq<&str> for AdapterName {
 
 /// Identifies one environment (interpreter plus dependencies) within a run.
 pub type EnvironmentId = String;
-/// Identifies one lifetime within a run, e.g. `class:tests/t.py::TestX`.
-pub type LifetimeId = String;
 /// Dense worker index within a run, from 0.
 pub type WorkerId = u32;
 /// Dense batch index within a run, from 0.

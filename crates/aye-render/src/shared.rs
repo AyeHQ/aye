@@ -463,22 +463,6 @@ pub(crate) fn phase_words(failure: Option<&Failure>) -> Option<&'static str> {
     })
 }
 
-/// The file of a lifetime's id (`class:tests/t.py::TestX` →
-/// `tests/t.py`), or of a test's.
-pub(crate) fn file_of(id: &str) -> &str {
-    let id = match id.split_once(':') {
-        Some((kind, rest))
-            if !kind.is_empty()
-                && !rest.starts_with(':')
-                && kind.chars().all(|c| c.is_ascii_lowercase()) =>
-        {
-            rest
-        }
-        _ => id,
-    };
-    id.split_once("::").map_or(id, |(path, _)| path)
-}
-
 /// The Python version a `worker_started` names: its `version`'s first
 /// word (`3.13.1`), else its `python` when that is a version itself.
 pub(crate) fn python_version(python: &str, version: Option<&str>) -> Option<String> {

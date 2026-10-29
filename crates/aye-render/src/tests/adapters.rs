@@ -608,7 +608,7 @@ fn a_failed_lifetime_that_blocked_tests_counts_through_them_alone() {
 /// not crashed or been stopped.
 fn closed(records: &[Record]) -> Vec<Record> {
     use aye_events::Event;
-    let mut open: Vec<(Option<u32>, String)> = Vec::new();
+    let mut open: Vec<(Option<u32>, aye_events::LifetimeId)> = Vec::new();
     let mut out = Vec::new();
     for record in records {
         match &record.event {

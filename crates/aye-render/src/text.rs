@@ -1069,7 +1069,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             Some(at) => self.pending.remove(at).1,
             None => Vec::new(),
         };
-        let key = self.key(lifetime);
+        let key = self.key(lifetime.as_str());
         self.note_bad(&key);
         let name = lifetime_name(lifetime, failure);
         let rerun = not_run.first().map(|(first, _)| shared::rerun(first, None));
@@ -1077,7 +1077,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             outcome: Outcome::Error,
             key: &key,
             name: &name,
-            path: shared::file_of(lifetime),
+            path: lifetime.file().as_str(),
             failures: std::slice::from_ref(failure),
             test: false,
             duration: Some(duration),
@@ -1101,7 +1101,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         if !self.shown_lifetimes.insert(lifetime.clone()) {
             return Ok(());
         }
-        let key = self.key(lifetime);
+        let key = self.key(lifetime.as_str());
         let name = lifetime_name(lifetime, failure);
         let why = shared::why(failure, false);
         self.lines()?;
@@ -2013,11 +2013,11 @@ fn file_url(root: &str, path: &str) -> String {
 
 /// What failed of a lifetime: `setup of <lifetime>`, `teardown of
 /// <lifetime>`, or the lifetime when its failure names no phase.
-fn lifetime_name(lifetime: &str, failure: &Failure) -> String {
+fn lifetime_name(lifetime: &LifetimeId, failure: &Failure) -> String {
     match failure.phase {
         Some(Phase::Setup) => format!("setup of {lifetime}"),
         Some(Phase::Teardown) => format!("teardown of {lifetime}"),
-        Some(Phase::Test) | None => lifetime.to_owned(),
+        Some(Phase::Test) | None => lifetime.to_string(),
     }
 }
 

@@ -45,10 +45,10 @@ pub use diagnostic::{
 pub use event::{Envelope, Event, Record};
 pub use failure::{Assertion, Columns, Compare, Difference, Failure, Frame, Local, Side};
 pub use id::{
-    AdapterName, BatchId, EnvironmentId, InvalidKey, KeyPrefix, LifetimeId, TestId, TestIdParts,
-    TestKey, WorkerId,
+    AdapterName, BatchId, EnvironmentId, InvalidKey, KeyPrefix, TestId, TestIdParts, TestKey,
+    WorkerId,
 };
-pub use lifetime::Scope;
+pub use lifetime::{LifetimeId, Scope};
 pub use outcome::{ExitCode, Outcome, Phase};
 pub use path::{
     DiagnosticPath, FramePath, InvalidProjectPath, LineNumber, Location, ProjectPath,

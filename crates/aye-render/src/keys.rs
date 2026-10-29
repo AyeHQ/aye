@@ -52,7 +52,7 @@ impl Keys {
             Event::TestStarted { id } | Event::SubOutcome { id, .. } => self.add(id.as_str()),
             Event::TestFinished(result) => self.add(result.id.as_str()),
             Event::LifetimeStarted { lifetime, .. } | Event::LifetimeFinished { lifetime, .. } => {
-                self.add(lifetime);
+                self.add(lifetime.as_str());
             }
             _ => {}
         }

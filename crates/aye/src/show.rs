@@ -696,7 +696,7 @@ impl<'a> Log<'a> {
         // A test's `test_started` and `sub_outcome` records not yet
         // finished, by id and worker.
         let mut open: HashMap<&TestId, Vec<Open>> = HashMap::new();
-        let mut causes: HashSet<&str> = HashSet::new();
+        let mut causes: HashSet<&LifetimeId> = HashSet::new();
         let mut diagnostics: HashSet<(&str, &str, &str)> = HashSet::new();
         for (at, record) in records.iter().enumerate() {
             let worker = record.envelope.worker;
@@ -794,7 +794,7 @@ impl<'a> Log<'a> {
         }
         for item in &mut log.items {
             if let What::Lifetime(lifetime) = item.what {
-                item.blocking = causes.contains(lifetime.as_str());
+                item.blocking = causes.contains(lifetime);
             }
         }
         log

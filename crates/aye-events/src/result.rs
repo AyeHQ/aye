@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::failure::Failure;
-use crate::id::{LifetimeId, TestId};
-use crate::lifetime::Scope;
+use crate::id::TestId;
+use crate::lifetime::{LifetimeId, Scope};
 use crate::outcome::Outcome;
 use crate::serde_ext::millis;
 
