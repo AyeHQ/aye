@@ -169,7 +169,7 @@
 //!   hook maps, under a name that is neither its distribution's nor in its
 //!   `top_level.txt`, are not in the key. Entries are never pruned. The
 //!   state directory the cache creates is marked as a cache
-//!   (`aye_history::prepare_dir`).
+//!   (`aye_fs::prepare_dir`).
 //! - **Strict mode** turns every warning into an error, recognizers' and
 //!   workers' included; infos stay infos. [`Collection::has_errors`] is what
 //!   fails the run.

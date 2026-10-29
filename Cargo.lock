@@ -265,6 +265,7 @@ name = "aye-history"
 version = "0.0.1"
 dependencies = [
  "aye-events",
+ "aye-fs",
  "flate2",
  "serde",
  "serde_json",

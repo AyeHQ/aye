@@ -14,7 +14,7 @@ use aye_collect::{Collector, Environment, Options, Prepared};
 use aye_config::AyeConfig;
 use aye_engine::{Adapter, Policy, Project, Refiner};
 use aye_events::{Case, Counts, Diagnostic, Event, ExitCode, Record, SCHEMA_VERSION, Severity};
-use aye_fs::{normalize_absolute, relative_below_root, root_relative};
+use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter};
 use aye_render::{
     ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
@@ -27,9 +27,6 @@ use aye_static::EnvVars;
 use crate::args::{Args, Color, Maxfail, Output, Passed, Workers, passed, passed_maxfail};
 use crate::busy::Busy;
 use crate::registry;
-
-/// Where aye keeps history and caches, under the project root.
-pub const STATE_DIR: &str = ".aye";
 
 /// Diagnostic codes the binary acts on. Collection's are in
 /// `aye_collect::codes`; the rest come from adapters and the runner.
@@ -292,8 +289,8 @@ impl Session {
             );
             return ExitCode::UsageError;
         }
-        let state = self.root.join(STATE_DIR);
-        let mut history = History::load(&state);
+        let state = StateDir::for_root(&self.root);
+        let mut history = History::load(state.path());
         let durations = history.durations();
         let last_failed = history.last_failed();
         let mut selection = std::mem::take(&mut self.selection);
@@ -335,7 +332,7 @@ impl Session {
         // The run's number in the store (`r81`), which `run_started` says,
         // when the run will be stored.
         let mut writer = RunWriter::new(
-            state.join(aye_history::runs::DIR),
+            state.bucket(StateBucket::Runs),
             self.config.settings.keep_runs(),
         );
         let number = if self.args.collect_only {
@@ -347,7 +344,7 @@ impl Session {
             reporters: self.reporters(junit, &file_failed),
             history: Some(Remember {
                 history: &mut history,
-                dir: state.clone(),
+                dir: state.path().to_path_buf(),
             }),
             store: Keep::new(writer),
             stamper: Stamper::with_run(run_id),
@@ -383,7 +380,7 @@ impl Session {
             &self.prepared,
             Options {
                 strict: self.args.strict,
-                cache_dir: Some(state.join("cache")),
+                cache_dir: Some(state.bucket(StateBucket::Cache)),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
         )

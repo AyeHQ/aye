@@ -124,7 +124,7 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
         .output
         .or_else(|| config.settings.output.as_deref()?.parse().ok())
         .unwrap_or(Output::Text);
-    let store = RunStore::new(root.join(session::STATE_DIR).join(aye_history::runs::DIR));
+    let store = RunStore::new(aye_fs::StateDir::for_root(&root).bucket(aye_fs::StateBucket::Runs));
     let keep = config.settings.keep_runs();
     if args.runs {
         return list_runs(&store, format, keep);

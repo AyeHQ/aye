@@ -1,5 +1,10 @@
-//! Paths, handled lexically: made absolute and normalized as Python's
-//! `os.path` does, made relative, shown with `/`, and expanded.
+//! Paths, and aye's state directory.
+//!
+//! Paths are handled lexically: made absolute and normalized as Python's
+//! `os.path` does, made relative, shown with `/`, and expanded. The state
+//! directory's module is the one place that knows `.aye`'s layout: its
+//! buckets, the markers that keep it out of git and backups, and how a file
+//! in it is replaced.
 //!
 //! Decided (implementation, October 2026):
 //! - **Paths are made absolute lexically**, as Python's `os.path.abspath`
@@ -21,14 +26,20 @@
 //!   path absolute ([`relative_below_root`]).
 //!
 //! Owns: path algebra over `std::path`, paths shown with `/`, the expansion
-//! of variables and `~` over a lookup it is given. Does not own: the
-//! project root (aye-config), nor the environment (aye-static).
+//! of variables and `~` over a lookup it is given; [`StateDir`] and
+//! [`StateBucket`], [`prepare_dir`] and the markers, [`atomic_write`]. Does
+//! not own: the project root (aye-config), what a bucket holds (aye-history,
+//! aye-collect), nor the environment (aye-static).
 //!
-//! Depends on: the standard library only. Must not depend on any aye crate.
+//! Depends on: tempfile. Must not depend on any aye crate.
 
 mod path;
+mod state;
+mod write;
 
 pub use path::{
     absolute, common_ancestor, expand_path, normalize_absolute, normpath, relative_below_root,
     relative_through_root, relative_to, root_relative, slashed,
 };
+pub use state::{HISTORY_TEMPORARY, REFINE_CACHE, StateBucket, StateDir, prepare_dir};
+pub use write::atomic_write;

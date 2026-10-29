@@ -1,6 +1,6 @@
 [package]
 name = "aye-fs"
-description = "Paths for aye: lexical path algebra, relativizing, path display and expansion"
+description = "Paths and aye's state directory: lexical path algebra, relativizing, expansion, the .aye buckets and atomic writes"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 
-[dev-dependencies]
+[dependencies]
 tempfile = { workspace = true }
 
 [lints]
