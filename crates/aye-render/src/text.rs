@@ -532,7 +532,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// The key of a test's or a lifetime's id.
     fn key(&self, id: &str) -> String {
         self.keys.key(id).map_or_else(
-            || aye_events::TestKey::of(id).0[..crate::keys::MIN].to_owned(),
+            || aye_events::TestKey::of(id).prefix(crate::keys::MIN),
             str::to_owned,
         )
     }

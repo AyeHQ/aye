@@ -1408,7 +1408,7 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
 
     // Paths beside them: what a path holds is reached, in the order of the
     // arguments; a key resolves like a dotted name.
-    let key = cases[3].id.key().0;
+    let key = cases[3].id.key().to_string();
     let reach = Reach::of(
         &positionals(&["tests", &key, "tests.test_a", "testing/test_g.py::test_g"]),
         root,

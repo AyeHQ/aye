@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use aye_events::{Case, Certainty, TestId, TestIdParts};
+use aye_events::{Case, Certainty, KeyPrefix, TestId, TestIdParts};
 
 use crate::Truth;
 use crate::expression::is_python_identifier;
@@ -30,8 +30,8 @@ enum Reading {
         names: Vec<String>,
         params: Option<String>,
     },
-    /// The start of a test key, lowercase.
-    Key(String),
+    /// The start of a test key.
+    Key(KeyPrefix),
 }
 
 impl Selector {
@@ -56,8 +56,8 @@ impl Selector {
                     params: params.map(str::to_string),
                 });
             }
-            if (4..=16).contains(&text.len()) && text.bytes().all(|b| b.is_ascii_hexdigit()) {
-                readings.push(Reading::Key(text.to_ascii_lowercase()));
+            if let Ok(prefix) = text.parse() {
+                readings.push(Reading::Key(prefix));
             }
             readings
         };
@@ -115,7 +115,7 @@ impl Selector {
                     .map(|dotted| case.names(names, params.as_deref(), dotted))
                     .find(|found| !matches!(found, Found::No))
                     .unwrap_or(Found::No),
-                Reading::Key(prefix) => Found::from(case.case.id.key().0.starts_with(prefix)),
+                Reading::Key(prefix) => Found::from(case.case.id.key().starts_with(prefix)),
             };
             if !matches!(found, Found::No) {
                 rank = rank.min(reading.rank());
@@ -538,7 +538,7 @@ mod tests {
     #[test]
     fn keys_select_by_hex_prefix() {
         let id = "tests/t.py::test_a[1]";
-        let key = TestId::new(id).key().0;
+        let key = TestId::new(id).key().to_string();
         assert_eq!(selects(&key, id), Truth::True);
         assert_eq!(selects(&key[..4], id), Truth::True);
         assert_eq!(selects(&key[..6].to_ascii_uppercase(), id), Truth::True);

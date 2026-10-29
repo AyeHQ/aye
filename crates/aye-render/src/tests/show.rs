@@ -94,7 +94,7 @@ fn alike() -> (String, String) {
     (0..)
         .find_map(|n| {
             let id = format!("tests/t.py::test_{n}");
-            let start = TestKey::of(&id).0[..5].to_string();
+            let start = TestKey::of(&id).to_string()[..5].to_string();
             seen.insert(start, id.clone()).map(|earlier| (earlier, id))
         })
         .unwrap()

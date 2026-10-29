@@ -379,7 +379,7 @@ fn alike(digits: usize) -> (String, String) {
     (0..)
         .find_map(|n| {
             let id = format!("t.py::test_{n}");
-            let start = aye_events::TestKey::of(&id).0[..digits].to_string();
+            let start = aye_events::TestKey::of(&id).to_string()[..digits].to_string();
             seen.insert(start, id.clone()).map(|earlier| (earlier, id))
         })
         .unwrap()
@@ -423,11 +423,11 @@ fn keys_and_their_start_name_tests_and_the_start_of_several_is_a_usage_error() {
     let key = |id: &str| keys.key(id).unwrap().to_owned();
     // A key, whole or upper case; the start of one test's key, from 4
     // digits; its whole hash.
-    let full = aye_events::TestKey::of(&first).0;
+    let full = aye_events::TestKey::of(&first).to_string();
     for arg in [key(&first), key(&first).to_ascii_uppercase(), full.clone()] {
         assert_eq!(chosen(&records, &[&arg]), Ok(vec![first.clone()]), "{arg}");
     }
-    let other = aye_events::TestKey::of("t.py::test_other").0;
+    let other = aye_events::TestKey::of("t.py::test_other").to_string();
     let unique = (4..=16)
         .map(|len| &other[..len])
         .find(|start| keys.resolve(start).len() == 1)

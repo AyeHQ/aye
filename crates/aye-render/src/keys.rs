@@ -112,7 +112,7 @@ impl Keys {
         if self.keys.contains_key(id) {
             return;
         }
-        let full = TestKey::of(id).0;
+        let full = TestKey::of(id).to_string();
         let same_start = self.by_start.entry(full[..MIN].to_string()).or_default();
         let len = same_start
             .iter()
@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn a_key_is_five_digits_of_the_ids_hash() {
         let keys = Keys::of(&[finished("t.py::test_a")]);
-        let full = TestKey::of("t.py::test_a").0;
+        let full = TestKey::of("t.py::test_a").to_string();
         assert_eq!(keys.key("t.py::test_a"), Some(&full[..5]));
         assert_eq!(keys.resolve(&full[..5]), ["t.py::test_a"]);
         assert_eq!(keys.resolve(&full[..4]), ["t.py::test_a"]);
@@ -184,12 +184,15 @@ mod tests {
         let (first, second) = (0..)
             .find_map(|n| {
                 let id = format!("t.py::test_{n}");
-                let start = TestKey::of(&id).0[..MIN].to_string();
+                let start = TestKey::of(&id).to_string()[..MIN].to_string();
                 seen.insert(start, id.clone()).map(|earlier| (earlier, id))
             })
             .unwrap();
         let keys = Keys::of(&[finished(&first), finished(&second), finished(&first)]);
-        let (a, b) = (TestKey::of(&first).0, TestKey::of(&second).0);
+        let (a, b) = (
+            TestKey::of(&first).to_string(),
+            TestKey::of(&second).to_string(),
+        );
         let shared = common(&a, &b);
         assert_eq!(keys.key(&first), Some(&a[..MIN]));
         assert_eq!(keys.key(&second), Some(&b[..=shared]));

@@ -2,8 +2,10 @@
 //! lifetimes, workers and batches.
 
 use std::borrow::Borrow;
+use std::fmt;
+use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::path::ProjectPathRef;
 
@@ -137,14 +139,18 @@ impl<'a> TestIdParts<'a> {
 
 /// A short, stable key for a test: the FNV-1a 64 hash of its id, mixed
 /// (`SplitMix64`'s finalizer) so that every digit depends on every byte,
-/// printed as 16 hex digits. A key is shown by its first digits, and FNV-1a
-/// alone leaves the leading ones unchanged by the last bytes: `test_0` and
-/// `test_1` would share them.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct TestKey(pub String);
+/// printed as 16 lower-case hex digits. A key is shown by its first digits,
+/// and FNV-1a alone leaves the leading ones unchanged by the last bytes:
+/// `test_0` and `test_1` would share them.
+///
+/// It orders as its digits do, and serializes as them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TestKey(u64);
 
 impl TestKey {
+    /// Its digits.
+    pub const DIGITS: usize = 16;
+
     pub fn of(id: &str) -> Self {
         const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
         const PRIME: u64 = 0x0100_0000_01b3;
@@ -154,9 +160,100 @@ impl TestKey {
         hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
         hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
         hash ^= hash >> 31;
-        Self(format!("{hash:016x}"))
+        Self(hash)
+    }
+
+    /// Its first `digits` hex digits, all 16 at most: how it is shown.
+    pub fn prefix(self, digits: usize) -> String {
+        let mut text = self.to_string();
+        text.truncate(digits);
+        text
+    }
+
+    /// Whether its digits start with `prefix`'s.
+    pub fn starts_with(self, prefix: &KeyPrefix) -> bool {
+        self.to_string().starts_with(prefix.as_str())
     }
 }
+
+impl fmt::Display for TestKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:016x}", self.0)
+    }
+}
+
+/// Its 16 hex digits, in either case.
+impl FromStr for TestKey {
+    type Err = InvalidKey;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        if text.len() != Self::DIGITS || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(InvalidKey(text.into()));
+        }
+        u64::from_str_radix(text, 16)
+            .map(Self)
+            .map_err(|_| InvalidKey(text.into()))
+    }
+}
+
+impl Serialize for TestKey {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for TestKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = Box::<str>::deserialize(deserializer)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+/// The start of a test's key, as a selector or `aye show 3fae6` writes it:
+/// 4 to 16 hex digits, kept in lower case.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KeyPrefix(Box<str>);
+
+impl KeyPrefix {
+    /// The fewest digits that make a prefix.
+    pub const MIN: usize = 4;
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// 4 to 16 hex digits, in either case.
+impl FromStr for KeyPrefix {
+    type Err = InvalidKey;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        if !(Self::MIN..=TestKey::DIGITS).contains(&text.len())
+            || !text.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(InvalidKey(text.into()));
+        }
+        Ok(Self(text.to_ascii_lowercase().into_boxed_str()))
+    }
+}
+
+impl fmt::Display for KeyPrefix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A text that is not a key, or the start of one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidKey(Box<str>);
+
+impl fmt::Display for InvalidKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "`{}` is not a test key", self.0)
+    }
+}
+
+impl std::error::Error for InvalidKey {}
 
 /// Identifies one environment (interpreter plus dependencies) within a run.
 pub type EnvironmentId = String;
@@ -228,6 +325,58 @@ mod tests {
         assert!(!TestId::new("t.py::test_x").is_file());
     }
 
+    /// A key prints, serializes and orders as its 16 lower-case digits did
+    /// when it was one.
+    #[test]
+    fn a_key_is_its_sixteen_digits() {
+        let keys: Vec<TestKey> = ["", "a", "t.py::test_x", "tests/test_k.py::test_0"]
+            .into_iter()
+            .map(TestKey::of)
+            .collect();
+        for key in &keys {
+            let text = key.to_string();
+            assert_eq!(text.len(), 16);
+            assert_eq!(text, text.to_ascii_lowercase());
+            assert_eq!(serde_json::to_string(key).unwrap(), format!("\"{text}\""));
+            assert_eq!(
+                serde_json::from_str::<TestKey>(&format!("\"{text}\"")).unwrap(),
+                *key
+            );
+            assert_eq!(text.parse::<TestKey>().unwrap(), *key);
+            assert_eq!(key.prefix(99), text);
+        }
+        let mut by_key = keys.clone();
+        by_key.sort();
+        let mut by_text: Vec<String> = keys.iter().map(TestKey::to_string).collect();
+        by_text.sort();
+        assert_eq!(
+            by_key.iter().map(TestKey::to_string).collect::<Vec<_>>(),
+            by_text
+        );
+        assert!("f52a15e9a9b5e89".parse::<TestKey>().is_err());
+        assert!("f52a15e9a9b5e89g".parse::<TestKey>().is_err());
+    }
+
+    #[test]
+    fn a_key_prefix_is_four_to_sixteen_hex_digits() {
+        let key = TestKey::of("t.py::test_x");
+        let text = key.to_string();
+        for digits in [4, 5, 16] {
+            let prefix: KeyPrefix = text[..digits].to_ascii_uppercase().parse().unwrap();
+            assert_eq!(prefix.as_str(), &text[..digits]);
+            assert!(key.starts_with(&prefix));
+        }
+        let other = if text.starts_with('0') {
+            "1000"
+        } else {
+            "0000"
+        };
+        assert!(!key.starts_with(&other.parse().unwrap()));
+        for text in ["abc", "abcdefabcdefabcde", "abcg"] {
+            assert!(text.parse::<KeyPrefix>().is_err(), "{text}");
+        }
+    }
+
     #[test]
     fn ids_split_into_path_and_params() {
         let id = TestId::new("tests/t.py::TestX::test_y[a-1]");
@@ -262,11 +411,11 @@ mod tests {
     #[test]
     fn keys_are_stable_hashes() {
         // FNV-1a 64 of "" and "a" (cbf29ce484222325, af63dc4c8601ec8c), mixed.
-        assert_eq!(TestKey::of("").0, "f52a15e9a9b5e89b");
-        assert_eq!(TestKey::of("a").0, "02c0bdbf481420f8");
+        assert_eq!(TestKey::of("").to_string(), "f52a15e9a9b5e89b");
+        assert_eq!(TestKey::of("a").to_string(), "02c0bdbf481420f8");
         // Ids that differ in their last byte differ from the first digit.
-        assert_eq!(&TestKey::of("tests/test_k.py::test_0").0[..5], "25ece");
-        assert_eq!(&TestKey::of("tests/test_k.py::test_1").0[..5], "23ea0");
+        assert_eq!(TestKey::of("tests/test_k.py::test_0").prefix(5), "25ece");
+        assert_eq!(TestKey::of("tests/test_k.py::test_1").prefix(5), "23ea0");
         assert_eq!(
             TestId::new("t.py::test_x").key(),
             TestKey::of("t.py::test_x")

@@ -209,7 +209,7 @@ fn suite() -> tempfile::TempDir {
 
 /// The full FNV-1a 64 key of a test id, 16 hex digits.
 fn full_key(id: &str) -> String {
-    aye_events::TestKey::of(id).0
+    aye_events::TestKey::of(id).to_string()
 }
 
 fn last(dir: &Path) -> String {
