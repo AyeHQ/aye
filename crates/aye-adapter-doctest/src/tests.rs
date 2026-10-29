@@ -977,8 +977,11 @@ fn beside_pytest_test_txt_files_need_no_pytest_configuration() {
     let settings = recognizer.settings();
     let glob = settings.iter().find(|s| s.name == "glob").unwrap();
     assert_eq!(
-        (glob.value.as_str(), glob.origin.as_str()),
-        ("test*.txt", "default")
+        (
+            glob.value.as_str(),
+            glob.source.display_row(root).to_string()
+        ),
+        ("test*.txt", "default".to_string())
     );
     // The other rules still hold: `-p no:doctest`, `[tool.aye.doctest]`.
     let blocked = ["-p".to_string(), "no:doctest".to_string()];
@@ -1113,7 +1116,10 @@ fn tool_aye_doctest_wins_over_pytest() {
     assert_eq!(config.encoding.value, "latin-1");
     let settings = recognizer.settings();
     let glob = settings.iter().find(|s| s.name == "glob").unwrap();
-    assert_eq!(glob.origin, "pyproject.toml [tool.aye.doctest]");
+    assert_eq!(
+        glob.source.display_row(&recognizer.root).to_string(),
+        "pyproject.toml [tool.aye.doctest]"
+    );
     // Only aye's own: modules without pytest.
     let only = "[tool.aye.doctest]\nmodules = true\n";
     let recognizer = config_of(&[("pyproject.toml", only)]);

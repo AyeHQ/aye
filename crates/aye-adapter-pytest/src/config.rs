@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use aye_adapter::{AdapterError, Project, Setting};
-use aye_config::{Origin, Sourced, ini_section, read_toml, split_args};
+use aye_config::{Sourced, ValueSource, ini_section, read_toml, split_args};
 use aye_fs::common_ancestor;
 use aye_static::{EnvVars, ProcessEnv};
 
@@ -49,7 +49,7 @@ enum Raw {
 /// The options read from the config file.
 #[derive(Debug, Default)]
 struct RawConfig {
-    values: BTreeMap<String, (Raw, Origin)>,
+    values: BTreeMap<String, (Raw, ValueSource)>,
 }
 
 /// The resolved pytest configuration for one project.
@@ -231,7 +231,10 @@ fn load_config(path: &Path) -> Result<Option<(RawConfig, String)>, AdapterError>
         for (key, value) in values {
             config.values.insert(
                 key,
-                (Raw::Ini(value), Origin::file(path, format!("[{section}]"))),
+                (
+                    Raw::Ini(value),
+                    ValueSource::file(path, format!("[{section}]")),
+                ),
             );
         }
         (config, format!("[{section}]"))
@@ -264,7 +267,7 @@ fn load_config(path: &Path) -> Result<Option<(RawConfig, String)>, AdapterError>
                 for (key, value) in table {
                     config.values.insert(
                         key.clone(),
-                        (Raw::Toml(value.clone()), Origin::file(path, location)),
+                        (Raw::Toml(value.clone()), ValueSource::file(path, location)),
                     );
                 }
                 config
@@ -307,7 +310,7 @@ fn load_config(path: &Path) -> Result<Option<(RawConfig, String)>, AdapterError>
                         };
                         config
                             .values
-                            .insert(key.clone(), (raw, Origin::file(path, location)));
+                            .insert(key.clone(), (raw, ValueSource::file(path, location)));
                     }
                     Ok(Some((config, location.into())))
                 }
@@ -1113,14 +1116,17 @@ impl PytestConfig {
         let (rootdir, inifile, mut raw) =
             determine_setup(project, config_file.as_deref(), rootdir_arg.as_deref())?;
 
-        let overrides = |raw: &mut RawConfig, args: &[String], from: &str| {
+        let overrides = |raw: &mut RawConfig, args: &[String], via: &'static str| {
             for item in option_values(args, "--override-ini", Some("-o")) {
                 if let Some((name, value)) = item.split_once('=') {
                     raw.values.insert(
                         name.to_string(),
                         (
                             Raw::Ini(value.to_string()),
-                            Origin::Flag(format!("-o {name} ({from})")),
+                            ValueSource::FrameworkOption {
+                                option: format!("-o {name}").into(),
+                                via,
+                            },
                         ),
                     );
                 }
@@ -1142,12 +1148,13 @@ impl PytestConfig {
         ]
         .into_iter()
         .find(|(args, _)| args.iter().any(|a| a == "--strict"))
-        .map(|(_, from)| format!("--strict ({from})"));
-        if let Some(origin) = strict_from {
-            raw.values.insert(
-                "strict".into(),
-                (Raw::Ini("true".into()), Origin::Flag(origin)),
-            );
+        .map(|(_, via)| ValueSource::FrameworkOption {
+            option: "--strict".into(),
+            via,
+        });
+        if let Some(source) = strict_from {
+            raw.values
+                .insert("strict".into(), (Raw::Ini("true".into()), source));
         }
         // Everything pytest parses, in its order.
         let args: Vec<String> = addopts
@@ -1362,20 +1369,17 @@ impl PytestConfig {
         self
     }
 
-    /// The resolved settings, with origins shown relative to `root`.
-    pub fn settings(&self, root: &Path) -> Vec<Setting> {
-        let origin_of_files = match &self.inifile {
-            Some(file) => Origin::file(file, "")
-                .display_relative(root)
-                .trim()
-                .to_string(),
-            None => "default".to_string(),
+    /// The resolved settings, with where each came from.
+    pub fn settings(&self) -> Vec<Setting> {
+        let of_files = match &self.inifile {
+            Some(file) => ValueSource::whole_file(file),
+            None => ValueSource::Default,
         };
         let mut out = vec![
             Setting {
                 name: "rootdir".into(),
                 value: self.rootdir.display().to_string(),
-                origin: origin_of_files.clone(),
+                source: of_files.clone(),
             },
             Setting {
                 name: "inifile".into(),
@@ -1384,7 +1388,7 @@ impl PytestConfig {
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default(),
-                origin: origin_of_files,
+                source: of_files,
             },
         ];
         let join = |items: &[String]| {
@@ -1394,11 +1398,11 @@ impl PytestConfig {
                 .collect::<Vec<_>>()
                 .join(" ")
         };
-        let mut push = |name: &str, value: String, origin: &Origin| {
+        let mut push = |name: &'static str, value: String, source: &ValueSource| {
             out.push(Setting {
-                name: name.to_string(),
+                name: name.into(),
                 value,
-                origin: origin.display_relative(root),
+                source: source.clone(),
             });
         };
         for (name, sourced) in [
@@ -1410,24 +1414,24 @@ impl PytestConfig {
             ("addopts", &self.addopts),
             ("usefixtures", &self.usefixtures),
         ] {
-            push(name, join(&sourced.value), &sourced.origin);
+            push(name, join(&sourced.value), &sourced.source);
         }
         if let Some(env) = &self.env_addopts {
             push(
                 EnvVars::PYTEST_ADDOPTS,
                 env.clone(),
-                &Origin::Env(EnvVars::PYTEST_ADDOPTS.into()),
+                &ValueSource::Env(EnvVars::PYTEST_ADDOPTS),
             );
         }
         push(
             "markers",
             self.markers.value.join("\n"),
-            &self.markers.origin,
+            &self.markers.source,
         );
         push(
             "empty_parameter_set_mark",
             self.empty_parameter_set_mark.value.clone(),
-            &self.empty_parameter_set_mark.origin,
+            &self.empty_parameter_set_mark.source,
         );
         for (name, sourced) in [
             ("collect_imported_tests", &self.collect_imported_tests),
@@ -1443,7 +1447,7 @@ impl PytestConfig {
             push(
                 name,
                 if sourced.value { "true" } else { "false" }.to_string(),
-                &sourced.origin,
+                &sourced.source,
             );
         }
         out
@@ -1487,9 +1491,9 @@ mod tests {
         assert_eq!(config.addopts.value, ["-ra", "--strict-markers"]);
         assert_eq!(config.python_functions.value, ["test_", "check_"]);
         assert_eq!(config.python_classes.value, ["Test"]);
-        assert_eq!(config.python_classes.origin, Origin::Default);
+        assert_eq!(config.python_classes.source, ValueSource::Default);
         assert_eq!(
-            config.testpaths.origin.display_relative(dir.path()),
+            config.testpaths.source.display_row(dir.path()).to_string(),
             "pyproject.toml [tool.pytest.ini_options]"
         );
     }
@@ -1776,8 +1780,8 @@ mod tests {
         );
         assert_eq!(config.python_classes.value, ["Check"]);
         assert_eq!(
-            config.python_classes.origin,
-            Origin::Flag("-o python_classes (PYTEST_ADDOPTS)".into())
+            config.python_classes.source.to_string(),
+            "-o python_classes (PYTEST_ADDOPTS)"
         );
         assert!(config.disable_test_id_escaping.value);
         assert!(config.strict_parametrization_ids.value);
@@ -1789,7 +1793,7 @@ mod tests {
         assert_eq!(config.plugins, ["one", "no:two"]);
         assert_eq!(config.keyword, None);
         assert!(config.pyargs);
-        let settings = config.settings(dir.path());
+        let settings = config.settings();
         let env = settings
             .iter()
             .find(|s| s.name == "PYTEST_ADDOPTS")
@@ -1808,19 +1812,24 @@ mod tests {
     }
 
     #[test]
-    fn settings_carry_origins() {
+    fn settings_carry_their_sources() {
         let dir = tempfile::tempdir().unwrap();
         write(dir.path(), "tox.ini", "[pytest]\ntestpaths = tests\n");
         let config = discover(dir.path(), &[]);
-        let settings = config.settings(dir.path());
-        let testpaths = settings.iter().find(|s| s.name == "testpaths").unwrap();
-        assert_eq!(testpaths.value, "tests");
-        assert_eq!(testpaths.origin, "tox.ini [pytest]");
-        let classes = settings
-            .iter()
-            .find(|s| s.name == "python_classes")
-            .unwrap();
-        assert_eq!(classes.origin, "default");
+        let settings = config.settings();
+        let row = |name: &str| {
+            let setting = settings.iter().find(|s| s.name == name).unwrap();
+            (
+                setting.value.clone(),
+                setting.source.display_row(dir.path()).to_string(),
+            )
+        };
+        assert_eq!(
+            row("testpaths"),
+            ("tests".into(), "tox.ini [pytest]".into())
+        );
+        assert_eq!(row("python_classes").1, "default");
+        assert_eq!(row("inifile").1, "tox.ini");
     }
 
     fn discover_args(cwd: &Path, env: Option<&str>, framework_args: &[&str]) -> PytestConfig {
@@ -1877,8 +1886,8 @@ mod tests {
         );
         assert_eq!(config.python_classes.value, ["Zc"]);
         assert_eq!(
-            config.python_classes.origin,
-            Origin::Flag("-o python_classes (after --)".into())
+            config.python_classes.source.to_string(),
+            "-o python_classes (after --)"
         );
         assert_eq!(
             config.ignore,
@@ -1896,8 +1905,8 @@ mod tests {
         assert_eq!(config.import_mode, ImportMode::Importlib);
         assert!(config.strict_parametrization_ids.value);
         assert_eq!(
-            config.strict_parametrization_ids.origin,
-            Origin::Flag("--strict (after --)".into())
+            config.strict_parametrization_ids.source.to_string(),
+            "--strict (after --)"
         );
 
         // `-o addopts=` on the command line replaces the config's addopts

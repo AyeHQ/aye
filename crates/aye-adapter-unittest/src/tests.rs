@@ -663,9 +663,12 @@ fn configuration_is_read_with_origins() {
     let root = dir.path();
     let recognizer = recognizer(root, &[]).unwrap();
     let settings = recognizer.settings();
-    let shown: Vec<(&str, &str, &str)> = settings
+    let shown: Vec<(&str, &str, String)> = settings
         .iter()
-        .map(|s| (s.name.as_str(), s.value.as_str(), s.origin.as_str()))
+        .map(|s| {
+            let source = s.source.display_row(root).to_string();
+            (s.name.as_ref(), s.value.as_str(), source)
+        })
         .collect();
     assert_eq!(
         shown,
@@ -673,13 +676,17 @@ fn configuration_is_read_with_origins() {
             (
                 "start-directory",
                 "tests",
-                "pyproject.toml [tool.aye.unittest]"
+                "pyproject.toml [tool.aye.unittest]".to_string()
             ),
-            ("pattern", "*_test.py", "pyproject.toml [tool.aye.unittest]"),
+            (
+                "pattern",
+                "*_test.py",
+                "pyproject.toml [tool.aye.unittest]".to_string()
+            ),
             (
                 "top-level-directory",
                 ".",
-                "pyproject.toml [tool.aye.unittest]"
+                "pyproject.toml [tool.aye.unittest]".to_string()
             ),
         ]
     );
@@ -704,7 +711,10 @@ fn defaults_are_reported_as_defaults() {
     let shown: Vec<(String, String, String)> = recognizer
         .settings()
         .into_iter()
-        .map(|s| (s.name, s.value, s.origin))
+        .map(|s| {
+            let source = s.source.display_row(dir.path()).to_string();
+            (s.name.into_owned(), s.value, source)
+        })
         .collect();
     assert_eq!(
         shown,

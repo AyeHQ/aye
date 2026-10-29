@@ -175,7 +175,6 @@ dependencies = [
  "ruff_python_parser",
  "ruff_source_file",
  "ruff_text_size",
- "serde",
  "thiserror",
 ]
 
@@ -235,6 +234,7 @@ name = "aye-collect"
 version = "0.0.1"
 dependencies = [
  "aye-adapter",
+ "aye-config",
  "aye-events",
  "aye-fs",
  "aye-protocol",

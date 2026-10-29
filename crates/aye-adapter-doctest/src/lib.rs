@@ -1342,7 +1342,7 @@ impl Recognizer for DoctestRecognizer {
     }
 
     fn settings(&self) -> Vec<Setting> {
-        self.config.settings(&self.root)
+        self.config.settings()
     }
 
     /// What the executor needs: pytest's rootdir (for `importlib` mode),

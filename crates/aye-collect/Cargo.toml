@@ -20,6 +20,7 @@ serde_json = { workspace = true }
 walkdir = { workspace = true }
 
 [dev-dependencies]
+aye-config = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

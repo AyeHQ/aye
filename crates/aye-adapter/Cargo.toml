@@ -18,7 +18,6 @@ get-size2 = { workspace = true } # version pin only; see the workspace Cargo.tom
 ruff_python_ast = { workspace = true }
 ruff_source_file = { workspace = true }
 ruff_text_size = { workspace = true }
-serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

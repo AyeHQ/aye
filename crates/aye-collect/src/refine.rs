@@ -456,6 +456,7 @@ mod tests {
     use std::path::Path;
 
     use aye_adapter::Setting;
+    use aye_config::ValueSource;
     use aye_events::{AdapterName, ContentDigest};
 
     use super::{Cache, FORMAT};
@@ -469,7 +470,7 @@ mod tests {
         let settings = [Setting {
             name: "python_files".into(),
             value: "test_*.py".into(),
-            origin: "default".into(),
+            source: ValueSource::Default,
         }];
         let cache = Cache::new(
             Path::new("/cache"),

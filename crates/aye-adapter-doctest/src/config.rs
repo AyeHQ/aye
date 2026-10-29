@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use aye_adapter::{AdapterError, Project, Setting};
-use aye_config::{Origin, Sourced};
+use aye_config::{Sourced, ValueSource};
 use aye_static::EnvVars;
 
 use crate::parser::known_option;
@@ -249,8 +249,8 @@ fn locate(start: &Path) -> Result<Ini, AdapterError> {
 /// arguments after `--`) sets that matter here.
 #[derive(Debug, Clone, Default)]
 struct Options {
-    doctest_modules: Option<Origin>,
-    globs: Vec<(String, Origin)>,
+    doctest_modules: Option<ValueSource>,
+    globs: Vec<(String, ValueSource)>,
     report: Option<String>,
     ignore_import_errors: bool,
     blocked: bool,
@@ -259,7 +259,7 @@ struct Options {
     ignore_glob: Vec<String>,
     collect_in_virtualenv: bool,
     deselect: Vec<String>,
-    overrides: BTreeMap<String, (String, Origin)>,
+    overrides: BTreeMap<String, (String, ValueSource)>,
     config_file: Option<String>,
     rootdir: Option<String>,
     /// `--doctest-continue-on-failure`.
@@ -350,7 +350,7 @@ impl Options {
     }
 
     /// A valued short option met in a cluster.
-    fn short(&mut self, option: char, value: String, origin: &Origin) {
+    fn short(&mut self, option: char, value: String, source: &ValueSource) {
         match option {
             'W' => self.pythonwarnings.push(value),
             'c' => self.config_file = Some(value),
@@ -358,7 +358,7 @@ impl Options {
             'o' => {
                 if let Some((name, value)) = value.split_once('=') {
                     self.overrides
-                        .insert(name.to_string(), (value.to_string(), origin.clone()));
+                        .insert(name.to_string(), (value.to_string(), source.clone()));
                 }
             }
             _ => {}
@@ -377,12 +377,12 @@ impl Options {
     }
 
     /// Read `args`, in order (the last value wins, as in argparse).
-    fn scan(&mut self, args: &[String], origin: &Origin) {
+    fn scan(&mut self, args: &[String], source: &ValueSource) {
         let mut at = 0;
         while at < args.len() {
             let arg = args[at].as_str();
             match arg {
-                "--doctest-modules" => self.doctest_modules = Some(origin.clone()),
+                "--doctest-modules" => self.doctest_modules = Some(source.clone()),
                 "--doctest-ignore-import-errors" => self.ignore_import_errors = true,
                 "--doctest-continue-on-failure" => self.continue_on_failure = true,
                 "--collect-in-virtualenv" => self.collect_in_virtualenv = true,
@@ -400,7 +400,7 @@ impl Options {
                             self.maxfail = Some(1);
                         }
                         if let Some((option, value)) = valued {
-                            self.short(option, value, origin);
+                            self.short(option, value, source);
                         }
                     } else if let Some(value) = value_of(args, &mut at, "--maxfail", None) {
                         if let Some(limit) = maxfail_value(&value) {
@@ -419,7 +419,7 @@ impl Options {
                     {
                         self.junit_prefix = Some(prefix);
                     } else if let Some(glob) = value_of(args, &mut at, "--doctest-glob", None) {
-                        self.globs.push((glob, origin.clone()));
+                        self.globs.push((glob, source.clone()));
                     } else if let Some(report) = value_of(args, &mut at, "--doctest-report", None) {
                         self.report = Some(report.to_lowercase());
                     } else if let Some(mode) = value_of(args, &mut at, "--import-mode", None) {
@@ -441,7 +441,7 @@ impl Options {
                         && let Some((name, value)) = pair.split_once('=')
                     {
                         self.overrides
-                            .insert(name.to_string(), (value.to_string(), origin.clone()));
+                            .insert(name.to_string(), (value.to_string(), source.clone()));
                     }
                 }
             }
@@ -631,8 +631,8 @@ impl DoctestConfig {
         let env_args = pytest_addopts
             .map(aye_config::split_args)
             .unwrap_or_default();
-        let env_origin = Origin::Env(EnvVars::PYTEST_ADDOPTS.into());
-        let args_origin = Origin::Flag("--".into());
+        let env_origin = ValueSource::Env(EnvVars::PYTEST_ADDOPTS);
+        let args_origin = ValueSource::Cli("--");
         // `-c`, `--rootdir` and `-o` from the environment and the command
         // line take part in finding the configuration.
         let mut early = Options::default();
@@ -667,8 +667,8 @@ impl DoctestConfig {
             .or_else(|| ini.rootdir.clone())
             .unwrap_or_else(|| project.root.to_path_buf());
         let ini_origin = match &ini.file {
-            Some(file) => Origin::file(file, ini.section.as_str()),
-            None => Origin::Default,
+            Some(file) => ValueSource::file(file, ini.section.as_str()),
+            None => ValueSource::Default,
         };
         // `-o` from any of the three overrides the file; `addopts` itself
         // only from the environment and the command line.
@@ -687,7 +687,7 @@ impl DoctestConfig {
         for (name, (value, _)) in &options.overrides {
             ini.values.insert(name.clone(), Value::Text(value.clone()));
         }
-        let origin_of = |name: &str| -> Origin {
+        let origin_of = |name: &str| -> ValueSource {
             options
                 .overrides
                 .get(name)
@@ -696,7 +696,7 @@ impl DoctestConfig {
 
         let aye_path = aye.map(|(_, path)| path.to_path_buf()).unwrap_or_default();
         let aye_settings = aye_doctest(aye.map(|(table, _)| table), &aye_path)?;
-        let aye_origin = Origin::file(&aye_path, "[tool.aye.doctest]");
+        let aye_origin = ValueSource::file(&aye_path, "[tool.aye.doctest]");
 
         let modules = match aye_settings.modules {
             Some(on) => Sourced::new(on, aye_origin.clone()),
@@ -716,7 +716,7 @@ impl DoctestConfig {
             )
         } else if ini.configured || beside_pytest {
             // pytest's default `--doctest-glob`: wherever pytest runs.
-            Sourced::new(vec!["test*.txt".to_string()], Origin::Default)
+            Sourced::new(vec!["test*.txt".to_string()], ValueSource::Default)
         } else {
             Sourced::default_value(Vec::new())
         };
@@ -738,7 +738,7 @@ impl DoctestConfig {
         {
             return Err(AdapterError::Config(format!(
                 "doctest_optionflags: unknown flag {bad:?} in {} (pytest accepts {})",
-                optionflags.origin,
+                optionflags.source,
                 PYTEST_OPTIONFLAGS.join(", ")
             )));
         }
@@ -748,7 +748,7 @@ impl DoctestConfig {
                     optionflags.value.push(flag);
                 }
             }
-            optionflags.origin = aye_origin.clone();
+            optionflags.source = aye_origin.clone();
         }
         let encoding = match (aye_settings.encoding, ini.values.get("doctest_encoding")) {
             (Some(encoding), _) => Sourced::new(encoding, aye_origin),
@@ -871,20 +871,17 @@ impl DoctestConfig {
         self.modules.value || !self.globs.value.is_empty() || self.explicit_text
     }
 
-    /// The resolved settings, with origins shown relative to `root`.
-    pub fn settings(&self, root: &Path) -> Vec<Setting> {
-        let origin_of_files = match &self.inifile {
-            Some(file) => Origin::file(file, "")
-                .display_relative(root)
-                .trim()
-                .to_string(),
-            None => "default".to_string(),
+    /// The resolved settings, with where each came from.
+    pub fn settings(&self) -> Vec<Setting> {
+        let of_files = match &self.inifile {
+            Some(file) => ValueSource::whole_file(file),
+            None => ValueSource::Default,
         };
         let mut out = vec![
             Setting {
                 name: "rootdir".into(),
                 value: self.rootdir.display().to_string(),
-                origin: origin_of_files.clone(),
+                source: of_files.clone(),
             },
             Setting {
                 name: "inifile".into(),
@@ -893,31 +890,31 @@ impl DoctestConfig {
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default(),
-                origin: origin_of_files,
+                source: of_files,
             },
         ];
-        let mut push = |name: &str, value: String, origin: &Origin| {
+        let mut push = |name: &'static str, value: String, source: &ValueSource| {
             out.push(Setting {
-                name: name.to_string(),
+                name: name.into(),
                 value,
-                origin: origin.display_relative(root),
+                source: source.clone(),
             });
         };
         push(
             "modules",
             self.modules.value.to_string(),
-            &self.modules.origin,
+            &self.modules.source,
         );
-        push("glob", self.globs.value.join(" "), &self.globs.origin);
+        push("glob", self.globs.value.join(" "), &self.globs.source);
         push(
             "optionflags",
             self.optionflags.value.join(" "),
-            &self.optionflags.origin,
+            &self.optionflags.source,
         );
         push(
             "encoding",
             self.encoding.value.clone(),
-            &self.encoding.origin,
+            &self.encoding.source,
         );
         out
     }

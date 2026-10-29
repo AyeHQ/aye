@@ -1004,12 +1004,14 @@ fn settings_and_context() {
     let settings = configured.settings();
     let get = |name: &str| settings.iter().find(|s| s.name == name).unwrap();
     assert_eq!(get("python_files").value, "'check_*.py'");
+    let source = |name: &str| get(name).source.display_row(root).to_string();
     assert_eq!(
-        get("python_files").origin,
+        source("python_files"),
         "pyproject.toml [tool.pytest.ini_options]"
     );
     assert_eq!(get("python_classes").value, "Test");
-    assert_eq!(get("python_classes").origin, "default");
+    assert_eq!(source("python_classes"), "default");
+    assert_eq!(source("rootdir"), "pyproject.toml");
     assert_eq!(get("rootdir").value, root.display().to_string());
     assert_eq!(configured.config().args, ["-q"]);
     let context = configured.context().into_value();

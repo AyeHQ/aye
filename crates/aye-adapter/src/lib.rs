@@ -49,13 +49,13 @@
 //!   which the binary calls; its default is [`Adapter::prepare`]): doctest's
 //!   default text glob depends on pytest running beside it.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
-use aye_config::{AyeSettings, WorkerCount};
+use aye_config::{AyeSettings, ValueSource, WorkerCount};
 use aye_events::{AdapterName, Case, Diagnostic, IdPrefix, LineNumber, ProjectPathRef, Span};
 use aye_protocol::{AdapterContext, Executor, MaxFail};
 use aye_static::ProcessEnv;
-use serde::{Deserialize, Serialize};
 
 pub use ruff_python_ast as ast;
 pub use ruff_source_file::LineIndex;
@@ -231,13 +231,15 @@ pub struct Recognition {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// A resolved setting, with where it came from, for `aye config`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A resolved setting, with where it came from, for `aye config`, which
+/// shows its source as a row ([`ValueSource::display_row`]). The
+/// refinement cache's key holds its name and value, not its source.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Setting {
-    pub name: String,
+    pub name: Cow<'static, str>,
     pub value: String,
     /// `pyproject.toml [tool.pytest.ini_options]`, `default`, …
-    pub origin: String,
+    pub source: ValueSource,
 }
 
 /// What a framework's own configuration says about the run as a whole

@@ -129,9 +129,9 @@ impl Recognizer for Fake {
 
     fn settings(&self) -> Vec<Setting> {
         vec![Setting {
-            name: "setting".to_string(),
+            name: "setting".into(),
             value: self.setting.clone(),
-            origin: "default".to_string(),
+            source: aye_config::ValueSource::Default,
         }]
     }
 

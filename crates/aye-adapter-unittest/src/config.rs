@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use aye_adapter::{AdapterError, Setting};
-use aye_config::{AyeSettings, Origin, Sourced};
+use aye_config::{AyeSettings, Sourced, ValueSource};
 
 /// The table's keys.
 pub(crate) const START_DIRECTORY: &str = "start-directory";
@@ -41,7 +41,7 @@ impl UnittestConfig {
     /// (unittest's "Start directory is not importable") are errors.
     pub fn load(root: &Path, tool_aye: &AyeSettings) -> Result<Self, AdapterError> {
         let path = root.join("pyproject.toml");
-        let origin = Origin::file(&path, "[tool.aye.unittest]");
+        let source = ValueSource::file(&path, "[tool.aye.unittest]");
         let shown = || format!("invalid [tool.aye.unittest] in {}", path.display());
         let mut start_directory = Sourced::default_value(DEFAULT_START.to_string());
         let mut pattern = Sourced::default_value(DEFAULT_PATTERN.to_string());
@@ -54,10 +54,10 @@ impl UnittestConfig {
                 )));
             };
             match key.as_str() {
-                START_DIRECTORY => start_directory = Sourced::new(text.to_string(), origin.clone()),
-                PATTERN => pattern = Sourced::new(text.to_string(), origin.clone()),
+                START_DIRECTORY => start_directory = Sourced::new(text.to_string(), source.clone()),
+                PATTERN => pattern = Sourced::new(text.to_string(), source.clone()),
                 TOP_LEVEL_DIRECTORY => {
-                    top_level_directory = Sourced::new(Some(text.to_string()), origin.clone());
+                    top_level_directory = Sourced::new(Some(text.to_string()), source.clone());
                 }
                 other => {
                     return Err(AdapterError::Config(format!(
@@ -117,8 +117,8 @@ impl UnittestConfig {
         })
     }
 
-    /// The settings, with their origins, for `aye config`.
-    pub fn settings(&self, root: &Path) -> Vec<Setting> {
+    /// The settings, with where each came from, for `aye config`.
+    pub fn settings(&self) -> Vec<Setting> {
         let top = self
             .top_level_directory
             .value
@@ -128,17 +128,17 @@ impl UnittestConfig {
             Setting {
                 name: START_DIRECTORY.into(),
                 value: self.start_directory.value.clone(),
-                origin: self.start_directory.origin.display_relative(root),
+                source: self.start_directory.source.clone(),
             },
             Setting {
                 name: PATTERN.into(),
                 value: self.pattern.value.clone(),
-                origin: self.pattern.origin.display_relative(root),
+                source: self.pattern.source.clone(),
             },
             Setting {
                 name: TOP_LEVEL_DIRECTORY.into(),
                 value: top,
-                origin: self.top_level_directory.origin.display_relative(root),
+                source: self.top_level_directory.source.clone(),
             },
         ]
     }

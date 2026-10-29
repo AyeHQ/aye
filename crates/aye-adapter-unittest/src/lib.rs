@@ -699,7 +699,7 @@ impl Recognizer for UnittestRecognizer {
     }
 
     fn settings(&self) -> Vec<Setting> {
-        self.config.settings(&self.root)
+        self.config.settings()
     }
 
     /// What the executor needs to discover as unittest would:

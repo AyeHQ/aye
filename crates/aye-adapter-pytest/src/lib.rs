@@ -472,6 +472,7 @@ use aye_adapter::{
     AdapterError, Claim, FrameworkDefaults, Project, Recognition, Recognizer, Requested, Setting,
     SourceFile,
 };
+use aye_config::ValueSource;
 use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 use aye_fs::normalize_absolute;
 use aye_protocol::AdapterContext;
@@ -2028,7 +2029,7 @@ impl Recognizer for PytestRecognizer {
     }
 
     fn settings(&self) -> Vec<Setting> {
-        let mut settings = self.config.settings(&self.root);
+        let mut settings = self.config.settings();
         if let Some(doctests) = &self.doctests {
             let mut what = Vec::new();
             if doctests.modules {
@@ -2042,7 +2043,7 @@ impl Recognizer for PytestRecognizer {
             settings.push(Setting {
                 name: "doctests".into(),
                 value: format!("collected by pytest's doctest plugin: {}", what.join(", ")),
-                origin: PYTEST_DOCTESTS.into(),
+                source: ValueSource::Rule(PYTEST_DOCTESTS),
             });
         }
         settings

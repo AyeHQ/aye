@@ -803,7 +803,7 @@ fn the_output_is_the_command_lines_else_the_configurations_else_text() {
             output: output.map(str::to_string),
             ..Default::default()
         },
-        origin: aye_config::Origin::Default,
+        source: aye_config::ValueSource::Default,
     };
     assert_eq!(output(&args(&[]), &config(None)), (Output::Text, "default"));
     assert_eq!(
