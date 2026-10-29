@@ -1,0 +1,83 @@
+{
+  "referee": "pytest",
+  "runs": [
+    {
+      "env": {},
+      "collected": [
+        "docs/test_failure.txt::test_failure.txt",
+        "docs/test_usage.txt::test_usage.txt",
+        "shop/__init__.py::shop",
+        "shop/cart.py::shop.cart",
+        "shop/cart.py::shop.cart.Cart",
+        "shop/cart.py::shop.cart.Cart.add",
+        "shop/cart.py::shop.cart.Cart.print_receipt",
+        "shop/cart.py::shop.cart.Cart.summary",
+        "shop/cart.py::shop.cart.Product",
+        "shop/pricing.py::shop.pricing",
+        "shop/pricing.py::shop.pricing.AmountOff",
+        "shop/pricing.py::shop.pricing.AmountOff.amount_off",
+        "shop/pricing.py::shop.pricing.PercentOff",
+        "shop/pricing.py::shop.pricing.PercentOff.amount_off",
+        "shop/pricing.py::shop.pricing.money"
+      ],
+      "outcomes": {
+        "docs/test_failure.txt::test_failure.txt": "passed",
+        "docs/test_usage.txt::test_usage.txt": "passed",
+        "shop/__init__.py::shop": "passed",
+        "shop/cart.py::shop.cart": "passed",
+        "shop/cart.py::shop.cart.Cart": "passed",
+        "shop/cart.py::shop.cart.Cart.add": "passed",
+        "shop/cart.py::shop.cart.Cart.print_receipt": "passed",
+        "shop/cart.py::shop.cart.Cart.summary": "passed",
+        "shop/cart.py::shop.cart.Product": "passed",
+        "shop/pricing.py::shop.pricing": "passed",
+        "shop/pricing.py::shop.pricing.AmountOff": "passed",
+        "shop/pricing.py::shop.pricing.AmountOff.amount_off": "passed",
+        "shop/pricing.py::shop.pricing.PercentOff": "passed",
+        "shop/pricing.py::shop.pricing.PercentOff.amount_off": "passed",
+        "shop/pricing.py::shop.pricing.money": "passed"
+      },
+      "exit_code": 0
+    },
+    {
+      "env": {
+        "AYE_EXAMPLE_FAIL": "1"
+      },
+      "collected": [
+        "docs/test_failure.txt::test_failure.txt",
+        "docs/test_usage.txt::test_usage.txt",
+        "shop/__init__.py::shop",
+        "shop/cart.py::shop.cart",
+        "shop/cart.py::shop.cart.Cart",
+        "shop/cart.py::shop.cart.Cart.add",
+        "shop/cart.py::shop.cart.Cart.print_receipt",
+        "shop/cart.py::shop.cart.Cart.summary",
+        "shop/cart.py::shop.cart.Product",
+        "shop/pricing.py::shop.pricing",
+        "shop/pricing.py::shop.pricing.AmountOff",
+        "shop/pricing.py::shop.pricing.AmountOff.amount_off",
+        "shop/pricing.py::shop.pricing.PercentOff",
+        "shop/pricing.py::shop.pricing.PercentOff.amount_off",
+        "shop/pricing.py::shop.pricing.money"
+      ],
+      "outcomes": {
+        "docs/test_failure.txt::test_failure.txt": "failed",
+        "docs/test_usage.txt::test_usage.txt": "passed",
+        "shop/__init__.py::shop": "passed",
+        "shop/cart.py::shop.cart": "passed",
+        "shop/cart.py::shop.cart.Cart": "passed",
+        "shop/cart.py::shop.cart.Cart.add": "passed",
+        "shop/cart.py::shop.cart.Cart.print_receipt": "passed",
+        "shop/cart.py::shop.cart.Cart.summary": "passed",
+        "shop/cart.py::shop.cart.Product": "passed",
+        "shop/pricing.py::shop.pricing": "passed",
+        "shop/pricing.py::shop.pricing.AmountOff": "passed",
+        "shop/pricing.py::shop.pricing.AmountOff.amount_off": "passed",
+        "shop/pricing.py::shop.pricing.PercentOff": "passed",
+        "shop/pricing.py::shop.pricing.PercentOff.amount_off": "passed",
+        "shop/pricing.py::shop.pricing.money": "passed"
+      },
+      "exit_code": 1
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+[project]
+name = "suite-unittest-pytest"
+version = "0"
+
+# unittest's adapter runs the TestCase classes, pytest's the rest. Both
+# collect the TestCase classes, with the same ids; the first listed wins.
+[tool.aye]
+adapters = ["unittest", "pytest"]
+
+[tool.aye.unittest]
+start-directory = "tests"
+top-level-directory = "."
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

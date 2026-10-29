@@ -1,0 +1,15 @@
+{"run":"2a7b148fb0df6c7c","seq":0,"t_ms":0.006,"event":"run_started","schema_version":1,"aye_version":"0.0.1","root":"/repo","workers":1}
+{"run":"2a7b148fb0df6c7c","seq":1,"t_ms":0.038,"event":"collection_started"}
+{"run":"2a7b148fb0df6c7c","seq":2,"t_ms":0.82,"event":"case_collected","id":"tests/test_s.py::S::test_1","adapter":"unittest","span":{"path":"tests/test_s.py","start":58,"end":64,"line":3},"keywords":["tests","test_s.py","S","test_1"],"affinity":["tests/test_s.py","tests/test_s.py::S"],"certainty":"exact"}
+{"run":"2a7b148fb0df6c7c","seq":3,"t_ms":0.84,"event":"case_collected","id":"tests/test_s.py::S::test_2","adapter":"unittest","span":{"path":"tests/test_s.py","start":93,"end":99,"line":5},"keywords":["tests","test_s.py","S","test_2"],"affinity":["tests/test_s.py","tests/test_s.py::S"],"certainty":"exact"}
+{"run":"2a7b148fb0df6c7c","seq":4,"t_ms":0.851,"event":"collection_finished","selected":2,"deselected":0,"refined_files":0,"duration_ms":0.809}
+{"run":"2a7b148fb0df6c7c","worker":0,"seq":5,"t_ms":48.905,"event":"worker_started","pid":12618,"python":"/repo/.venv/bin/python"}
+{"run":"2a7b148fb0df6c7c","worker":0,"batch":0,"seq":6,"t_ms":48.932,"event":"batch_started","adapter":"unittest","cases":2}
+{"run":"2a7b148fb0df6c7c","worker":0,"batch":0,"seq":7,"t_ms":50.444,"event":"lifetime_started","lifetime":"tests/test_s.py","kind":"module"}
+{"run":"2a7b148fb0df6c7c","worker":0,"batch":0,"seq":8,"t_ms":50.459,"event":"lifetime_started","lifetime":"tests/test_s.py::S","kind":"class"}
+{"run":"2a7b148fb0df6c7c","worker":0,"batch":0,"seq":9,"t_ms":50.465,"event":"test_started","id":"tests/test_s.py::S::test_1"}
+{"run":"2a7b148fb0df6c7c","worker":0,"batch":0,"seq":10,"t_ms":50.512,"event":"test_finished","id":"tests/test_s.py::S::test_1","outcome":"passed","duration_ms":0.033}
+{"run":"2a7b148fb0df6c7c","worker":0,"batch":0,"seq":11,"t_ms":50.533,"event":"test_started","id":"tests/test_s.py::S::test_2"}
+{"run":"2a7b148fb0df6c7c","worker":0,"batch":0,"seq":12,"t_ms":2055.826,"event":"batch_finished"}
+{"run":"2a7b148fb0df6c7c","worker":0,"seq":13,"t_ms":2055.901,"event":"worker_finished"}
+{"run":"2a7b148fb0df6c7c","seq":14,"t_ms":2055.95,"event":"run_finished","exit_code":2,"counts":{"passed":1,"failed":0,"error":0,"skipped":0,"expected_failure":0,"unexpected_pass":0,"deselected":0},"duration_ms":2056.028,"stopped":"interrupted"}

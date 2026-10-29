@@ -3,13 +3,57 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.1" # x-release-please-version
 edition = "2024"
 rust-version = "1.94"
 license = "Apache-2.0"
 repository = "https://github.com/RonsenbergVI/aye"
 homepage = "https://aye.run"
 authors = ["René-Jean Corneille"]
+
+[workspace.dependencies]
+# x-release-please-start-version
+aye-collect = { path = "crates/aye-collect", version = "=0.0.1" }
+aye-config = { path = "crates/aye-config", version = "=0.0.1" }
+aye-engine = { path = "crates/aye-engine", version = "=0.0.1" }
+aye-engine-doctest = { path = "crates/aye-engine-doctest", version = "=0.0.1" }
+aye-engine-pytest = { path = "crates/aye-engine-pytest", version = "=0.0.1" }
+aye-engine-unittest = { path = "crates/aye-engine-unittest", version = "=0.0.1" }
+aye-events = { path = "crates/aye-events", version = "=0.0.1" }
+aye-history = { path = "crates/aye-history", version = "=0.0.1" }
+aye-provision = { path = "crates/aye-provision", version = "=0.0.1" }
+aye-render = { path = "crates/aye-render", version = "=0.0.1" }
+aye-runner = { path = "crates/aye-runner", version = "=0.0.1" }
+aye-select = { path = "crates/aye-select", version = "=0.0.1" }
+# x-release-please-end
+
+anstream = "0.6"
+anstyle = "1"
+anyhow = "1"
+clap = { version = "4", features = ["derive", "wrap_help"] }
+ctrlc = { version = "3", features = ["termination"] }
+divan = "0.1"
+# The gzip of `.aye/runs`, with the default backend: miniz_oxide, pure Rust.
+flate2 = "1.1"
+globset = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+shlex = "1"
+tempfile = "3"
+thiserror = "2"
+toml = "0.9"
+walkdir = "2"
+
+# Ruff's parser crates are internal to Ruff and carry no semver guarantees, so
+# they are pinned exactly. Each release raises its MSRV; 0.0.4 is the newest
+# that builds on Rust 1.94. `get-size2` is pinned too: 0.10.2 pulls a second
+# `compact_str` and breaks `ruff_python_ast`. `aye-engine` depends on it
+# directly so the pin also holds for `cargo install aye` without `--locked`.
+get-size2 = "=0.10.1"
+ruff_python_ast = "=0.0.4"
+ruff_python_parser = "=0.0.4"
+ruff_source_file = "=0.0.4"
+ruff_text_size = "=0.0.4"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

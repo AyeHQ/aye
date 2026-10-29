@@ -1,0 +1,24 @@
+[package]
+name = "aye-render"
+description = "Renderers over the aye event stream: text, JSON lines, JUnit, annotations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+anstream = { workspace = true }
+anstyle = { workspace = true }
+aye-events = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+shlex = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

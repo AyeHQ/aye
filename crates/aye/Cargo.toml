@@ -1,6 +1,6 @@
 [package]
 name = "aye"
-description = "A universal test runner for Python: faster and clearer, with token-efficient output for coding agents."
+description = "A universal test runner for Python: pytest, unittest, Django and doctest suites, faster and clearer, with token-efficient output for coding agents"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,3 +16,28 @@ default-run = "aye"
 [[bin]]
 name = "aye"
 path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+ctrlc = { workspace = true }
+serde_json = { workspace = true }
+aye-collect = { workspace = true }
+aye-config = { workspace = true }
+aye-engine = { workspace = true }
+aye-engine-doctest = { workspace = true }
+aye-engine-pytest = { workspace = true }
+aye-engine-unittest = { workspace = true }
+aye-events = { workspace = true }
+aye-history = { workspace = true }
+aye-provision = { workspace = true }
+aye-render = { workspace = true }
+aye-runner = { workspace = true }
+aye-select = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
