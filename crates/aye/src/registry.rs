@@ -199,6 +199,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use aye_config::AyeSettings;
+    use aye_protocol::Request;
     use aye_static::EnvVars;
 
     use super::*;
@@ -304,6 +305,105 @@ mod tests {
             assert_eq!(executor.modules[4..], *own.modules, "{}", own.adapter);
             assert_eq!((executor.adapter, executor.entry), (own.adapter, own.entry));
         }
+    }
+
+    /// The file each module a worker installs comes from, relative to the
+    /// workspace's `crates`.
+    const SOURCES: [(&str, &str); 9] = [
+        ("aye_engine", "aye-engine/python/aye_engine.py"),
+        ("aye_model", "aye-engine/python/aye_model.py"),
+        ("aye_rewrite", "aye-engine/python/aye_rewrite.py"),
+        (
+            "aye_native_engine",
+            "aye-engine/python/aye_native_engine.py",
+        ),
+        (
+            "pytest",
+            "aye-adapter-pytest/python/native/aye_pytest_shim.py",
+        ),
+        (
+            "aye_pytest_frontend",
+            "aye-adapter-pytest/python/native/aye_pytest_frontend.py",
+        ),
+        (
+            "aye_pytest_native",
+            "aye-adapter-pytest/python/native/aye_pytest_native.py",
+        ),
+        (
+            "aye_engine_unittest",
+            "aye-adapter-unittest/python/aye_engine_unittest.py",
+        ),
+        (
+            "aye_engine_doctest",
+            "aye-adapter-doctest/python/aye_engine_doctest.py",
+        ),
+    ];
+
+    /// The handshake of a worker for `adapters` (indices into the known
+    /// adapters, in the order the run lists them), as the runner sends it,
+    /// with each module's source, once checked against its file, written
+    /// as `<name>`.
+    fn hello(adapters: &[usize]) -> String {
+        let known = known(false);
+        let mut spec = aye_runner::WorkerSpec::new("python", "/repo", "/repo");
+        spec.executors = adapters.iter().map(|&at| known[at].executor()).collect();
+        let hello = spec.hello();
+        let mut line = serde_json::to_string(&hello).unwrap();
+        let Request::Hello { modules, .. } = hello else {
+            panic!("expected hello");
+        };
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        for module in modules {
+            let name = &module.name;
+            let (_, file) = SOURCES
+                .iter()
+                .find(|(of, _)| of == name)
+                .unwrap_or_else(|| panic!("no file for {name}"));
+            let source = fs::read_to_string(crates.join(file)).unwrap();
+            assert_eq!(module.source, source, "{name}");
+            let written = serde_json::to_string(&module.source).unwrap();
+            line = line.replacen(&written, &format!("\"<{name}>\""), 1);
+        }
+        line
+    }
+
+    /// What every worker is told to install and to build, as aye 0.0.1
+    /// told it: aye's engine, aye's `pytest` module and what it stands on,
+    /// then each adapter's own modules, each once, its executor's entry,
+    /// whether it lists the session, and the services. Alone, and as a
+    /// run's workers that hold several adapters' executors.
+    #[test]
+    fn every_workers_handshake_is_pinned() {
+        const PRELUDE: &str = r#"{"name":"aye_engine","source":"<aye_engine>"},{"name":"aye_model","source":"<aye_model>"},{"name":"aye_rewrite","source":"<aye_rewrite>"},{"name":"aye_native_engine","source":"<aye_native_engine>"},{"name":"pytest","source":"<pytest>"}"#;
+        const PYTEST: &str = r#"{"name":"aye_pytest_frontend","source":"<aye_pytest_frontend>"},{"name":"aye_pytest_native","source":"<aye_pytest_native>"}"#;
+        const UNITTEST: &str = r#"{"name":"aye_engine_unittest","source":"<aye_engine_unittest>"}"#;
+        const DOCTEST: &str = r#"{"name":"aye_engine_doctest","source":"<aye_engine_doctest>"}"#;
+        const PYTEST_ENTRY: &str = r#"{"adapter":"pytest","entry":"aye_pytest_native:NativeExecutor","lists_session":true}"#;
+        const UNITTEST_ENTRY: &str =
+            r#"{"adapter":"unittest","entry":"aye_engine_unittest:UnittestExecutor"}"#;
+        const DOCTEST_ENTRY: &str =
+            r#"{"adapter":"doctest","entry":"aye_engine_doctest:DoctestExecutor"}"#;
+        let pinned = |modules: &[&str], executors: &[&str]| {
+            format!(
+                r#"{{"type":"hello","protocol":3,"root":"/repo","modules":[{PRELUDE},{}],"executors":[{}],"services":["context","cleanup"]}}"#,
+                modules.join(","),
+                executors.join(","),
+            )
+        };
+        assert_eq!(hello(&[0]), pinned(&[PYTEST], &[PYTEST_ENTRY]));
+        assert_eq!(hello(&[1]), pinned(&[UNITTEST], &[UNITTEST_ENTRY]));
+        assert_eq!(hello(&[2]), pinned(&[DOCTEST], &[DOCTEST_ENTRY]));
+        assert_eq!(
+            hello(&[2, 0]),
+            pinned(&[DOCTEST, PYTEST], &[DOCTEST_ENTRY, PYTEST_ENTRY])
+        );
+        assert_eq!(
+            hello(&[0, 1, 2]),
+            pinned(
+                &[PYTEST, UNITTEST, DOCTEST],
+                &[PYTEST_ENTRY, UNITTEST_ENTRY, DOCTEST_ENTRY]
+            )
+        );
     }
 
     #[test]
