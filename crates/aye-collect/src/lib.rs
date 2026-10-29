@@ -181,7 +181,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_engine::{Project, Recognition, Recognizer, Refiner, SourceFile};
-use aye_events::{Case, Diagnostic, DiagnosticPath, ProjectPathRef, Severity, TestId};
+use aye_events::{
+    Case, Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPathRef, Severity, TestId,
+};
 
 mod environment;
 mod parallel;
@@ -195,27 +197,6 @@ use refine::Refinement;
 use source::Source;
 use standalone::Scope;
 use tree::{Mask, Tree, bits};
-
-/// The diagnostic codes collection emits itself.
-pub mod codes {
-    /// A claimed file doesn't parse.
-    pub const SYNTAX_ERROR: &str = "syntax-error";
-    /// A claimed file or a directory can't be read.
-    pub const UNREADABLE: &str = "unreadable";
-    /// An explicit path doesn't exist.
-    pub const NOT_FOUND: &str = "not-found";
-    /// No recognizer claims an explicit file.
-    pub const UNCLAIMED: &str = "unclaimed";
-    /// Two cases share an id.
-    pub const DUPLICATE_ID: &str = "duplicate-id";
-    /// A test file has no tests.
-    pub const NO_TESTS: &str = "no-tests";
-    /// A file needs refinement, but refinement is off (no refiner was
-    /// given).
-    pub const NOT_REFINED: &str = "not-refined";
-    /// Refinement failed.
-    pub const REFINE_FAILED: &str = "refine-failed";
-}
 
 /// A prepared recognizer and its adapter's name.
 pub type Prepared = (&'static str, Box<dyn Recognizer>);
@@ -543,16 +524,16 @@ impl<'a> Collector<'a> {
                     continue;
                 }
                 (
-                    codes::UNCLAIMED,
+                    DiagnosticCode::Unclaimed,
                     "no adapter collects this file".to_string(),
                 )
             } else {
                 let message = format!("file or directory not found: {}", target.display());
-                (codes::NOT_FOUND, message)
+                (DiagnosticCode::NotFound, message)
             };
             tree.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                code: code.to_string(),
+                code,
                 path: DiagnosticPath::as_written(rel),
                 span: None,
                 message,
@@ -779,7 +760,7 @@ impl<'a> Collector<'a> {
                 let names: Vec<&str> = groups.iter().map(|(i, _)| self.recognizers[*i].0).collect();
                 notes.push(Diagnostic {
                     severity: Severity::Info,
-                    code: codes::NO_TESTS.to_string(),
+                    code: DiagnosticCode::NoTests,
                     path: rel.clone().into(),
                     span: None,
                     message: format!("claimed for tests by {}, but has none", names.join(", ")),
@@ -886,7 +867,7 @@ impl<'a> Collector<'a> {
         // The framework selects by id, so it runs them all (pytest does).
         Diagnostic {
             severity: Severity::Warning,
-            code: codes::DUPLICATE_ID.to_string(),
+            code: DiagnosticCode::DuplicateId,
             path: DiagnosticPath::as_written(case.id.path().as_str()),
             span: case.span.clone(),
             message: format!(

@@ -37,7 +37,7 @@ use aye_engine::{
     Adapter, AdapterError, Claim, EmbeddedModule, Executor, MODEL_MODULE, NATIVE_ENGINE_MODULE,
     Project, REWRITE_MODULE, Recognition, Recognizer, Setting, SourceFile,
 };
-use aye_events::{Diagnostic, Severity};
+use aye_events::{Diagnostic, DiagnosticCode, Severity};
 use serde_json::{Value, json};
 
 use crate::{PytestConfig, PytestRecognizer, config::ImportMode};
@@ -212,7 +212,7 @@ impl Recognizer for NativeRecognizer {
                 return Recognition {
                     diagnostics: vec![Diagnostic {
                         severity: Severity::Error,
-                        code: "usage-error".into(),
+                        code: DiagnosticCode::UsageError,
                         path: file.rel.to_project_path().into(),
                         span: None,
                         message: "pytest's doctest plugin would collect doctests here, which \
@@ -1257,7 +1257,7 @@ mod tests {
         };
         let recognition = recognizer.recognize(&file, &[]);
         assert!(recognition.cases.is_empty() && recognition.refine.is_none());
-        assert_eq!(recognition.diagnostics[0].code, "usage-error");
+        assert_eq!(recognition.diagnostics[0].code, DiagnosticCode::UsageError);
         assert!(
             recognition.diagnostics[0].message.contains("doctest"),
             "{:?}",
@@ -1270,7 +1270,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             listing.recognize(&file, &[]).diagnostics[0].code,
-            "usage-error"
+            DiagnosticCode::UsageError
         );
         // With the doctest adapter, the file is the doctest adapter's.
         let recognizer = Pytest::default()

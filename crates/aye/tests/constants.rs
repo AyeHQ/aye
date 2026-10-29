@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use aye_engine::ast::visitor::{self, Visitor};
 use aye_engine::ast::{Expr, ModModule, Stmt};
 use aye_engine::{EmbeddedModule, PROTOCOL_VERSION, services};
-use aye_events::{Outcome, Phase, Severity};
+use aye_events::{DiagnosticCode, Outcome, Phase, Severity};
 use serde_json::{Value, json};
 
 /// Every Python module aye embeds, once each: the engine's, each adapter's,
@@ -314,37 +314,6 @@ impl<'a> Visitor<'a> for Diagnostics {
     }
 }
 
-/// Every diagnostic code aye 0.0.1 knows, Rust's and Python's
-/// (`docs/reorganisation.md` §4.9). `stand-in` and `adapter-error` are
-/// documented and emitted by nothing.
-const KNOWN_CODES: [&str; 25] = [
-    "syntax-error",
-    "unreadable",
-    "not-found",
-    "unclaimed",
-    "duplicate-id",
-    "no-tests",
-    "not-refined",
-    "refine-failed",
-    "class-has-init",
-    "duplicate-definition",
-    "collection-error",
-    "usage-error",
-    "unknown-option",
-    "plugin-not-loaded",
-    "internal-error",
-    "skipped",
-    "ignored",
-    "batch-stopped",
-    "session-failed",
-    "protocol-error",
-    "batch-failed",
-    "no-executor",
-    "listing-differs",
-    "stand-in",
-    "adapter-error",
-];
-
 #[test]
 fn python_emits_only_codes_and_severities_rust_knows() {
     let mut found = Diagnostics::default();
@@ -370,29 +339,14 @@ fn python_emits_only_codes_and_severities_rust_knows() {
         "the codes Python emits changed: check that Rust knows each"
     );
     for code in &codes {
-        assert!(KNOWN_CODES.contains(code), "{code}");
+        assert!(
+            DiagnosticCode::ALL.contains(&DiagnosticCode::from(*code)),
+            "{code}"
+        );
     }
     let rust_severities: BTreeSet<String> = [Severity::Error, Severity::Warning, Severity::Info]
         .into_iter()
         .map(|severity| wire(&json!(severity)))
         .collect();
     assert_eq!(found.severities, rust_severities);
-}
-
-/// Collection's own codes are among those aye knows.
-#[test]
-fn collections_codes_are_known() {
-    use aye_collect::codes;
-    for code in [
-        codes::SYNTAX_ERROR,
-        codes::UNREADABLE,
-        codes::NOT_FOUND,
-        codes::UNCLAIMED,
-        codes::DUPLICATE_ID,
-        codes::NO_TESTS,
-        codes::NOT_REFINED,
-        codes::REFINE_FAILED,
-    ] {
-        assert!(KNOWN_CODES.contains(&code), "{code}");
-    }
 }

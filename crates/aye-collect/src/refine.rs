@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use aye_engine::{RefineRequest, Refined, Refiner, Setting};
-use aye_events::{Diagnostic, ProjectPath, Severity};
+use aye_events::{Diagnostic, DiagnosticCode, ProjectPath, Severity};
 
 use crate::source::Source;
 use crate::standalone::{self, Scope};
 use crate::tree::Tree;
-use crate::{Collector, Job, Recognized, codes};
+use crate::{Collector, Job, Recognized};
 
 /// The cache's own format, part of every key: entries written under other
 /// rules are never read.
@@ -164,8 +164,13 @@ impl Collector<'_> {
                         "{adapter} must import this file to know its tests ({reason}), \
                          but refinement is off; keeping the static guess"
                     );
-                    let diagnostic =
-                        fallback(Severity::Info, codes::NOT_REFINED, tree, at, message);
+                    let diagnostic = fallback(
+                        Severity::Info,
+                        DiagnosticCode::NotRefined,
+                        tree,
+                        at,
+                        message,
+                    );
                     out.fallbacks.insert((at, i), diagnostic);
                 }
                 continue;
@@ -228,8 +233,13 @@ impl Collector<'_> {
                              keeping the static guess",
                             err.0
                         );
-                        let diagnostic =
-                            fallback(Severity::Warning, codes::REFINE_FAILED, tree, at, message);
+                        let diagnostic = fallback(
+                            Severity::Warning,
+                            DiagnosticCode::RefineFailed,
+                            tree,
+                            at,
+                            message,
+                        );
                         out.fallbacks.insert((at, i), diagnostic);
                     }
                 }
@@ -280,14 +290,14 @@ impl Collector<'_> {
 
 fn fallback(
     severity: Severity,
-    code: &str,
+    code: DiagnosticCode,
     tree: &Tree<'_>,
     at: usize,
     message: String,
 ) -> Diagnostic {
     Diagnostic {
         severity,
-        code: code.to_string(),
+        code,
         path: tree.entries[at].rel.clone().into(),
         span: None,
         message,

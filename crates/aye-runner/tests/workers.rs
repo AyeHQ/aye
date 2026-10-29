@@ -15,7 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use aye_engine::{EmbeddedModule, Executor, Policy, RefineRequest, Refiner, Reply, Request};
-use aye_events::{Case, Event, Outcome, ProjectPath, Record, TestId, TestResult};
+use aye_events::{Case, DiagnosticCode, Event, Outcome, ProjectPath, Record, TestId, TestResult};
 #[cfg(unix)]
 use aye_runner::Worker;
 use aye_runner::{
@@ -1107,7 +1107,7 @@ fn an_adapter_that_raises_fails_its_batch_only() {
     let Event::Diagnostic(diagnostic) = &diagnostics[0].event else {
         unreachable!()
     };
-    assert_eq!(diagnostic.code, "batch-failed");
+    assert_eq!(diagnostic.code, DiagnosticCode::BatchFailed);
     assert_eq!(diagnostic.path, "x.py");
     assert!(
         diagnostic.message.contains("cannot load this batch"),
@@ -1138,7 +1138,7 @@ fn a_line_that_is_not_protocol_is_reported_and_the_run_goes_on() {
     let Event::Diagnostic(diagnostic) = &diagnostics[0].event else {
         unreachable!()
     };
-    assert_eq!(diagnostic.code, "protocol-error");
+    assert_eq!(diagnostic.code, DiagnosticCode::ProtocolError);
     assert!(
         diagnostic.message.contains("this is not json"),
         "{}",
@@ -1693,7 +1693,9 @@ fn an_exit_with_a_usage_error_status_is_an_interruption() {
     );
     let stopped: Vec<&Record> = find(&records, "diagnostic");
     assert_eq!(stopped.len(), 1);
-    assert!(matches!(&stopped[0].event, Event::Diagnostic(d) if d.code == "batch-stopped"));
+    assert!(
+        matches!(&stopped[0].event, Event::Diagnostic(d) if d.code == DiagnosticCode::BatchStopped)
+    );
 }
 
 /// pytest's internal error mid-batch (status 3, with the adapter's
@@ -1775,7 +1777,7 @@ fn every_line_the_worker_writes_is_json_serde_reads() {
         })
         .collect();
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-    assert_eq!(diagnostics[0].code, "odd");
+    assert_eq!(diagnostics[0].code, DiagnosticCode::from("odd"));
     assert_eq!(diagnostics[0].path, "caf\u{fffd}.py");
     assert!(diagnostics[0].message.ends_with(&"0".repeat(400)));
     assert_eq!(

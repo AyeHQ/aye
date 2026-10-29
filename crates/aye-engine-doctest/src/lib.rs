@@ -321,7 +321,7 @@ use aye_engine::{
     Adapter, AdapterError, Claim, EmbeddedModule, Executor, Project, Recognition, Recognizer,
     Setting, SourceFile,
 };
-use aye_events::{Case, Certainty, Diagnostic, Severity, Span};
+use aye_events::{Case, Certainty, Diagnostic, DiagnosticCode, Severity, Span};
 use aye_static::EnvVars;
 
 pub use config::{DoctestConfig, ImportMode};
@@ -1164,7 +1164,7 @@ impl DoctestRecognizer {
             // mismatch, a collection error.
             recognition.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                code: "collection-error".into(),
+                code: DiagnosticCode::CollectionError,
                 path: file.rel.to_project_path().into(),
                 span: None,
                 message: format!(

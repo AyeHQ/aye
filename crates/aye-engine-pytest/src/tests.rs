@@ -1514,7 +1514,10 @@ fn blocked_plugins() {
         certainties(&recognition),
         [("test_a.py::test_plain", Certainty::Exact)]
     );
-    assert_eq!(recognition.diagnostics[0].code, "class-has-init");
+    assert_eq!(
+        recognition.diagnostics[0].code,
+        DiagnosticCode::ClassHasInit
+    );
     write(root, "pytest.ini", "[pytest]\naddopts = -p no:python\n");
     assert_eq!(
         recognize_at(root, "test_a.py").cases,
@@ -2085,7 +2088,7 @@ fn pytest_plugins_in_a_non_top_level_conftest_fails_its_directory() {
     assert_eq!(recognition.cases, [] as [aye_events::Case; 0]);
     assert_eq!(recognition.diagnostics.len(), 1);
     let diagnostic = &recognition.diagnostics[0];
-    assert_eq!(diagnostic.code, "collection-error");
+    assert_eq!(diagnostic.code, DiagnosticCode::CollectionError);
     assert_eq!(diagnostic.severity, Severity::Error);
     assert_eq!(diagnostic.path, "tests/sub");
     let message = format!(

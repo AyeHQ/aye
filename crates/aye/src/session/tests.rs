@@ -1288,7 +1288,7 @@ fn a_file_two_adapters_load_in_one_module_is_one_collection_error() {
             id,
             Event::Diagnostic(Diagnostic {
                 severity: Severity::Error,
-                code: codes::COLLECTION_ERROR.to_string(),
+                code: DiagnosticCode::CollectionError,
                 path: path.into(),
                 span: None,
                 message: format!("cannot import {path}"),
@@ -1347,7 +1347,7 @@ fn a_file_two_adapters_load_in_one_module_is_one_collection_error() {
 fn a_collection_error_from_refinement_counts_as_the_pytest_adapters() {
     let error = |path: &str| Diagnostic {
         severity: Severity::Error,
-        code: codes::COLLECTION_ERROR.to_string(),
+        code: DiagnosticCode::CollectionError,
         path: path.into(),
         span: None,
         message: format!("cannot import {path}"),
@@ -1418,15 +1418,15 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
     .iter()
     .map(|id| Case::new(*id, "pytest"))
     .collect();
-    let diagnostic = |severity, code: &str, path: &str| Diagnostic {
+    let diagnostic = |severity, code: DiagnosticCode, path: &str| Diagnostic {
         severity,
-        code: code.to_string(),
+        code,
         path: path.into(),
         span: None,
         message: "m".to_string(),
     };
-    let skipped = |path: &str| diagnostic(Severity::Info, codes::SKIPPED, path);
-    let usage = |path: &str| diagnostic(Severity::Error, codes::USAGE_ERROR, path);
+    let skipped = |path: &str| diagnostic(Severity::Info, DiagnosticCode::Skipped, path);
+    let usage = |path: &str| diagnostic(Severity::Error, DiagnosticCode::UsageError, path);
 
     // No argument, or only paths: collection walked only what the run
     // reaches, and everything is the run's.
@@ -1455,11 +1455,11 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
     assert!(reach.keeps(root, &usage("")));
     let error = diagnostic(
         Severity::Error,
-        codes::COLLECTION_ERROR,
+        DiagnosticCode::CollectionError,
         "testing/test_g.py",
     );
     assert!(reach.keeps(root, &error));
-    let info = diagnostic(Severity::Info, "no-tests", "testing/test_g.py");
+    let info = diagnostic(Severity::Info, DiagnosticCode::NoTests, "testing/test_g.py");
     assert!(reach.keeps(root, &info));
     // When an argument named nothing, an error elsewhere may be why.
     let lost = Reach {
@@ -1517,20 +1517,24 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
 /// worded apart. It is one error, whatever the words.
 #[test]
 fn a_conftest_two_adapters_fail_to_load_is_one_error() {
-    let diagnostic = |code: &str, path: &str, message: &str| Diagnostic {
+    let diagnostic = |code: DiagnosticCode, path: &str, message: &str| Diagnostic {
         severity: Severity::Error,
-        code: code.to_string(),
+        code,
         path: path.into(),
         span: None,
         message: message.to_string(),
     };
     let mut once = OneConftestError::default();
     // In refinement, each adapter reports it once.
-    let mut first = diagnostic(codes::USAGE_ERROR, "tests/conftest.py", "Skipped while …");
+    let mut first = diagnostic(
+        DiagnosticCode::UsageError,
+        "tests/conftest.py",
+        "Skipped while …",
+    );
     once.see(None, &mut first);
     assert_eq!(first.severity, Severity::Error);
     let mut again = diagnostic(
-        codes::USAGE_ERROR,
+        DiagnosticCode::UsageError,
         "tests/conftest.py",
         "ImportError while …",
     );
@@ -1544,14 +1548,14 @@ fn a_conftest_two_adapters_fail_to_load_is_one_error() {
     // Another code, another file, or a file that isn't a conftest, is
     // another error.
     for (code, path) in [
-        (codes::COLLECTION_ERROR, "tests/conftest.py"),
-        (codes::USAGE_ERROR, "other/conftest.py"),
-        (codes::COLLECTION_ERROR, "tests/test_imp.py"),
-        (codes::COLLECTION_ERROR, "tests/test_imp.py"),
-        (codes::USAGE_ERROR, ""),
-        (codes::USAGE_ERROR, ""),
+        (DiagnosticCode::CollectionError, "tests/conftest.py"),
+        (DiagnosticCode::UsageError, "other/conftest.py"),
+        (DiagnosticCode::CollectionError, "tests/test_imp.py"),
+        (DiagnosticCode::CollectionError, "tests/test_imp.py"),
+        (DiagnosticCode::UsageError, ""),
+        (DiagnosticCode::UsageError, ""),
     ] {
-        let mut other = diagnostic(code, path, "x");
+        let mut other = diagnostic(code.clone(), path, "x");
         once.see(None, &mut other);
         assert_eq!(other.severity, Severity::Error, "{code} {path}");
     }
@@ -1577,7 +1581,7 @@ fn a_conftest_two_adapters_fail_to_load_is_one_error() {
         let mut record = batch(
             id,
             Event::Diagnostic(diagnostic(
-                codes::COLLECTION_ERROR,
+                DiagnosticCode::CollectionError,
                 "sub/conftest.py",
                 message,
             )),
@@ -1637,30 +1641,45 @@ fn a_dotted_name_reaches_the_skips_of_what_it_names() {
 /// error, where pytest reports the error alone).
 #[test]
 fn a_file_below_a_broken_conftest_gets_no_no_tests_note() {
-    let diagnostic = |severity: Severity, code: &str, path: &str| Diagnostic {
+    let diagnostic = |severity: Severity, code: DiagnosticCode, path: &str| Diagnostic {
         severity,
-        code: code.to_string(),
+        code,
         path: path.into(),
         span: None,
         message: String::new(),
     };
-    let no_tests = aye_collect::codes::NO_TESTS;
     let collected = [
-        diagnostic(Severity::Error, codes::USAGE_ERROR, "tests/conftest.py"),
         diagnostic(
             Severity::Error,
-            codes::COLLECTION_ERROR,
+            DiagnosticCode::UsageError,
+            "tests/conftest.py",
+        ),
+        diagnostic(
+            Severity::Error,
+            DiagnosticCode::CollectionError,
             "sub/deep/conftest.py",
         ),
         // Not a conftest's: no directory is explained by it.
-        diagnostic(Severity::Error, codes::COLLECTION_ERROR, "other/test_x.py"),
+        diagnostic(
+            Severity::Error,
+            DiagnosticCode::CollectionError,
+            "other/test_x.py",
+        ),
         // A conftest's info explains nothing either.
-        diagnostic(Severity::Info, codes::USAGE_ERROR, "more/conftest.py"),
+        diagnostic(
+            Severity::Info,
+            DiagnosticCode::UsageError,
+            "more/conftest.py",
+        ),
     ];
     let broken = broken_conftest_dirs(&collected);
     assert_eq!(broken, ["tests/", "sub/deep/"]);
-    let explained =
-        |path: &str| explained_by_a_conftest(&broken, &diagnostic(Severity::Info, no_tests, path));
+    let explained = |path: &str| {
+        explained_by_a_conftest(
+            &broken,
+            &diagnostic(Severity::Info, DiagnosticCode::NoTests, path),
+        )
+    };
     assert!(explained("tests/test_t.py"));
     assert!(explained("tests/pkg/test_p.py"));
     assert!(explained("sub/deep/test_d.py"));
@@ -1671,18 +1690,22 @@ fn a_file_below_a_broken_conftest_gets_no_no_tests_note() {
     // Only the `no-tests` info.
     assert!(!explained_by_a_conftest(
         &broken,
-        &diagnostic(Severity::Error, codes::COLLECTION_ERROR, "tests/test_t.py")
+        &diagnostic(
+            Severity::Error,
+            DiagnosticCode::CollectionError,
+            "tests/test_t.py"
+        )
     ));
     // A root conftest's failure explains every file.
     let root = [diagnostic(
         Severity::Error,
-        codes::USAGE_ERROR,
+        DiagnosticCode::UsageError,
         "conftest.py",
     )];
     let broken = broken_conftest_dirs(&root);
     assert!(explained_by_a_conftest(
         &broken,
-        &diagnostic(Severity::Info, no_tests, "test_top.py")
+        &diagnostic(Severity::Info, DiagnosticCode::NoTests, "test_top.py")
     ));
 }
 

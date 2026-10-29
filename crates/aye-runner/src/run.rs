@@ -18,8 +18,8 @@ use aye_engine::{
     WorkerLine,
 };
 use aye_events::{
-    BatchId, Case, Counts, Diagnostic, DiagnosticPath, EnvironmentId, Event, Failure, LifetimeId,
-    Outcome, ProjectPath, Record, Severity, TestId, TestResult, WorkerId,
+    BatchId, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, EnvironmentId, Event,
+    Failure, LifetimeId, Outcome, ProjectPath, Record, Severity, TestId, TestResult, WorkerId,
 };
 use aye_static::EnvVars;
 
@@ -33,11 +33,6 @@ const POLL: Duration = Duration::from_millis(50);
 /// as long to stop.
 const INTERRUPT_GRACE: Duration = Duration::from_secs(10);
 
-/// The diagnostic an adapter emits when the framework stopped a batch before
-/// running all of it: as an `error`, the framework would have ended the
-/// whole session there (pytest's `pytest.exit`, a `KeyboardInterrupt`, an
-/// internal error).
-const BATCH_STOPPED: &str = "batch-stopped";
 /// pytest's status for a session whose tests failed.
 const STATUS_TESTS_FAILED: i32 = 1;
 /// pytest's status for an interrupted session.
@@ -47,9 +42,6 @@ const STATUS_INTERNAL_ERROR: i32 = 3;
 /// The context key under which a batch re-queued after a crash names the
 /// tests that ran before it (see [`Shared::crashed`]).
 const RAN_IDS: &str = "ran_ids";
-/// The warning a lane gives, once per file, when it lists a file's tests
-/// otherwise than the first lane: the file's tests run on the first lane.
-const LISTING_DIFFERS: &str = "listing-differs";
 
 /// By file, a digest of its tests' ids in order ([`Refined::digests`]).
 type Digests = BTreeMap<ProjectPath, String>;
@@ -512,7 +504,7 @@ impl Runner {
                 None,
                 Event::Diagnostic(Diagnostic {
                     severity: Severity::Error,
-                    code: "no-executor".into(),
+                    code: DiagnosticCode::NoExecutor,
                     path: DiagnosticPath::as_written(path),
                     span: None,
                     message: format!(
@@ -973,7 +965,7 @@ enum Message {
     Problem {
         worker: WorkerId,
         batch: BatchId,
-        code: &'static str,
+        code: DiagnosticCode,
         path: DiagnosticPath,
         message: String,
     },
@@ -1188,7 +1180,7 @@ impl Log<'_> {
                     Some(batch),
                     Event::Diagnostic(Diagnostic {
                         severity: Severity::Error,
-                        code: code.into(),
+                        code,
                         path,
                         span: None,
                         message,
@@ -1659,7 +1651,7 @@ impl Shared<'_> {
                 send(Message::Problem {
                     worker: lane,
                     batch: batch.id,
-                    code: "batch-failed",
+                    code: DiagnosticCode::BatchFailed,
                     path: first_path(batch),
                     message: format!(
                         "the {} adapter failed outside any test:\n{message}",
@@ -1930,7 +1922,7 @@ impl Shared<'_> {
                     worker: lane,
                     diagnostic: Diagnostic {
                         severity: Severity::Warning,
-                        code: LISTING_DIFFERS.into(),
+                        code: DiagnosticCode::ListingDiffers,
                         path: (*file).clone().into(),
                         span: None,
                         message: format!(
@@ -1985,7 +1977,7 @@ impl Shared<'_> {
         let problem = |message: String| Message::Problem {
             worker: lane,
             batch: batch.id,
-            code: "protocol-error",
+            code: DiagnosticCode::ProtocolError,
             path: first_path(batch),
             message,
         };
@@ -2170,8 +2162,10 @@ struct Track {
     /// The tests that started, in order, each once, and as a set.
     ran: Vec<TestId>,
     started: HashSet<TestId>,
-    /// The adapter said the framework stopped the batch: a `batch-stopped`
-    /// error diagnostic.
+    /// The adapter said the framework stopped the batch before running all
+    /// of it, where it would have ended its whole session (pytest's
+    /// `pytest.exit`, a `KeyboardInterrupt`, an internal error): a
+    /// `batch-stopped` error diagnostic.
     stopped: bool,
     /// The batch reported an error diagnostic.
     errors: bool,
@@ -2200,7 +2194,7 @@ impl Track {
             }
             Event::Diagnostic(diagnostic) => {
                 let error = diagnostic.severity == Severity::Error;
-                self.stopped |= error && diagnostic.code == BATCH_STOPPED;
+                self.stopped |= error && diagnostic.code == DiagnosticCode::BatchStopped;
                 self.errors |= error;
             }
             _ => {}
@@ -2465,7 +2459,7 @@ mod tests {
         assert!(track.clean());
         track.see(&Event::Diagnostic(Diagnostic {
             severity: Severity::Warning,
-            code: "session-failed".into(),
+            code: DiagnosticCode::SessionFailed,
             path: DiagnosticPath::Nowhere,
             span: None,
             message: String::new(),
@@ -2479,7 +2473,7 @@ mod tests {
         assert!(!failed.clean());
         track.see(&Event::Diagnostic(Diagnostic {
             severity: Severity::Error,
-            code: "collection-error".into(),
+            code: DiagnosticCode::CollectionError,
             path: "b.py".into(),
             span: None,
             message: String::new(),
@@ -2559,7 +2553,7 @@ mod tests {
         let Event::Diagnostic(diagnostic) = &records[0].event else {
             panic!("expected a diagnostic");
         };
-        assert_eq!(diagnostic.code, "no-executor");
+        assert_eq!(diagnostic.code, DiagnosticCode::NoExecutor);
         assert_eq!(diagnostic.path, "t.py");
         assert!(
             diagnostic.message.contains("2 tests not run"),

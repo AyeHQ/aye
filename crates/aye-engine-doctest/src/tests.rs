@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use aye_engine::{Adapter, Claim, LineIndex, Project, Recognition, Recognizer, SourceFile};
-use aye_events::Certainty;
+use aye_events::{Certainty, DiagnosticCode};
 
 use super::*;
 use crate::parser::{clean_doc, docstring, expand_tabs, parse};
@@ -2276,7 +2276,7 @@ fn a_conftest_another_one_replaced_is_an_import_file_mismatch() {
     let [error] = mismatched.diagnostics.as_slice() else {
         panic!("{mismatched:?}");
     };
-    assert_eq!(error.code, "collection-error");
+    assert_eq!(error.code, DiagnosticCode::CollectionError);
     assert!(error.message.starts_with("import file mismatch"));
     assert!(
         error

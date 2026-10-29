@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use aye_engine::ast::{Expr, ExprLambda, Stmt, StmtClassDef, StmtFunctionDef};
 use aye_engine::{Ranged, Recognition, SourceFile, TextRange, TextSize};
-use aye_events::{Case, Certainty, Diagnostic, Severity};
+use aye_events::{Case, Certainty, Diagnostic, DiagnosticCode, Severity};
 
 use crate::fnmatch::matches_prefix_or_glob;
 use crate::ids::{IdOptions, parameterset_ids};
@@ -775,10 +775,16 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
         self.refine.push(reason.into());
     }
 
-    fn diagnostic(&mut self, severity: Severity, code: &str, range: TextRange, message: String) {
+    fn diagnostic(
+        &mut self,
+        severity: Severity,
+        code: DiagnosticCode,
+        range: TextRange,
+        message: String,
+    ) {
         self.diagnostics.push(Diagnostic {
             severity,
-            code: code.to_string(),
+            code,
             path: self.file.rel.to_project_path().into(),
             span: Some(self.file.span(range)),
             message,
@@ -1753,7 +1759,7 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
                         self.nodeid(&frames.iter().map(|f| f.name.clone()).collect::<Vec<_>>());
                     self.diagnostic(
                         Severity::Warning,
-                        "class-has-init",
+                        DiagnosticCode::ClassHasInit,
                         class.name.range(),
                         format!(
                             "cannot collect test class '{}' because it has a __init__ constructor (from: {parent})",
@@ -1875,7 +1881,7 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
             if has {
                 self.diagnostic(
                     Severity::Warning,
-                    "class-has-init",
+                    DiagnosticCode::ClassHasInit,
                     class.name.range(),
                     format!(
                         "cannot collect test class '{}' because it has a {dunder} constructor (from: {parent})",
@@ -2780,7 +2786,12 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
             }
         }
         for (range, message) in reported {
-            self.diagnostic(Severity::Warning, "duplicate-definition", range, message);
+            self.diagnostic(
+                Severity::Warning,
+                DiagnosticCode::DuplicateDefinition,
+                range,
+                message,
+            );
         }
     }
 }

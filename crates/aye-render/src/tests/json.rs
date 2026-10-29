@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use aye_events::{
-    Assertion, Captured, Counts, Event, ExitCode, Failure, Frame, Location, Outcome, Phase, Record,
-    TestId, TestResult,
+    Assertion, Captured, Counts, DiagnosticCode, Event, ExitCode, Failure, Frame, Location,
+    Outcome, Phase, Record, TestId, TestResult,
 };
 use serde_json::Value;
 
@@ -592,7 +592,7 @@ fn the_summary_names_a_stored_run() {
 fn an_error_every_batch_repeats_is_reported_once() {
     let record = Record::new(Event::Diagnostic(aye_events::Diagnostic {
         severity: aye_events::Severity::Error,
-        code: "usage-error".into(),
+        code: DiagnosticCode::UsageError,
         path: aye_events::DiagnosticPath::Nowhere,
         span: None,
         message: "unrecognized arguments: --bogus".into(),
@@ -697,7 +697,7 @@ fn very_verbose_adds_a_line_per_diagnostic() {
 fn very_verbose_lines_are_bounded() {
     let diagnostic = Record::new(Event::Diagnostic(aye_events::Diagnostic {
         severity: aye_events::Severity::Warning,
-        code: "c".repeat(300),
+        code: "c".repeat(300).as_str().into(),
         path: "p".repeat(900).into(),
         span: None,
         message: "m".repeat(9000),

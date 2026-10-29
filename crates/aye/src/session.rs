@@ -14,8 +14,8 @@ use aye_collect::{Collector, Environment, Options, Prepared};
 use aye_config::AyeConfig;
 use aye_engine::{Adapter, Policy, Project, Refiner};
 use aye_events::{
-    Case, Counts, Diagnostic, DiagnosticPath, Event, ExitCode, ProjectPath, Record, SCHEMA_VERSION,
-    Severity, TestId,
+    Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, Event, ExitCode, ProjectPath, Record,
+    SCHEMA_VERSION, Severity, TestId,
 };
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter};
@@ -30,23 +30,6 @@ use aye_static::EnvVars;
 use crate::args::{Args, Color, Maxfail, Output, Passed, Workers, passed, passed_maxfail};
 use crate::busy::Busy;
 use crate::registry;
-
-/// Diagnostic codes the binary acts on. Collection's are in
-/// `aye_collect::codes`; the rest come from adapters and the runner.
-mod codes {
-    /// An explicit path doesn't exist, or an id matches no test.
-    pub(super) const NOT_FOUND: &str = "not-found";
-    /// No adapter collects an explicit file (pytest's "found no collectors").
-    pub(super) const UNCLAIMED: &str = "unclaimed";
-    /// The framework rejected its arguments.
-    pub(super) const USAGE_ERROR: &str = "usage-error";
-    /// The framework's own internal error (pytest's `INTERNALERROR`).
-    pub(super) const INTERNAL_ERROR: &str = "internal-error";
-    /// The framework failed to collect a file.
-    pub(super) const COLLECTION_ERROR: &str = "collection-error";
-    /// The framework skipped a module or a directory while collecting it.
-    pub(super) const SKIPPED: &str = "skipped";
-}
 
 /// Keys of an adapter's context the binary reads or adds.
 mod keys {
@@ -469,7 +452,9 @@ impl Session {
         let skips: Vec<&str> = collection
             .diagnostics
             .iter()
-            .filter(|d| d.code == codes::SKIPPED && d.severity == Severity::Info && kept(d))
+            .filter(|d| {
+                d.code == DiagnosticCode::Skipped && d.severity == Severity::Info && kept(d)
+            })
             .map(|d| d.path.as_str())
             .collect();
         // Selectors that match nothing, as pytest's `not found:`: a missing
@@ -510,7 +495,7 @@ impl Session {
                 continue;
             }
             let mut diagnostic = diagnostic.clone();
-            if diagnostic.code == aye_collect::codes::REFINE_FAILED {
+            if diagnostic.code == DiagnosticCode::RefineFailed {
                 // aye's pytest front-end is the only source of pytest's
                 // tests: without it there are none, which is no result.
                 diagnostic.severity = Severity::Error;
@@ -527,7 +512,7 @@ impl Session {
         let reported: HashSet<&str> = collection
             .diagnostics
             .iter()
-            .filter(|d| d.code == codes::NOT_FOUND)
+            .filter(|d| d.code == DiagnosticCode::NotFound)
             .map(|d| d.path.as_str())
             .collect();
         let mut not_found = Vec::new();
@@ -542,7 +527,7 @@ impl Session {
             }
             not_found.push(Diagnostic {
                 severity: Severity::Error,
-                code: codes::NOT_FOUND.to_string(),
+                code: DiagnosticCode::NotFound,
                 path: DiagnosticPath::as_written(path),
                 span: None,
                 message: not_found_message(selector),
@@ -866,7 +851,7 @@ impl OneModuleErrors {
     /// A conftest's is [`OneConftestError`]'s.
     fn refined(&mut self, adapter: &str, diagnostic: &Diagnostic) {
         if diagnostic.severity != Severity::Error
-            || diagnostic.code != codes::COLLECTION_ERROR
+            || diagnostic.code != DiagnosticCode::CollectionError
             || diagnostic.path.is_nowhere()
             || registry::is_conftest(diagnostic.path.as_str())
         {
@@ -892,7 +877,7 @@ impl OneModuleErrors {
             }
             Event::Diagnostic(diagnostic)
                 if diagnostic.severity == Severity::Error
-                    && diagnostic.code == codes::COLLECTION_ERROR
+                    && diagnostic.code == DiagnosticCode::CollectionError
                     && !diagnostic.path.is_nowhere() =>
             {
                 let Some(adapter) = batch.and_then(|batch| self.adapters.get(&batch)) else {
@@ -950,7 +935,7 @@ struct OneConftestError {
     adapters: HashMap<aye_events::BatchId, String>,
     /// By code and path, who reported the error first (an adapter, or
     /// `None` for refinement), and its message.
-    first: HashMap<(String, String), (Option<String>, String)>,
+    first: HashMap<(DiagnosticCode, String), (Option<String>, String)>,
 }
 
 impl OneConftestError {
@@ -975,9 +960,9 @@ impl OneConftestError {
 
     /// A diagnostic `adapter` reported, or refinement (`None`).
     fn see(&mut self, adapter: Option<&str>, diagnostic: &mut Diagnostic) {
-        let kind = match diagnostic.code.as_str() {
-            codes::USAGE_ERROR => "usage error",
-            codes::COLLECTION_ERROR => "collection error",
+        let kind = match diagnostic.code {
+            DiagnosticCode::UsageError => "usage error",
+            DiagnosticCode::CollectionError => "collection error",
             _ => return,
         };
         if diagnostic.severity != Severity::Error
@@ -1083,8 +1068,8 @@ impl Reach {
     /// some argument named nothing. Everything else is the run's.
     fn keeps(&self, root: &Path, diagnostic: &Diagnostic) -> bool {
         let at = || normalize_absolute(&root.join(diagnostic.path.as_str()));
-        match (diagnostic.severity, diagnostic.code.as_str()) {
-            (Severity::Info, codes::SKIPPED) => {
+        match (diagnostic.severity, &diagnostic.code) {
+            (Severity::Info, DiagnosticCode::Skipped) => {
                 let at = at();
                 self.paths
                     .iter()
@@ -1094,7 +1079,7 @@ impl Reach {
                         .iter()
                         .any(|word| dotted_reach(word, diagnostic.path.as_str()) != Named::Nothing)
             }
-            (Severity::Error, codes::USAGE_ERROR) if !diagnostic.path.is_nowhere() => {
+            (Severity::Error, DiagnosticCode::UsageError) if !diagnostic.path.is_nowhere() => {
                 if self.unmatched {
                     return true;
                 }
@@ -1131,7 +1116,7 @@ fn broken_conftest_dirs(diagnostics: &[Diagnostic]) -> Vec<&str> {
 /// has none, is left out.
 fn explained_by_a_conftest(broken: &[&str], diagnostic: &Diagnostic) -> bool {
     diagnostic.severity == Severity::Info
-        && diagnostic.code == aye_collect::codes::NO_TESTS
+        && diagnostic.code == DiagnosticCode::NoTests
         && broken
             .iter()
             .any(|dir| diagnostic.path.as_str().starts_with(dir))
@@ -1200,10 +1185,10 @@ impl Errors {
             return;
         }
         self.any = true;
-        match diagnostic.code.as_str() {
-            codes::NOT_FOUND => self.not_found = true,
-            codes::UNCLAIMED | codes::USAGE_ERROR => self.usage = true,
-            codes::INTERNAL_ERROR => self.internal = true,
+        match diagnostic.code {
+            DiagnosticCode::NotFound => self.not_found = true,
+            DiagnosticCode::Unclaimed | DiagnosticCode::UsageError => self.usage = true,
+            DiagnosticCode::InternalError => self.internal = true,
             _ => {}
         }
     }

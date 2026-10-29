@@ -144,8 +144,9 @@ use anstream::AutoStream;
 use anstream::stream::{AsLockedWrite, RawStream};
 use anstyle::{AnsiColor, Style};
 use aye_events::{
-    Assertion, Captured, Certainty, Columns, Compare, Counts, Diagnostic, Event, ExitCode, Failure,
-    Frame, LifetimeId, Local, Outcome, Phase, Record, Severity, TestId, TestResult,
+    Assertion, Captured, Certainty, Columns, Compare, Counts, Diagnostic, DiagnosticCode, Event,
+    ExitCode, Failure, Frame, LifetimeId, Local, Outcome, Phase, Record, Severity, TestId,
+    TestResult,
 };
 
 use crate::tally::{self, Noted, Tally, Tone};
@@ -1821,9 +1822,9 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// line each.
     fn grouped(&mut self) -> io::Result<()> {
         if !self.full() && !self.warnings.is_empty() {
-            let mut codes: Vec<(&str, usize)> = Vec::new();
+            let mut codes: Vec<(&DiagnosticCode, usize)> = Vec::new();
             for warning in &self.warnings {
-                match codes.iter_mut().find(|(code, _)| *code == warning.code) {
+                match codes.iter_mut().find(|(code, _)| **code == warning.code) {
                     Some((_, count)) => *count += 1,
                     None => codes.push((&warning.code, 1)),
                 }

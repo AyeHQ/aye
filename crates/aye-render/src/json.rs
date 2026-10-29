@@ -135,8 +135,8 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use aye_events::{
-    Captured, Certainty, Compare, Counts, Diagnostic, Event, ExitCode, Failure, LifetimeId, Local,
-    Outcome, Record, Severity, TestId, TestResult,
+    Captured, Certainty, Compare, Counts, Diagnostic, DiagnosticCode, Event, ExitCode, Failure,
+    LifetimeId, Local, Outcome, Record, Severity, TestId, TestResult,
 };
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
@@ -210,7 +210,7 @@ pub struct JsonLines<W: Write> {
     /// Diagnostics reported, by severity, code, path and message, so that
     /// one every batch repeats (a framework rejecting its arguments) is
     /// reported once.
-    diagnostics: HashSet<(&'static str, String, String, String)>,
+    diagnostics: HashSet<(&'static str, DiagnosticCode, String, String)>,
     /// What the summary counts beside the tests' counts: modules skipped
     /// while collecting, failed lifetimes that kept no test from running.
     tally: Tally,
@@ -1225,7 +1225,7 @@ impl<W: Write> JsonLines<W> {
         }
         let path = shared::head(diagnostic.path.as_str(), PATH_MAX);
         let line = diagnostic.span.as_ref().and_then(|span| span.line);
-        let code = shared::head(&diagnostic.code, DIAGNOSTIC_CODE_MAX);
+        let code = shared::head(diagnostic.code.as_str(), DIAGNOSTIC_CODE_MAX);
         let message = shared::head(&diagnostic.message, COLLECTION_ERROR_MAX);
         if diagnostic.severity == Severity::Error {
             return self.line(&Line::CollectionError {

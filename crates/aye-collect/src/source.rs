@@ -3,10 +3,8 @@
 use std::path::Path;
 
 use aye_engine::{LineIndex, SourceFile, TextSize, ast};
-use aye_events::{Diagnostic, ProjectPath, Severity, Span};
+use aye_events::{Diagnostic, DiagnosticCode, ProjectPath, Severity, Span};
 use ruff_python_parser::ParseError;
-
-use crate::codes;
 
 /// A file as read and, when it is Python, parsed.
 pub(crate) struct Source {
@@ -53,7 +51,7 @@ pub(crate) fn load(abs: &Path, rel: &ProjectPath) -> (Option<Source>, Option<Dia
         Err(err) => {
             let diagnostic = Diagnostic {
                 severity: Severity::Error,
-                code: codes::UNREADABLE.to_string(),
+                code: DiagnosticCode::Unreadable,
                 path: rel.clone().into(),
                 span: None,
                 message: format!("cannot read: {err}"),
@@ -103,7 +101,7 @@ fn syntax_error(rel: &ProjectPath, text: &str, lines: &LineIndex, err: &ParseErr
     let line = u32::try_from(at.line.get()).unwrap_or(u32::MAX);
     Diagnostic {
         severity: Severity::Error,
-        code: codes::SYNTAX_ERROR.to_string(),
+        code: DiagnosticCode::SyntaxError,
         path: rel.clone().into(),
         span: Some(Span {
             path: rel.clone(),

@@ -14,7 +14,8 @@ use std::fmt::Write as _;
 use std::io::{self, Write};
 
 use aye_events::{
-    Diagnostic, Event, Failure, LifetimeId, Outcome, Phase, Record, Severity, TestId, TestResult,
+    Diagnostic, DiagnosticCode, Event, Failure, LifetimeId, Outcome, Phase, Record, Severity,
+    TestId, TestResult,
 };
 
 use aye_static::EnvVars;
@@ -54,7 +55,7 @@ pub struct GithubAnnotations<W: Write> {
     written: bool,
     /// Error diagnostics annotated, so that one every batch repeats is
     /// annotated once.
-    errors: HashSet<(String, String, String)>,
+    errors: HashSet<(DiagnosticCode, String, String)>,
 }
 
 struct Annotation {
@@ -247,7 +248,12 @@ impl<W: Write> GithubAnnotations<W> {
         // A diagnostic about no file in particular (pytest rejecting its
         // arguments) is annotated on none.
         let file = (!diagnostic.path.is_nowhere()).then(|| self.file(diagnostic.path.as_str()));
-        let command = command(file.as_deref(), line, &diagnostic.code, &diagnostic.message);
+        let command = command(
+            file.as_deref(),
+            line,
+            diagnostic.code.as_str(),
+            &diagnostic.message,
+        );
         writeln!(self.out, "{command}")
     }
 

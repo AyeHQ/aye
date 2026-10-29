@@ -1,5 +1,6 @@
 //! How the wire spells what serde has no attribute for: durations as
-//! fractional milliseconds, and the zeros left out.
+//! fractional milliseconds, the zeros left out, and the enums written as
+//! one string per variant that keep any other string.
 
 /// Durations are fractional milliseconds on the wire, under `*_ms` keys.
 pub(crate) mod millis {
@@ -103,3 +104,85 @@ pub(crate) const fn is_zero(n: &u64) -> bool {
 pub(crate) const fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
+
+/// Declares an enum written on the wire as one string per variant, and
+/// adds a last variant, `Other(Box<str>)`, that keeps any other string: a
+/// value a worker or a stored log holds that this aye doesn't know still
+/// reads, and is written back as it was. The enum gets `ALL`, its known
+/// values in order (all but `Other`), `as_str`, `Display`, a `From<&str>`
+/// and a `FromStr` that never fail, and serde as the string.
+macro_rules! string_enum {
+    (
+        $(#[$meta:meta])*
+        $vis:vis enum $name:ident {
+            $(
+                $(#[$variant_meta:meta])*
+                $variant:ident = $text:literal,
+            )+
+        }
+    ) => {
+        $(#[$meta])*
+        $vis enum $name {
+            $(
+                $(#[$variant_meta])*
+                $variant,
+            )+
+            /// A value this aye doesn't know, as it was written.
+            Other(Box<str>),
+        }
+
+        impl $name {
+            /// Every known value, in order: all but `Other`.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            /// How it is written.
+            pub fn as_str(&self) -> &str {
+                match self {
+                    $(Self::$variant => $text,)+
+                    Self::Other(text) => text,
+                }
+            }
+        }
+
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+
+        /// The known value `text` spells, else `Other`.
+        impl From<&str> for $name {
+            fn from(text: &str) -> Self {
+                match text {
+                    $($text => Self::$variant,)+
+                    other => Self::Other(other.into()),
+                }
+            }
+        }
+
+        impl ::std::str::FromStr for $name {
+            type Err = ::std::convert::Infallible;
+
+            fn from_str(text: &str) -> Result<Self, Self::Err> {
+                Ok(Self::from(text))
+            }
+        }
+
+        impl ::serde::Serialize for $name {
+            fn serialize<S: ::serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.serialize_str(self.as_str())
+            }
+        }
+
+        impl<'de> ::serde::Deserialize<'de> for $name {
+            fn deserialize<D: ::serde::Deserializer<'de>>(
+                deserializer: D,
+            ) -> Result<Self, D::Error> {
+                let text = String::deserialize(deserializer)?;
+                Ok(Self::from(text.as_str()))
+            }
+        }
+    };
+}
+
+pub(crate) use string_enum;

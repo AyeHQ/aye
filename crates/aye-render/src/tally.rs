@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use aye_events::{Counts, Diagnostic, Event, Record, Severity};
+use aye_events::{Counts, Diagnostic, DiagnosticCode, Event, Record, Severity};
 
 use crate::shared;
 
@@ -77,7 +77,7 @@ impl Tally {
 pub fn module_skip(record: &Record) -> Option<&Diagnostic> {
     match &record.event {
         Event::Diagnostic(diagnostic)
-            if diagnostic.code == "skipped"
+            if diagnostic.code == DiagnosticCode::Skipped
                 && diagnostic.severity == Severity::Info
                 && record.envelope.batch.is_none() =>
         {
@@ -233,7 +233,7 @@ pub(crate) struct ErrorKinds {
     pub usage: u32,
     pub internal: u32,
     /// Counted, by code, path and message.
-    seen: HashSet<(String, String, String)>,
+    seen: HashSet<(DiagnosticCode, String, String)>,
 }
 
 impl ErrorKinds {
@@ -249,17 +249,20 @@ impl ErrorKinds {
         if !self.seen.insert(key) {
             return false;
         }
-        match diagnostic.code.as_str() {
+        match diagnostic.code {
             // A batch the framework stopped early: the summary's verdict and
             // the stop notice say so.
-            "batch-stopped" => {}
-            "usage-error" | "unclaimed" => self.usage += 1,
+            DiagnosticCode::BatchStopped => {}
+            DiagnosticCode::UsageError | DiagnosticCode::Unclaimed => self.usage += 1,
             // What the command line names doesn't exist: pytest's usage
             // error. A requested id the framework can't find in a batch is
             // a collection error.
-            "not-found" if !from_batch => self.usage += 1,
-            "internal-error" | "adapter-error" | "protocol-error" | "batch-failed"
-            | "no-executor" => self.internal += 1,
+            DiagnosticCode::NotFound if !from_batch => self.usage += 1,
+            DiagnosticCode::InternalError
+            | DiagnosticCode::AdapterError
+            | DiagnosticCode::ProtocolError
+            | DiagnosticCode::BatchFailed
+            | DiagnosticCode::NoExecutor => self.internal += 1,
             _ => self.collection += 1,
         }
         true

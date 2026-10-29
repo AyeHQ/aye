@@ -1,4 +1,4 @@
-use aye_events::{Event, Failure, Outcome, Record, TestId, TestResult};
+use aye_events::{DiagnosticCode, Event, Failure, Outcome, Record, TestId, TestResult};
 
 use super::{feed, lines, streams};
 use crate::{GithubAnnotations, Reporter};
@@ -131,7 +131,7 @@ fn annotations_are_capped() {
 fn a_diagnostic_about_no_file_is_annotated_on_none() {
     let record = Record::new(Event::Diagnostic(aye_events::Diagnostic {
         severity: aye_events::Severity::Error,
-        code: "usage-error".into(),
+        code: DiagnosticCode::UsageError,
         path: aye_events::DiagnosticPath::Nowhere,
         span: None,
         message: "unrecognized arguments: --bogus".into(),

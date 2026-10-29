@@ -57,7 +57,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use aye_events::{Counts, Event, ExitCode, ProjectPath, Record, Severity};
+use aye_events::{Counts, DiagnosticCode, Event, ExitCode, ProjectPath, Record, Severity};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -483,7 +483,8 @@ impl Run {
             // which `aye show` shows too.
             Event::Diagnostic(diagnostic)
                 if diagnostic.severity == Severity::Error
-                    || (diagnostic.severity == Severity::Info && diagnostic.code == "skipped") =>
+                    || (diagnostic.severity == Severity::Info
+                        && diagnostic.code == DiagnosticCode::Skipped) =>
             {
                 self.file(diagnostic.path.as_str());
             }
@@ -519,8 +520,9 @@ fn shows(record: &Record) -> bool {
         | Event::WorkerFinished { error: Some(_), .. } => true,
         Event::Diagnostic(diagnostic) => {
             diagnostic.severity == Severity::Error
-                && !(diagnostic.code == "unclaimed"
-                    || (diagnostic.code == "not-found" && record.envelope.batch.is_none()))
+                && !(diagnostic.code == DiagnosticCode::Unclaimed
+                    || (diagnostic.code == DiagnosticCode::NotFound
+                        && record.envelope.batch.is_none()))
         }
         _ => false,
     }

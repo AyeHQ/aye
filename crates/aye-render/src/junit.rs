@@ -566,7 +566,7 @@ impl Junit {
             &mut xml,
             "error",
             Some(first),
-            Some(&diagnostic.code),
+            Some(diagnostic.code.as_str()),
             &diagnostic.message,
         );
         xml.push_str("    </testcase>\n");

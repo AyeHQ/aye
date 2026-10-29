@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use aye_events::{Counts, Event, ExitCode, Outcome, ProjectPath, Record, TestId, TestKey};
+use aye_events::{
+    Counts, DiagnosticCode, Event, ExitCode, Outcome, ProjectPath, Record, TestId, TestKey,
+};
 
 use super::{feed, lines, streams};
 use crate::{
@@ -498,7 +500,7 @@ fn the_list_shows_errors_and_failed_workers_and_no_other_diagnostic() {
 fn module_skip() -> Record {
     Record::new(Event::Diagnostic(aye_events::Diagnostic {
         severity: aye_events::Severity::Info,
-        code: "skipped".into(),
+        code: DiagnosticCode::Skipped,
         path: "tests/test_win.py".into(),
         span: None,
         message: "only on Windows".into(),

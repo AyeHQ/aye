@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use aye_engine::Claim;
-use aye_events::{Diagnostic, DiagnosticPath, ProjectPath, Severity};
+use aye_events::{Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPath, Severity};
 use walkdir::WalkDir;
 
-use crate::{Prepared, codes};
+use crate::Prepared;
 
 /// A set of recognizers, by priority index.
 pub(crate) type Mask = u64;
@@ -105,7 +105,7 @@ impl<'r> Tree<'r> {
                         let path = err.path().unwrap_or(top);
                         self.diagnostics.push(Diagnostic {
                             severity: Severity::Error,
-                            code: codes::UNREADABLE.to_string(),
+                            code: DiagnosticCode::Unreadable,
                             path: DiagnosticPath::as_written(aye_fs::relative_through_root(
                                 path, self.root,
                             )),
