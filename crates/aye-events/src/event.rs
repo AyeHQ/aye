@@ -8,7 +8,7 @@ use crate::diagnostic::Diagnostic;
 use crate::failure::Failure;
 use crate::id::{AdapterName, TestId};
 use crate::lifetime::{LifetimeId, Scope};
-use crate::outcome::{ExitCode, Outcome};
+use crate::outcome::{ExitCode, Outcome, StopReason};
 use crate::result::{Counts, TestResult};
 use crate::run::{BatchIndex, EnvironmentId, RunId, RunNumber, WorkerIndex};
 use crate::serde_ext::{is_zero, millis};
@@ -191,7 +191,7 @@ pub enum Event {
         /// `interrupted`, or `framework` (the framework ended a batch early,
         /// e.g. `pytest.exit`). Absent when everything ran.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        stopped: Option<String>,
+        stopped: Option<StopReason>,
     },
     /// A kind this version doesn't know.
     #[serde(other)]

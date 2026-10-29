@@ -1,6 +1,9 @@
-//! Outcomes: of a test, the phase it happened in, and how a run ended.
+//! Outcomes: of a test, the phase it happened in, and how a run ended and
+//! why it stopped early.
 
 use serde::{Deserialize, Serialize};
+
+use crate::serde_ext::string_enum;
 
 /// The fixed outcome set. Adding a variant is a breaking change.
 /// Annotations such as *flaky* are separate from it.
@@ -107,5 +110,56 @@ impl TryFrom<u8> for ExitCode {
             5 => Self::NoTests,
             other => return Err(format!("unknown exit code {other}")),
         })
+    }
+}
+
+string_enum! {
+    /// Why a run stopped before every selected test ran: `run_finished`'s
+    /// `stopped`, and the run store's. The runner gives the first reason
+    /// that came up; the binary gives `interrupted` for a collection
+    /// stopped before the run. A reason a stored log holds that this aye
+    /// doesn't know reads as [`StopReason::Other`].
+    ///
+    /// The run's interruption doesn't follow from it: after a framework
+    /// stop with an internal error (pytest's status 3) the run is an
+    /// internal error, not an interrupted one.
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub enum StopReason {
+        /// `maxfail` bad outcomes were reached.
+        Maxfail = "maxfail",
+        /// The run was stopped from outside (Ctrl-C).
+        Interrupted = "interrupted",
+        /// The framework stopped a batch, ending its session there: the
+        /// adapter said so with a `batch-stopped` error diagnostic
+        /// (`pytest.exit` whatever its `returncode`, a `KeyboardInterrupt`,
+        /// `shouldstop`, a `shouldfail` that isn't aye's `maxfail`, an
+        /// internal error that left tests), or the batch ended with
+        /// pytest's status 2. The run counts as interrupted, except after
+        /// an internal error (status 3), which makes it an internal error
+        /// instead.
+        Framework = "framework",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each reason is written as `run_finished.stopped` spelled it, and
+    /// one this aye doesn't know reads back as it was.
+    #[test]
+    fn stop_reasons_are_spelled_as_run_finished_spells_them() {
+        let names: Vec<&str> = StopReason::ALL.iter().map(StopReason::as_str).collect();
+        assert_eq!(names, ["maxfail", "interrupted", "framework"]);
+        assert_eq!(StopReason::Framework.to_string(), "framework");
+        for text in ["maxfail", "interrupted", "framework", "timeout"] {
+            let read: StopReason = serde_json::from_str(&format!("\"{text}\"")).unwrap();
+            assert_eq!(read.as_str(), text);
+            assert_eq!(serde_json::to_string(&read).unwrap(), format!("\"{text}\""));
+        }
+        assert_eq!(
+            StopReason::from("timeout"),
+            StopReason::Other("timeout".into())
+        );
     }
 }

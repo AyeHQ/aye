@@ -146,7 +146,7 @@ use anstyle::{AnsiColor, Style};
 use aye_events::{
     Assertion, Captured, Certainty, Columns, Compare, Counts, Diagnostic, DiagnosticCode, Event,
     ExitCode, Failure, Frame, LifetimeId, Local, Outcome, Phase, Record, RunNumber, Severity,
-    TestId, TestResult, WorkerIndex,
+    StopReason, TestId, TestResult, WorkerIndex,
 };
 
 use crate::tally::{self, Noted, Tally, Tone};
@@ -1783,7 +1783,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         exit_code: ExitCode,
         counts: &Counts,
         duration: Duration,
-        stopped: Option<&str>,
+        stopped: Option<&StopReason>,
     ) -> io::Result<()> {
         self.flush_collected()?;
         self.flush_subs()?;
@@ -1860,19 +1860,19 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// summary line's verdict says it already.
     fn stopped_line(
         &mut self,
-        stopped: &str,
+        stopped: &StopReason,
         exit_code: ExitCode,
         counts: &Counts,
     ) -> io::Result<()> {
         let why = match stopped {
-            "maxfail" => format!(
+            StopReason::Maxfail => format!(
                 "stopped after {} (-x/--maxfail)",
                 shared::plural(counts.bad(), "failure", "failures")
             ),
-            "interrupted" if exit_code == ExitCode::Interrupted => return Ok(()),
-            "interrupted" => "interrupted".to_owned(),
-            "framework" => "stopped early by the framework".to_owned(),
-            other => format!("stopped early: {other}"),
+            StopReason::Interrupted if exit_code == ExitCode::Interrupted => return Ok(()),
+            StopReason::Interrupted => "interrupted".to_owned(),
+            StopReason::Framework => "stopped early by the framework".to_owned(),
+            StopReason::Other(other) => format!("stopped early: {other}"),
         };
         writeln!(self.out, "{YELLOW}{why}{YELLOW:#}")
     }
@@ -2147,7 +2147,7 @@ impl<W: RawStream + AsLockedWrite> Reporter for Text<W> {
                 counts,
                 duration,
                 stopped,
-            } => self.run_finished(*exit_code, counts, *duration, stopped.as_deref()),
+            } => self.run_finished(*exit_code, counts, *duration, stopped.as_ref()),
             _ => Ok(()),
         }
     }

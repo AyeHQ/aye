@@ -136,7 +136,8 @@ use std::time::Duration;
 
 use aye_events::{
     Captured, Certainty, Compare, Counts, Diagnostic, DiagnosticCode, Event, ExitCode, Failure,
-    LifetimeId, Local, Outcome, Record, RunNumber, Severity, TestId, TestResult, WorkerIndex,
+    LifetimeId, Local, Outcome, Record, RunNumber, Severity, StopReason, TestId, TestResult,
+    WorkerIndex,
 };
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
@@ -505,7 +506,7 @@ struct Summary {
     lifetime_error: u32,
     s: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    stopped: Option<String>,
+    stopped: Option<StopReason>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     failures: Vec<String>,
     #[serde(skip_serializing_if = "is_zero")]
@@ -1256,7 +1257,7 @@ impl<W: Write> JsonLines<W> {
         exit_code: ExitCode,
         counts: &Counts,
         duration: Duration,
-        stopped: Option<&str>,
+        stopped: Option<&StopReason>,
     ) -> io::Result<()> {
         if self.lines() {
             self.flush_held()?;
@@ -1287,7 +1288,7 @@ impl<W: Write> JsonLines<W> {
             teardown_error: extra.teardown_error,
             lifetime_error: extra.lifetime_error,
             s: shared::secs(duration),
-            stopped: stopped.map(str::to_owned),
+            stopped: stopped.cloned(),
             failures: failures.into_iter().take(FAILURES).collect(),
             failures_omitted: omitted,
             more,
@@ -1341,7 +1342,7 @@ impl<W: Write> Reporter for JsonLines<W> {
             stopped,
         } = &record.event
         {
-            return self.summary(*exit_code, counts, *duration, stopped.as_deref());
+            return self.summary(*exit_code, counts, *duration, stopped.as_ref());
         }
         if self.verbosity <= QUIET {
             return Ok(());

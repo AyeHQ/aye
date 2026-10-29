@@ -61,7 +61,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aye_events::{
     Counts, DiagnosticCode, DiagnosticOrigin, ErrorClass, Event, ExitCode, ProjectPath, Record,
-    RunId, RunNumber, Severity,
+    RunId, RunNumber, Severity, StopReason,
 };
 use flate2::Compression;
 use flate2::read::GzDecoder;
@@ -114,7 +114,7 @@ pub struct RunMeta {
     #[serde(default)]
     pub ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stopped: Option<String>,
+    pub stopped: Option<StopReason>,
     /// What the run's summary counts beside `counts`, by name, the non-zero
     /// ones (`aye_render::Extra::named`: `skipped_modules`, `setup_error`,
     /// `teardown_error`, `lifetime_error`, `collection_error`,

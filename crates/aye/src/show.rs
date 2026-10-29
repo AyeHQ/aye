@@ -367,7 +367,7 @@ fn run_line(meta: &RunMeta, last: bool) -> String {
     }
     fields.push(format!(r#""ms":{}"#, meta.ms));
     if let Some(stopped) = &meta.stopped {
-        fields.push(format!(r#""stopped":{}"#, string(stopped)));
+        fields.push(format!(r#""stopped":{}"#, string(stopped.as_str())));
     }
     if last {
         fields.push(r#""last":true"#.to_owned());

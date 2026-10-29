@@ -15,7 +15,7 @@ use aye_config::AyeConfig;
 use aye_engine::{Adapter, Policy, Project, Refiner};
 use aye_events::{
     AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event,
-    ExitCode, ProjectPath, Record, RunId, SCHEMA_VERSION, Severity, Stamper, TestId,
+    ExitCode, ProjectPath, Record, RunId, SCHEMA_VERSION, Severity, Stamper, StopReason, TestId,
 };
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter, StoredRunId};
@@ -423,11 +423,10 @@ impl Session {
                 refined_files: 0,
                 duration: collect_started.elapsed(),
             });
-            let stopped = aye_runner::StopReason::Interrupted.as_str();
             return out.finish(
                 ExitCode::Interrupted,
                 Counts::default(),
-                Some(stopped),
+                Some(StopReason::Interrupted),
                 &file_failed,
             );
         }
@@ -654,7 +653,7 @@ impl Session {
             deselected: selected.deselected,
             ..summary.counts
         };
-        let stopped = summary.stopped.map(aye_runner::StopReason::as_str);
+        let stopped = summary.stopped.clone();
         let mut errors = out.errors;
         // Collection's errors, which `--continue-on-collection-errors` let
         // the run go past, still fail it.
@@ -1260,14 +1259,14 @@ impl Stream<'_> {
         mut self,
         code: ExitCode,
         counts: Counts,
-        stopped: Option<&str>,
+        stopped: Option<StopReason>,
         file_failed: &AtomicBool,
     ) -> ExitCode {
         self.emit(Event::RunFinished {
             exit_code: code,
             counts,
             duration: self.started.elapsed(),
-            stopped: stopped.map(str::to_string),
+            stopped,
         });
         if let Err(err) = self.reporters.finish()
             && err.kind() != io::ErrorKind::BrokenPipe

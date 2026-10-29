@@ -4,7 +4,6 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
-use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -18,8 +17,8 @@ use aye_engine::{
 };
 use aye_events::{
     AdapterName, BatchIndex, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, Event,
-    Failure, LifetimeId, Outcome, ProjectPath, Record, Severity, Stamper, TestId, TestResult,
-    WorkerIndex,
+    Failure, LifetimeId, Outcome, ProjectPath, Record, Severity, Stamper, StopReason, TestId,
+    TestResult, WorkerIndex,
 };
 use aye_static::EnvVars;
 
@@ -148,41 +147,6 @@ pub struct RunSummary {
     /// runtime aren't in it.
     pub not_run: Vec<TestId>,
     pub crashes: Vec<Crash>,
-}
-
-/// Why a run stopped early.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StopReason {
-    /// `maxfail` bad outcomes were reached.
-    Maxfail,
-    /// The [`StopHandle`] stopped the run (Ctrl-C).
-    Interrupted,
-    /// The framework stopped a batch, ending its session there: the
-    /// adapter said so with a `batch-stopped` error diagnostic (`pytest.exit`
-    /// whatever its `returncode`, a `KeyboardInterrupt`, `shouldstop`, a
-    /// `shouldfail` that isn't aye's `maxfail`, an internal error that left
-    /// tests), or the batch ended with pytest's status 2. The run
-    /// counts as interrupted, except after an internal error (status 3),
-    /// which makes it an internal error instead.
-    Framework,
-}
-
-impl StopReason {
-    /// `maxfail`, `interrupted` or `framework`, as `run_finished.stopped`
-    /// spells it.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Maxfail => "maxfail",
-            Self::Interrupted => "interrupted",
-            Self::Framework => "framework",
-        }
-    }
-}
-
-impl fmt::Display for StopReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2281,20 +2245,6 @@ mod tests {
         assert_eq!(summary.stopped, Some(StopReason::Interrupted));
         assert_eq!(summary.not_run, [TestId::new("t.py::test_a")]);
         assert_eq!(records.len(), 0, "{records:?}");
-    }
-
-    #[test]
-    fn stop_reasons_are_spelled_as_run_finished_spells_them() {
-        let names: Vec<&str> = [
-            StopReason::Maxfail,
-            StopReason::Interrupted,
-            StopReason::Framework,
-        ]
-        .into_iter()
-        .map(StopReason::as_str)
-        .collect();
-        assert_eq!(names, ["maxfail", "interrupted", "framework"]);
-        assert_eq!(StopReason::Framework.to_string(), "framework");
     }
 
     #[test]

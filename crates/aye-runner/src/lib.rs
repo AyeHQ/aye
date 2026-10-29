@@ -233,9 +233,7 @@ mod schedule;
 mod worker;
 
 pub use python::{PythonSource, find_python, venv_python};
-pub use run::{
-    BatchEnd, BatchSummary, Crash, Plan, RunSummary, Runner, RunnerOptions, StopHandle, StopReason,
-};
+pub use run::{BatchEnd, BatchSummary, Crash, Plan, RunSummary, Runner, RunnerOptions, StopHandle};
 pub use schedule::DEFAULT_WEIGHT;
 pub use worker::{
     DEFAULT_SERVICES, Echo, Exit, Incoming, Killer, SpawnError, Worker, WorkerSpec, describe,
