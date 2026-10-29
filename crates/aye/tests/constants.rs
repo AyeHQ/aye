@@ -3,7 +3,8 @@
 //! phases, the scopes, the frameworks' statuses, the service names and the
 //! services the engine provides itself, the protocol version, the
 //! comparisons an assertion makes and the kinds a comparison tells apart,
-//! and the diagnostic codes and severities Python emits. Each is written
+//! the keys of a batch's context that don't start another session, and
+//! the diagnostic codes and severities Python emits. Each is written
 //! once on each side, and a difference is a value one side sends that the
 //! other misreads or drops.
 
@@ -14,7 +15,7 @@ use aye_adapter::ast::{DictItem, Expr, ModModule, Stmt};
 use aye_events::{
     CompareKind, ComparisonOp, DiagnosticCode, FrameworkStatus, Outcome, Phase, Scope, Severity,
 };
-use aye_protocol::{EmbeddedModule, PROTOCOL_VERSION, services};
+use aye_protocol::{EmbeddedModule, PROTOCOL_VERSION, context_keys, services};
 use serde_json::{Value, json};
 
 /// Every Python module aye embeds, once each: the engine's, each adapter's,
@@ -481,4 +482,42 @@ fn python_emits_only_codes_and_severities_rust_knows() {
         .map(|severity| wire(&json!(severity)))
         .collect();
     assert_eq!(found.severities, rust_severities);
+}
+
+/// The keys of a batch's context that don't start another session are the
+/// pytest executor's `BATCH_KEYS` (a set of the strings): a key the
+/// executor keeps out of its session key that Rust doesn't call neutral, or
+/// the other way round, would start a session per batch, or keep one across
+/// batches that differ. `selected_paths` is in neither: other paths start
+/// another session.
+#[test]
+fn the_session_neutral_keys_are_the_pytest_executors_batch_keys() {
+    let module = parse(&aye_adapter_pytest::native::NATIVE_MODULE);
+    let value = module
+        .body
+        .iter()
+        .find_map(|stmt| match stmt {
+            Stmt::Assign(assign)
+                if matches!(&assign.targets[..], [Expr::Name(target)] if target.id.as_str() == "BATCH_KEYS") =>
+            {
+                Some(&*assign.value)
+            }
+            _ => None,
+        })
+        .expect("BATCH_KEYS");
+    let call = value.as_call_expr().expect("frozenset({…})");
+    assert!(
+        matches!(&*call.func, Expr::Name(name) if name.id.as_str() == "frozenset"),
+        "BATCH_KEYS is a frozenset"
+    );
+    let set = call.arguments.args[0].as_set_expr().expect("a set");
+    let python: BTreeSet<&str> = set
+        .elts
+        .iter()
+        .map(|elt| literal(elt).expect("a string"))
+        .collect();
+    let rust: BTreeSet<&str> = context_keys::SESSION_NEUTRAL.into_iter().collect();
+    assert_eq!(python, rust);
+    assert_eq!(rust.len(), context_keys::SESSION_NEUTRAL.len());
+    assert!(!rust.contains(context_keys::SELECTED_PATHS));
 }
