@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use aye_events::{
-    Assertion, Diagnostic, Difference, Event, Failure, Frame, LifetimeId, Outcome, Phase, Previous,
-    Record, Reproduce, Resource, Side, TestId,
+    Assertion, Diagnostic, Difference, Event, Failure, Frame, FramePath, LifetimeId, Outcome,
+    Phase, Previous, Record, Reproduce, Resource, Side, TestId,
 };
 
 /// Characters of a value (an operand, a source, a resource) in [`why`].
@@ -380,11 +380,11 @@ pub(crate) enum FrameItem<'a> {
 pub(crate) fn frame_items(frames: &[Frame]) -> Vec<FrameItem<'_>> {
     let mut items: Vec<FrameItem<'_>> = Vec::new();
     for frame in frames {
-        if is_project_path(&frame.path) {
+        if frame.path.is_project() {
             items.push(FrameItem::Project(frame));
             continue;
         }
-        let package = package_of(&frame.path);
+        let package = package_of(frame.path.as_str());
         match items.last_mut() {
             Some(FrameItem::Others {
                 count,
@@ -429,7 +429,7 @@ pub(crate) fn pointed(failure: &Failure) -> Option<&Frame> {
         .frames
         .iter()
         .rev()
-        .find(|frame| frame.path == path && frame.line == line)
+        .find(|frame| frame.path == *path && frame.line == line)
 }
 
 /// The local variables a failure's innermost frame had.
@@ -884,44 +884,23 @@ impl LifetimeErrors {
     }
 }
 
-/// Paths inside the project are relative; the standard library,
-/// site-packages and generated code are not, nor are installed packages
-/// in an environment inside the project (a `site-packages` or
-/// `dist-packages` part).
-pub(crate) fn is_project_path(path: &str) -> bool {
-    !(path.is_empty()
-        || path.starts_with(['/', '\\', '<'])
-        || path == ".."
-        || path.starts_with("../")
-        || path.starts_with("..\\")
-        || path.as_bytes().get(1) == Some(&b':')
-        || path
-            .split(['/', '\\'])
-            .any(|part| matches!(part, "site-packages" | "dist-packages")))
-}
-
 /// Where to look: where the failure was raised when that is in the project,
 /// else the innermost project frame, else wherever it was raised.
-pub(crate) fn origin(failure: &Failure) -> Option<(&str, u32)> {
+pub(crate) fn origin(failure: &Failure) -> Option<(&FramePath, u32)> {
     let raised = failure
         .location
         .as_ref()
-        .map(|location| (location.path.as_str(), location.line))
-        .or_else(|| {
-            failure
-                .frames
-                .last()
-                .map(|frame| (frame.path.as_str(), frame.line))
-        });
-    if let Some(raised) = raised.filter(|(path, _)| is_project_path(path)) {
+        .map(|location| (&location.path, location.line))
+        .or_else(|| failure.frames.last().map(|frame| (&frame.path, frame.line)));
+    if let Some(raised) = raised.filter(|(path, _)| path.is_project()) {
         return Some(raised);
     }
     failure
         .frames
         .iter()
         .rev()
-        .find(|frame| is_project_path(&frame.path))
-        .map(|frame| (frame.path.as_str(), frame.line))
+        .find(|frame| frame.path.is_project())
+        .map(|frame| (&frame.path, frame.line))
         .or(raised)
 }
 
@@ -1031,20 +1010,6 @@ mod tests {
     }
 
     #[test]
-    fn project_paths_are_relative() {
-        assert!(is_project_path("tests/test_x.py"));
-        assert!(is_project_path("..hidden/x.py"));
-        assert!(!is_project_path("/usr/lib/python3.13/json/__init__.py"));
-        assert!(!is_project_path("../elsewhere/x.py"));
-        assert!(!is_project_path("C:\\Python\\lib\\x.py"));
-        assert!(!is_project_path("<string>"));
-        assert!(!is_project_path(
-            ".venv/lib/python3.13/site-packages/requests/api.py"
-        ));
-        assert!(!is_project_path("env\\Lib\\dist-packages\\x.py"));
-    }
-
-    #[test]
     fn frames_outside_the_project_are_grouped_by_package() {
         let frame = |path: &str| Frame {
             path: path.into(),
@@ -1064,7 +1029,7 @@ mod tests {
         let items: Vec<String> = frame_items(&frames)
             .into_iter()
             .map(|item| match item {
-                FrameItem::Project(frame) => frame.path.clone(),
+                FrameItem::Project(frame) => frame.path.to_string(),
                 FrameItem::Others { count, package } => others(count, &package),
             })
             .collect();

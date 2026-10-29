@@ -509,7 +509,7 @@ impl Junit {
             attr(&format!("{phase} of {lifetime}"))
         );
         if let Some((path, line)) = shared::origin(failure) {
-            xml.push_str(&self.location(path, Some(line)));
+            xml.push_str(&self.location(path.as_str(), Some(line)));
         }
         xml.push_str(" time=\"0.000\">\n");
         element(

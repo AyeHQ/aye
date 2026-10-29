@@ -331,6 +331,125 @@ impl<'de> Deserialize<'de> for DiagnosticPath {
     }
 }
 
+/// The file of a traceback frame, or of where an exception was raised: a
+/// path in the project, or a file outside it, which the frames of the
+/// standard library, of installed packages and of generated code are.
+///
+/// Read by today's rule, which renderers relied on to find the innermost
+/// project frame: a path is outside the project when it is empty, starts
+/// with `/`, `\` or `<` (`<string>`, `<frozen …>`), climbs out with `..`,
+/// has a drive (`C:\…`), or has a `site-packages` or `dist-packages` part
+/// (an environment inside the project). Either way it is kept as written,
+/// and writes back byte for byte.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum FramePath {
+    Project(ProjectPath),
+    External(Box<str>),
+}
+
+impl FramePath {
+    /// `path` as a worker wrote it, sorted by the rule above.
+    pub fn as_written(path: impl Into<Box<str>>) -> Self {
+        let path = path.into();
+        if is_external(&path) {
+            Self::External(path)
+        } else {
+            Self::Project(ProjectPath::as_written(path))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Project(path) => path.as_str(),
+            Self::External(path) => path,
+        }
+    }
+
+    /// Whether it is the project's own code.
+    pub fn is_project(&self) -> bool {
+        matches!(self, Self::Project(_))
+    }
+
+    /// The project's path, when it is one.
+    pub fn project(&self) -> Option<&ProjectPath> {
+        match self {
+            Self::Project(path) => Some(path),
+            Self::External(_) => None,
+        }
+    }
+}
+
+/// The empty path, which is no project's.
+impl Default for FramePath {
+    fn default() -> Self {
+        Self::External(Box::default())
+    }
+}
+
+impl From<ProjectPath> for FramePath {
+    fn from(path: ProjectPath) -> Self {
+        Self::as_written(path.0)
+    }
+}
+
+/// As [`FramePath::as_written`].
+impl From<&str> for FramePath {
+    fn from(path: &str) -> Self {
+        Self::as_written(path)
+    }
+}
+
+/// As [`FramePath::as_written`].
+impl From<String> for FramePath {
+    fn from(path: String) -> Self {
+        Self::as_written(path)
+    }
+}
+
+impl fmt::Display for FramePath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl PartialEq<str> for FramePath {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for FramePath {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl Serialize for FramePath {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// Never rejects, as [`FramePath::as_written`].
+impl<'de> Deserialize<'de> for FramePath {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Box::<str>::deserialize(deserializer).map(Self::as_written)
+    }
+}
+
+/// Whether a frame's `path` lies outside the project (see [`FramePath`]).
+fn is_external(path: &str) -> bool {
+    path.is_empty()
+        || path.starts_with(['/', '\\', '<'])
+        || path == ".."
+        || path.starts_with("../")
+        || path.starts_with("..\\")
+        || path.as_bytes().get(1) == Some(&b':')
+        || path
+            .split(['/', '\\'])
+            .any(|part| matches!(part, "site-packages" | "dist-packages"))
+}
+
 /// A file and a byte range in it. Separate from ids: failure locations,
 /// snapshots and the source rewriter all point at spans.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -347,7 +466,8 @@ pub struct Span {
 /// A file and a 1-based line, where only a line is known (traceback frames).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Location {
-    pub path: String,
+    /// Where the exception was raised: the project's, or outside it.
+    pub path: FramePath,
     pub line: u32,
 }
 
@@ -442,6 +562,35 @@ mod tests {
             assert_eq!(read, path, "{text}");
             assert_eq!(serde_json::to_string(&read).unwrap(), json);
             assert_eq!(read.as_str(), text);
+        }
+    }
+
+    #[test]
+    fn a_frame_is_the_projects_unless_its_path_says_otherwise() {
+        for path in ["tests/test_x.py", "..hidden/x.py", "t.py"] {
+            assert!(FramePath::as_written(path).is_project(), "{path}");
+        }
+        for path in [
+            "",
+            "/usr/lib/python3.13/json/__init__.py",
+            "../elsewhere/x.py",
+            "..",
+            "C:\\Python\\lib\\x.py",
+            "<string>",
+            "\\\\server\\x.py",
+            ".venv/lib/python3.13/site-packages/x.py",
+            "env\\Lib\\dist-packages\\x.py",
+        ] {
+            assert!(!FramePath::as_written(path).is_project(), "{path}");
+        }
+        for text in [
+            r#""tests/t.py""#,
+            r#""<frozen runpy>""#,
+            r#""C:\\x\\t.py""#,
+            r#""""#,
+        ] {
+            let path: FramePath = serde_json::from_str(text).unwrap();
+            assert_eq!(serde_json::to_string(&path).unwrap(), text);
         }
     }
 

@@ -1047,7 +1047,7 @@ fn library(id: &str) -> TestResult {
         library_frame(&format!("{site}/requests/adapters.py"), 700, "send"),
     ];
     failure.location = Some(Location {
-        path: format!("{site}/requests/adapters.py"),
+        path: format!("{site}/requests/adapters.py").into(),
         line: 700,
     });
     failure.signature = "sig-requests".into();

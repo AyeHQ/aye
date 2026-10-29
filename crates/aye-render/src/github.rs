@@ -111,9 +111,9 @@ impl<W: Write> GithubAnnotations<W> {
     fn locate(&self, failure: Option<&Failure>, id: &TestId) -> (Option<String>, Option<u32>) {
         if let Some((path, line)) = failure
             .and_then(shared::origin)
-            .filter(|(path, _)| shared::is_project_path(path))
+            .filter(|(path, _)| path.is_project())
         {
-            return (Some(path.to_owned()), Some(line));
+            return (Some(path.as_str().to_owned()), Some(line));
         }
         let line = self
             .lines
@@ -212,9 +212,9 @@ impl<W: Write> GithubAnnotations<W> {
         let (file, line) = match self.blocked.get(lifetime) {
             Some((first, _)) => self.locate(Some(failure), first),
             None => shared::origin(failure)
-                .filter(|(path, _)| shared::is_project_path(path))
+                .filter(|(path, _)| path.is_project())
                 .map_or((None, None), |(path, line)| {
-                    (Some(path.to_owned()), Some(line))
+                    (Some(path.as_str().to_owned()), Some(line))
                 }),
         };
         let phase = match failure.phase {

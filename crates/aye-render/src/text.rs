@@ -1182,7 +1182,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             let why = shared::why(failure, bad.test);
             write!(self.out, "{indent}{why}")?;
             if let Some((path, line)) = shared::origin(failure) {
-                write!(self.out, " at {}", self.location(path, line))?;
+                write!(self.out, " at {}", self.location(path.as_str(), line))?;
             }
             writeln!(self.out)?;
         } else {
@@ -1298,7 +1298,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         let Some((path, line)) = shared::origin(failure) else {
             return Ok(());
         };
-        writeln!(self.out, "  {}", self.location(path, line))?;
+        writeln!(self.out, "  {}", self.location(path.as_str(), line))?;
         let Some(frame) = shared::pointed(failure) else {
             return Ok(());
         };
@@ -1590,7 +1590,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         for item in shared::frame_items(frames) {
             match item {
                 shared::FrameItem::Project(frame) => {
-                    let mut line = self.location(&frame.path, frame.line);
+                    let mut line = self.location(frame.path.as_str(), frame.line);
                     if let Some(function) = &frame.function {
                         line = format!("{line} {DIM}in {function}{DIM:#}");
                     }

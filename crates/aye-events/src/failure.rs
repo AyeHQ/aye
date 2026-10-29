@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::outcome::Phase;
-use crate::path::Location;
+use crate::path::{FramePath, Location};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Failure {
@@ -110,7 +110,8 @@ pub struct Difference {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Frame {
-    pub path: String,
+    /// The frame's file: the project's, or outside it.
+    pub path: FramePath,
     pub line: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub function: Option<String>,
