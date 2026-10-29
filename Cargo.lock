@@ -299,6 +299,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "aye-static"
+version = "0.0.1"
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
