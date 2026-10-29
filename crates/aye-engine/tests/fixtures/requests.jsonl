@@ -1,0 +1,8 @@
+{"type":"hello","protocol":3,"root":"/project","modules":[{"name":"aye_engine","source":"\"\"\"aye's engine.\"\"\"\n\nPROTOCOL = 3\n"},{"name":"pytest","source":"__version__ = \"9.1.1\"\n\tx = '\\u00e9té'\n"}],"executors":[{"adapter":"pytest","entry":"aye_pytest_native:NativeExecutor","lists_session":true},{"adapter":"unittest","entry":"aye_engine_unittest:UnittestExecutor"}],"services":["context","cleanup"]}
+{"type":"hello","protocol":3,"root":"/project","modules":[],"executors":[],"services":[]}
+{"type":"refine","adapter":"pytest","files":["tests/test_dynamic.py","tests/conftest.py"],"context":{"ini":{"addopts":"-q","python_files":["test_*.py"]},"inifile":null,"maxfail":2,"ratio":0.5,"requested_ids":["tests/test_dynamic.py::test_x[1]"],"rerun_args":["-c","pytest.ini"],"rootdir":"/project","strict":true}}
+{"type":"refine","adapter":"pytest","files":["tests/test_dynamic.py"],"context":null,"digests_only":true}
+{"type":"run","id":3,"adapter":"pytest","ids":["tests/t.py::test_x","tests/t.py::TestY::test_z[a-1]"],"policy":{"maxfail":1,"capture":false,"verbosity":-2,"timeout":30.5,"keyword":"login and not slow","tags":"smoke","framework_args":["--reuse-db","-p","no:cacheprovider"]},"context":{"ran_ids":["tests/t.py::test_w"],"rootdir":"/project"},"ends_session":true}
+{"type":"run","id":0,"adapter":"doctest","ids":[],"policy":{"capture":true,"verbosity":0},"context":null}
+{"type":"run","id":4,"adapter":"unittest","ids":["tests/test_a.py::TestA::test_b"],"policy":{"capture":true,"verbosity":3},"context":{}}
+{"type":"shutdown"}

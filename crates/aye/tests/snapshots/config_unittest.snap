@@ -1,0 +1,32 @@
+---
+source: crates/aye/tests/snapshots.rs
+info:
+  program: aye
+  args:
+    - config
+    - "--python"
+    - "[PYTHON]"
+  env:
+    COLUMNS: "120"
+    NO_COLOR: "1"
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+---
+success: true
+exit_code: 0
+----- stdout -----
+root     [ROOT]
+python   [PYTHON]  (--python)
+workers  1
+output   text  (default)
+adapters unittest  (from [tool.aye] adapters)
+engine   native
+
+[tool.aye]
+  adapters = unittest    # pyproject.toml [tool.aye]
+
+[unittest]
+  start-directory = tests    # pyproject.toml [tool.aye.unittest]
+  pattern = test*.py    # default
+  top-level-directory = .    # pyproject.toml [tool.aye.unittest]
+
+----- stderr -----
