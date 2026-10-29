@@ -1,0 +1,106 @@
+//! Identities: of a test, its key, and the aliases for environments,
+//! lifetimes, workers and batches.
+
+use serde::{Deserialize, Serialize};
+
+/// The canonical path id of a test. Deliberately has no line number.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TestId(pub String);
+
+impl TestId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The file part of the id, relative to the project root.
+    pub fn path(&self) -> &str {
+        self.0
+            .split_once("::")
+            .map_or(self.0.as_str(), |(path, _)| path)
+    }
+
+    /// The id without its parameter id: `t.py::test_x[1]` → `t.py::test_x`.
+    pub fn without_params(&self) -> &str {
+        match self.0.find('[') {
+            Some(at) if self.0.ends_with(']') && self.0[..at].contains("::") => &self.0[..at],
+            _ => &self.0,
+        }
+    }
+
+    pub fn key(&self) -> TestKey {
+        TestKey::of(&self.0)
+    }
+}
+
+impl std::fmt::Display for TestId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A short, stable key for a test: the FNV-1a 64 hash of its id, mixed
+/// (`SplitMix64`'s finalizer) so that every digit depends on every byte. A
+/// key is shown by its first digits, and FNV-1a alone leaves the leading
+/// ones unchanged by the last bytes: `test_0` and `test_1` would share them.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TestKey(pub String);
+
+impl TestKey {
+    pub fn of(id: &str) -> Self {
+        const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+        const PRIME: u64 = 0x0100_0000_01b3;
+        let mut hash = id
+            .bytes()
+            .fold(OFFSET, |h, b| (h ^ u64::from(b)).wrapping_mul(PRIME));
+        hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        hash ^= hash >> 31;
+        Self(format!("{hash:016x}"))
+    }
+}
+
+/// Identifies one environment (interpreter plus dependencies) within a run.
+pub type EnvironmentId = String;
+/// Identifies one lifetime within a run, e.g. `class:tests/t.py::TestX`.
+pub type LifetimeId = String;
+/// Dense worker index within a run, from 0.
+pub type WorkerId = u32;
+/// Dense batch index within a run, from 0.
+pub type BatchId = u32;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ids_split_into_path_and_params() {
+        let id = TestId::new("tests/t.py::TestX::test_y[a-1]");
+        assert_eq!(id.path(), "tests/t.py");
+        assert_eq!(id.without_params(), "tests/t.py::TestX::test_y");
+        assert_eq!(TestId::new("tests/t.py").without_params(), "tests/t.py");
+        assert_eq!(
+            TestId::new("tests/t[1].py::test_x").without_params(),
+            "tests/t[1].py::test_x"
+        );
+    }
+
+    #[test]
+    fn keys_are_stable_hashes() {
+        // FNV-1a 64 of "" and "a" (cbf29ce484222325, af63dc4c8601ec8c), mixed.
+        assert_eq!(TestKey::of("").0, "f52a15e9a9b5e89b");
+        assert_eq!(TestKey::of("a").0, "02c0bdbf481420f8");
+        // Ids that differ in their last byte differ from the first digit.
+        assert_eq!(&TestKey::of("tests/test_k.py::test_0").0[..5], "25ece");
+        assert_eq!(&TestKey::of("tests/test_k.py::test_1").0[..5], "23ea0");
+        assert_eq!(
+            TestId::new("t.py::test_x").key(),
+            TestKey::of("t.py::test_x")
+        );
+    }
+}

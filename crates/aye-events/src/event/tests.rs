@@ -1,6 +1,7 @@
+use std::collections::BTreeMap;
 use std::time::Duration;
 
-use super::*;
+use crate::*;
 
 fn round_trip(record: &Record) -> Record {
     let line = serde_json::to_string(record).unwrap();
@@ -237,48 +238,6 @@ fn properties_and_the_bodys_duration_are_optional_on_the_wire() {
         serde_json::to_string(&record).unwrap(),
         r#"{"event":"test_finished","id":"t.py::test_x","outcome":"passed","duration_ms":2.5}"#
     );
-}
-
-#[test]
-fn ids_split_into_path_and_params() {
-    let id = TestId::new("tests/t.py::TestX::test_y[a-1]");
-    assert_eq!(id.path(), "tests/t.py");
-    assert_eq!(id.without_params(), "tests/t.py::TestX::test_y");
-    assert_eq!(TestId::new("tests/t.py").without_params(), "tests/t.py");
-    assert_eq!(
-        TestId::new("tests/t[1].py::test_x").without_params(),
-        "tests/t[1].py::test_x"
-    );
-}
-
-#[test]
-fn keys_are_stable_hashes() {
-    // FNV-1a 64 of "" and "a" (cbf29ce484222325, af63dc4c8601ec8c), mixed.
-    assert_eq!(TestKey::of("").0, "f52a15e9a9b5e89b");
-    assert_eq!(TestKey::of("a").0, "02c0bdbf481420f8");
-    // Ids that differ in their last byte differ from the first digit.
-    assert_eq!(&TestKey::of("tests/test_k.py::test_0").0[..5], "25ece");
-    assert_eq!(&TestKey::of("tests/test_k.py::test_1").0[..5], "23ea0");
-    assert_eq!(
-        TestId::new("t.py::test_x").key(),
-        TestKey::of("t.py::test_x")
-    );
-}
-
-#[test]
-fn counts_fold_outcomes() {
-    let mut counts = Counts::default();
-    for outcome in [
-        Outcome::Passed,
-        Outcome::Failed,
-        Outcome::Error,
-        Outcome::Skipped,
-    ] {
-        counts.record(outcome);
-    }
-    assert_eq!(counts.total(), 4);
-    assert_eq!(counts.bad(), 2);
-    assert!(Outcome::Error.severity() > Outcome::Failed.severity());
 }
 
 #[test]
