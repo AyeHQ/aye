@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use aye_events::{
-    Assertion, Diagnostic, Difference, Event, Failure, Frame, FramePath, LifetimeId, Local,
-    Outcome, Phase, Previous, Record, Reproduce, Resource, Side, TestId,
+    Assertion, ComparisonOp, Diagnostic, Difference, Event, Failure, Frame, FramePath, LifetimeId,
+    Local, Outcome, Phase, Previous, Record, Reproduce, Resource, Side, TestId,
 };
 
 /// Characters of a value (an operand, a source, a resource) in [`why`].
@@ -80,7 +80,7 @@ fn why_line(failure: &Failure, test: bool) -> String {
                 _ if !compare.summary.is_empty() => return several(compare),
                 _ => {}
             },
-            None if assertion.op == "==" && assertion.expected.is_some() => {
+            None if assertion.op == ComparisonOp::Eq && assertion.expected.is_some() => {
                 let (expected, actual) = whole(assertion);
                 return format!(
                     "expected {}, actual {}",
@@ -204,7 +204,7 @@ pub(crate) fn own_message<'a>(failure: &'a Failure, assertion: &Assertion) -> Op
     {
         return None;
     }
-    if assertion.op == "==" && message.contains(" != ") {
+    if assertion.op == ComparisonOp::Eq && message.contains(" != ") {
         return message
             .split_once(" : ")
             .map(|(_, own)| own.trim())

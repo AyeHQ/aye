@@ -594,7 +594,7 @@ fn compare_line<'a>(
         .unwrap_or(u32::MAX)
         .saturating_add(compare.omitted);
     CompareLine {
-        kind: shared::head(&compare.kind, VALUE_MAX),
+        kind: shared::head(compare.kind.as_str(), VALUE_MAX),
         summary: shared::head(&compare.summary, SUMMARY_MAX),
         same: compare.same,
         differs,

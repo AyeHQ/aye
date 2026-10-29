@@ -144,9 +144,9 @@ use anstream::AutoStream;
 use anstream::stream::{AsLockedWrite, RawStream};
 use anstyle::{AnsiColor, Style};
 use aye_events::{
-    Assertion, Captured, Certainty, Columns, Compare, Counts, Diagnostic, DiagnosticCode, Event,
-    ExitCode, Failure, Frame, LifetimeId, Local, Outcome, Phase, Record, RunNumber, Severity,
-    StopReason, TestId, TestResult, WorkerIndex,
+    Assertion, Captured, Certainty, Columns, Compare, CompareKind, Counts, Diagnostic,
+    DiagnosticCode, Event, ExitCode, Failure, Frame, LifetimeId, Local, Outcome, Phase, Record,
+    RunNumber, Severity, StopReason, TestId, TestResult, WorkerIndex,
 };
 
 use crate::tally::{self, Noted, Tally, Tone};
@@ -1482,14 +1482,14 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         compare: &Compare,
         level: Level,
     ) -> io::Result<()> {
-        let text = matches!(compare.kind.as_str(), "str" | "bytes");
+        let text = compare.kind.is_text();
         let first_at = compare
             .differs
             .first()
             .and_then(|difference| difference.at.as_deref());
         let summary = match first_at {
             Some(at) if text && compare.differs.len() == 1 => {
-                let what = if compare.kind == "bytes" {
+                let what = if compare.kind == CompareKind::Bytes {
                     "bytes"
                 } else {
                     "strings"

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::outcome::Phase;
 use crate::path::{FramePath, Location};
+use crate::serde_ext::string_enum;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Failure {
@@ -42,7 +43,8 @@ pub struct Failure {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Assertion {
-    pub op: String,
+    /// How the operands were compared.
+    pub op: ComparisonOp,
     pub left: String,
     pub right: String,
     /// Explanation lines (the diff), without the leading assertion line.
@@ -64,6 +66,39 @@ pub struct Assertion {
     pub compare: Option<Compare>,
 }
 
+string_enum! {
+    /// How an assertion compared its operands: an operator of a rewritten
+    /// `assert` (the rewriter's `_COMPARISONS`, `aye_rewrite.py`), or the
+    /// comparison a unittest `assert*` method makes (the unittest adapter's
+    /// `_COMPARISONS`). One this aye doesn't know reads as
+    /// [`ComparisonOp::Other`].
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub enum ComparisonOp {
+        Eq = "==",
+        NotEq = "!=",
+        Lt = "<",
+        LtE = "<=",
+        Gt = ">",
+        GtE = ">=",
+        Is = "is",
+        IsNot = "is not",
+        In = "in",
+        NotIn = "not in",
+        /// unittest's `assertIsInstance`.
+        IsInstance = "isinstance",
+        /// unittest's `assertNotIsInstance`.
+        NotIsInstance = "not isinstance",
+    }
+}
+
+/// The empty operator, which names no comparison: a default
+/// [`Assertion`]'s.
+impl Default for ComparisonOp {
+    fn default() -> Self {
+        Self::Other(Box::default())
+    }
+}
+
 /// One operand of a comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -75,9 +110,8 @@ pub enum Side {
 /// How two compared values differ, entry by entry.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Compare {
-    /// What was compared: `dict`, `list`, `tuple`, `set`, `str`, `bytes`,
-    /// `dataclass`, `namedtuple`, `datetime`, `number`, or a type's name.
-    pub kind: String,
+    /// What was compared.
+    pub kind: CompareKind,
     /// One line saying how they differ, e.g. `dict differs in 1 of 2 keys`.
     pub summary: String,
     /// Entries (keys, items, fields) that are the same.
@@ -89,6 +123,51 @@ pub struct Compare {
     /// Differing entries left out of `differs`.
     #[serde(default, skip_serializing_if = "crate::serde_ext::is_zero_u32")]
     pub omitted: u32,
+}
+
+string_enum! {
+    /// What kind of values a [`Compare`] compared: one of the kinds
+    /// `aye_engine.compare` knows (its `_COMPARERS`, `aye_engine.py`), both
+    /// operands being of it. One this aye doesn't know reads as
+    /// [`CompareKind::Other`].
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub enum CompareKind {
+        /// Two mappings (any `Mapping`).
+        Dict = "dict",
+        List = "list",
+        /// A tuple, or a namedtuple compared with another tuple or another
+        /// type's namedtuple.
+        Tuple = "tuple",
+        /// Two sets (any `AbstractSet`).
+        Set = "set",
+        /// Two dataclasses of one type.
+        Dataclass = "dataclass",
+        /// Two namedtuples of one type.
+        Namedtuple = "namedtuple",
+        Str = "str",
+        /// `bytes` or `bytearray`.
+        Bytes = "bytes",
+        Datetime = "datetime",
+        Date = "date",
+        Time = "time",
+        /// Two numbers (`numbers.Number`), `bool`s aside.
+        Number = "number",
+    }
+}
+
+impl CompareKind {
+    /// Whether the values were text, `str` or `bytes`, which differ at a
+    /// position rather than by entries.
+    pub const fn is_text(&self) -> bool {
+        matches!(self, Self::Str | Self::Bytes)
+    }
+}
+
+/// The empty kind, which names none: a default [`Compare`]'s.
+impl Default for CompareKind {
+    fn default() -> Self {
+        Self::Other(Box::default())
+    }
 }
 
 /// One entry that differs between two compared values.
@@ -175,5 +254,70 @@ impl From<(String, String)> for Local {
 impl From<Local> for (String, String) {
     fn from(local: Local) -> Self {
         (local.name, local.value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each operator and kind is written as Python writes it, and one this
+    /// aye doesn't know reads back as it was.
+    #[test]
+    fn operators_and_kinds_are_spelled_as_python_spells_them() {
+        let ops: Vec<&str> = ComparisonOp::ALL.iter().map(ComparisonOp::as_str).collect();
+        assert_eq!(
+            ops,
+            [
+                "==",
+                "!=",
+                "<",
+                "<=",
+                ">",
+                ">=",
+                "is",
+                "is not",
+                "in",
+                "not in",
+                "isinstance",
+                "not isinstance"
+            ]
+        );
+        let kinds: Vec<&str> = CompareKind::ALL.iter().map(CompareKind::as_str).collect();
+        assert_eq!(
+            kinds,
+            [
+                "dict",
+                "list",
+                "tuple",
+                "set",
+                "dataclass",
+                "namedtuple",
+                "str",
+                "bytes",
+                "datetime",
+                "date",
+                "time",
+                "number"
+            ]
+        );
+        for text in ["is not", "~=", ""] {
+            let op: ComparisonOp = serde_json::from_str(&format!("\"{text}\"")).unwrap();
+            assert_eq!(serde_json::to_string(&op).unwrap(), format!("\"{text}\""));
+        }
+        assert_eq!(ComparisonOp::from("~="), ComparisonOp::Other("~=".into()));
+        assert_eq!(
+            CompareKind::from("Decimal"),
+            CompareKind::Other("Decimal".into())
+        );
+        assert_eq!(Assertion::default().op.as_str(), "");
+        assert_eq!(Compare::default().kind.as_str(), "");
+    }
+
+    #[test]
+    fn only_strings_and_bytes_are_text() {
+        let text: Vec<&CompareKind> = CompareKind::ALL.iter().filter(|k| k.is_text()).collect();
+        assert_eq!(text, [&CompareKind::Str, &CompareKind::Bytes]);
+        assert!(!CompareKind::from("text").is_text());
     }
 }

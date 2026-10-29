@@ -52,7 +52,9 @@ pub use diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticOrigin, ErrorClass, Severity, SummaryKind,
 };
 pub use event::{Envelope, Event, Record};
-pub use failure::{Assertion, Columns, Compare, Difference, Failure, Frame, Local, Side};
+pub use failure::{
+    Assertion, Columns, Compare, CompareKind, ComparisonOp, Difference, Failure, Frame, Local, Side,
+};
 pub use id::{AdapterName, InvalidKey, KeyPrefix, TestId, TestIdParts, TestKey};
 pub use lifetime::{LifetimeId, Scope};
 pub use outcome::{ExitCode, FrameworkStatus, Outcome, OutcomeTrail, Phase, StopReason};

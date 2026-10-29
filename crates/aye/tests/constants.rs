@@ -1,17 +1,20 @@
 //! The constants Python and Rust must agree on, read from the Python aye
 //! embeds (parsed, not run): the outcomes and their severities, the
 //! phases, the scopes, the frameworks' statuses, the service names and the
-//! services the engine provides itself, the protocol version, and the
-//! diagnostic codes and severities Python emits. Each is written once on
-//! each side, and a difference is a value one side sends that the other
-//! misreads or drops.
+//! services the engine provides itself, the protocol version, the
+//! comparisons an assertion makes and the kinds a comparison tells apart,
+//! and the diagnostic codes and severities Python emits. Each is written
+//! once on each side, and a difference is a value one side sends that the
+//! other misreads or drops.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use aye_engine::ast::visitor::{self, Visitor};
-use aye_engine::ast::{Expr, ModModule, Stmt};
+use aye_engine::ast::{DictItem, Expr, ModModule, Stmt};
 use aye_engine::{EmbeddedModule, PROTOCOL_VERSION, services};
-use aye_events::{DiagnosticCode, FrameworkStatus, Outcome, Phase, Scope, Severity};
+use aye_events::{
+    CompareKind, ComparisonOp, DiagnosticCode, FrameworkStatus, Outcome, Phase, Scope, Severity,
+};
 use serde_json::{Value, json};
 
 /// Every Python module aye embeds, once each: the engine's, each adapter's,
@@ -64,6 +67,31 @@ fn module_int(module: &ModModule, name: &str) -> Option<u64> {
         }
         _ => None,
     })
+}
+
+/// The items of the module-level dict `name = {…}` (or `name: T = {…}`),
+/// in order.
+fn module_dict<'m>(module: &'m ModModule, name: &str) -> &'m [DictItem] {
+    module
+        .body
+        .iter()
+        .find_map(|stmt| {
+            let (target, value) = match stmt {
+                Stmt::Assign(assign) => (&assign.targets[..], &*assign.value),
+                Stmt::AnnAssign(assign) => (
+                    std::slice::from_ref(&*assign.target),
+                    assign.value.as_deref()?,
+                ),
+                _ => return None,
+            };
+            match (target, value) {
+                ([Expr::Name(target)], Expr::Dict(dict)) if target.id.as_str() == name => {
+                    Some(&dict.items[..])
+                }
+                _ => None,
+            }
+        })
+        .unwrap_or_else(|| panic!("no dict {name}"))
 }
 
 /// The `NAME = <value>` assignments in the body of the class `name` whose
@@ -314,6 +342,48 @@ fn the_engine_and_the_worker_speak_the_runners_protocol() {
         module_int(&parse(&worker), "PROTOCOL"),
         Some(u64::from(PROTOCOL_VERSION))
     );
+}
+
+/// The operators of a rewritten `assert` (the rewriter's `_COMPARISONS`)
+/// are the first `ComparisonOp`s, in order, and with those of unittest's
+/// `assert*` methods (the unittest adapter's `_COMPARISONS`, each the first
+/// of its tuple) they are all of them. The kinds `aye_engine.compare` tells
+/// apart (its `_COMPARERS`) are `CompareKind`'s, in order.
+#[test]
+fn comparisons_are_the_same_on_both_sides() {
+    let module = |name: &str| {
+        let module = embedded().into_iter().find(|m| m.name == name).unwrap();
+        parse(&module)
+    };
+    let rewriter = parse(&aye_engine::REWRITE_MODULE);
+    let rewriter: Vec<&str> = module_dict(&rewriter, "_COMPARISONS")
+        .iter()
+        .map(|item| literal(&item.value).unwrap())
+        .collect();
+    let unittest = module("aye_engine_unittest");
+    let unittest: BTreeSet<&str> = module_dict(&unittest, "_COMPARISONS")
+        .iter()
+        .map(|item| {
+            let tuple = item.value.as_tuple_expr().unwrap();
+            literal(&tuple.elts[0]).unwrap()
+        })
+        .collect();
+    let known: Vec<&str> = ComparisonOp::ALL.iter().map(ComparisonOp::as_str).collect();
+    assert_eq!(rewriter, known[..rewriter.len()]);
+    let mut python: BTreeSet<&str> = rewriter.iter().copied().collect();
+    python.extend(&unittest);
+    assert_eq!(
+        python,
+        known.iter().copied().collect(),
+        "unittest: {unittest:?}"
+    );
+    let engine = engine();
+    let kinds: Vec<&str> = module_dict(&engine, "_COMPARERS")
+        .iter()
+        .map(|item| literal(item.key.as_ref().unwrap()).unwrap())
+        .collect();
+    let rust: Vec<&str> = CompareKind::ALL.iter().map(CompareKind::as_str).collect();
+    assert_eq!(kinds, rust);
 }
 
 /// The diagnostics a module builds: a call whose first two arguments are a
