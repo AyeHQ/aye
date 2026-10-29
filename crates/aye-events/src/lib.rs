@@ -1,7 +1,10 @@
 //! The wire types. Everything that crosses a process boundary or an engine
 //! boundary is defined here and nowhere else: events, outcomes, structured
 //! failures, captured output, the collected `Case` with its tags, requirements,
-//! affinity keys and certainty, run metadata, and the schema version.
+//! affinity keys and certainty, run metadata, and the schema version; and the
+//! identities and paths they hold, each taken apart in one place: the test id
+//! and its parts, its key, the project-relative path, and what a diagnostic
+//! and a frame point at.
 //!
 //! A run is its event log: summaries, history rows, run diffs and every
 //! renderer are folds over it. Events are self-contained and bounded, and

@@ -1,5 +1,5 @@
-//! Paths and places in the project's files: the project-relative path,
-//! spans and locations.
+//! Paths and places: the project-relative path, what a diagnostic and a
+//! frame point at, spans, locations and lines.
 
 use std::borrow::Borrow;
 use std::fmt;
