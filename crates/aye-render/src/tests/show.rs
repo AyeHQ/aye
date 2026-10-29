@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use aye_events::{Counts, Event, ExitCode, Outcome, Record, TestId, TestKey};
+use aye_events::{Counts, Event, ExitCode, Outcome, ProjectPath, Record, TestId, TestKey};
 
 use super::{feed, lines, streams};
 use crate::{
@@ -201,7 +201,9 @@ fn details_say_where_the_run_was_and_whether_the_file_changed() {
         "{out}"
     );
     let mut changed = context();
-    changed.stale.insert("tests/test_cart.py".into(), false);
+    changed
+        .stale
+        .insert(ProjectPath::new("tests/test_cart.py").unwrap(), false);
     let out = text_with(
         &part,
         1,
@@ -209,7 +211,9 @@ fn details_say_where_the_run_was_and_whether_the_file_changed() {
         changed.clone(),
     );
     assert!(out.contains(" · file changed since\n"), "{out}");
-    changed.stale.insert("tests/test_cart.py".into(), true);
+    changed
+        .stale
+        .insert(ProjectPath::new("tests/test_cart.py").unwrap(), true);
     let out = text_with(
         &part,
         1,

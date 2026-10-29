@@ -46,9 +46,10 @@ fn ago_says_how_long_since_the_run_finished() {
 fn the_renderers_are_told_the_runs_number_age_and_stale_files() {
     let mut stored = meta("r81");
     stored.finished_ms = 1_792_091_602_130;
+    let path = |path: &str| ProjectPath::new(path).unwrap();
     let stale = [
-        ("tests/test_a.py".to_owned(), Change::Edited),
-        ("tests/test_b.py".to_owned(), Change::Gone),
+        (path("tests/test_a.py"), Change::Edited),
+        (path("tests/test_b.py"), Change::Gone),
     ];
     let told = context(&stored, &stale, stored.finished_ms + 120_000);
     assert_eq!(told.run, Some(81));
@@ -56,8 +57,8 @@ fn the_renderers_are_told_the_runs_number_age_and_stale_files() {
     assert_eq!(
         told.stale,
         std::collections::BTreeMap::from([
-            ("tests/test_a.py".to_owned(), false),
-            ("tests/test_b.py".to_owned(), true)
+            (path("tests/test_a.py"), false),
+            (path("tests/test_b.py"), true)
         ])
     );
     // A run stored under a hex id has no number; one with no finishing

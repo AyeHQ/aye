@@ -51,8 +51,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aye_config::AyeConfig;
 use aye_events::{
-    Case, Certainty, Counts, Diagnostic, Event, ExitCode, LifetimeId, Outcome, Record, Severity,
-    TestId, TestResult,
+    Case, Certainty, Counts, Diagnostic, Event, ExitCode, LifetimeId, Outcome, ProjectPath, Record,
+    Severity, TestId, TestResult,
 };
 use aye_history::{Change, RunMeta, RunStore};
 use aye_render::{
@@ -219,14 +219,14 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
             )
             .for_show(mode, keys, context);
             for (path, change) in &stale {
-                text.stale(path, *change == Change::Gone)?;
+                text.stale(path.as_str(), *change == Change::Gone)?;
             }
             Box::new(text)
         }
         Output::Json => {
             let mut json = JsonLines::new(io::stdout(), verbosity).for_show(mode, keys, context);
             for (path, change) in &stale {
-                json.stale(path, *change == Change::Gone)?;
+                json.stale(path.as_str(), *change == Change::Gone)?;
             }
             Box::new(json)
         }
@@ -921,13 +921,13 @@ fn feed(
 
 /// The files of the results shown that changed since the run, each once,
 /// in the order their results come.
-fn stale(meta: &RunMeta, root: &Path, shown: &[&Item<'_>]) -> Vec<(String, Change)> {
+fn stale(meta: &RunMeta, root: &Path, shown: &[&Item<'_>]) -> Vec<(ProjectPath, Change)> {
     let mut seen = HashSet::new();
     shown
         .iter()
-        .map(|item| item.name.path().as_str())
-        .filter(|path| !path.is_empty() && seen.insert(*path))
-        .filter_map(|path| Some((path.to_owned(), meta.change(root, path)?)))
+        .map(|item| item.name.path())
+        .filter(|path| !path.as_str().is_empty() && seen.insert(*path))
+        .filter_map(|path| Some((path.to_project_path(), meta.change(root, path.as_str())?)))
         .collect()
 }
 
@@ -935,7 +935,7 @@ fn stale(meta: &RunMeta, root: &Path, shown: &[&Item<'_>]) -> Vec<(String, Chang
 /// `now_ms`: its number, how long ago it finished, and the files of the
 /// results shown that changed since (`stale`), each with whether it is
 /// gone.
-fn context(meta: &RunMeta, stale: &[(String, Change)], now_ms: u64) -> ShowContext {
+fn context(meta: &RunMeta, stale: &[(ProjectPath, Change)], now_ms: u64) -> ShowContext {
     ShowContext {
         run: meta.number(),
         ago: (meta.finished_ms > 0).then(|| ago(now_ms, meta.finished_ms)),

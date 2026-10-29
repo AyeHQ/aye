@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use aye_events::{Event, Record, TestKey};
+use aye_events::{Event, ProjectPath, Record, TestKey};
 
 /// The fewest hex digits in a key.
 pub(crate) const MIN: usize = 5;
@@ -141,7 +141,7 @@ pub struct ShowContext {
     pub ago: Option<String>,
     /// The files, as ids spell them, that changed since the run, each with
     /// whether it is gone.
-    pub stale: BTreeMap<String, bool>,
+    pub stale: BTreeMap<ProjectPath, bool>,
 }
 
 #[cfg(test)]

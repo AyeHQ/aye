@@ -57,7 +57,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use aye_events::{Counts, Event, ExitCode, Record, Severity};
+use aye_events::{Counts, Event, ExitCode, ProjectPath, Record, Severity};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -121,7 +121,7 @@ pub struct RunMeta {
     /// it, and the digest of its content ([`digest`]) when collection
     /// finished. A file that couldn't be read (a directory) is left out.
     #[serde(default)]
-    pub files: BTreeMap<String, String>,
+    pub files: BTreeMap<ProjectPath, String>,
 }
 
 /// How a file differs from what a stored run read.
@@ -217,11 +217,11 @@ struct Run {
     /// Records serialized, not yet handed to the thread.
     lines: Vec<u8>,
     sender: Option<mpsc::Sender<Chunk>>,
-    thread: thread::JoinHandle<io::Result<BTreeMap<String, String>>>,
+    thread: thread::JoinHandle<io::Result<BTreeMap<ProjectPath, String>>>,
     meta: RunMeta,
     /// The files of the tests collected so far, each once.
-    files: Vec<String>,
-    seen: HashSet<String>,
+    files: Vec<ProjectPath>,
+    seen: HashSet<ProjectPath>,
     /// Whether the run has something to show (see the module's docs).
     worth: bool,
 }
@@ -230,9 +230,8 @@ struct Run {
 enum Chunk {
     /// Serialized records, one per line.
     Lines(Vec<u8>),
-    /// Collection finished: the digests of these files, relative to the
-    /// root.
-    Digests(Vec<String>),
+    /// Collection finished: the digests of these files.
+    Digests(Vec<ProjectPath>),
 }
 
 /// How much serialized log is handed to the thread at once.
@@ -468,8 +467,9 @@ impl Run {
     /// A file whose digest the summary keeps, once.
     fn file(&mut self, path: &str) {
         if !path.is_empty() && !self.seen.contains(path) {
-            self.seen.insert(path.to_string());
-            self.files.push(path.to_string());
+            let path = ProjectPath::as_written(path);
+            self.seen.insert(path.clone());
+            self.files.push(path);
         }
     }
 
@@ -534,7 +534,7 @@ fn write_log(
     path: &Path,
     root: &Path,
     chunks: &mpsc::Receiver<Chunk>,
-) -> io::Result<BTreeMap<String, String>> {
+) -> io::Result<BTreeMap<ProjectPath, String>> {
     let mut digests = BTreeMap::new();
     let written = (|| {
         let mut out = GzEncoder::new(file, Compression::fast());
@@ -543,7 +543,7 @@ fn write_log(
                 Chunk::Lines(lines) => out.write_all(&lines)?,
                 Chunk::Digests(files) => {
                     for file in files {
-                        if let Ok(bytes) = fs::read(root.join(&file)) {
+                        if let Ok(bytes) = fs::read(root.join(file.as_str())) {
                             digests.insert(file, digest(&bytes));
                         }
                     }
