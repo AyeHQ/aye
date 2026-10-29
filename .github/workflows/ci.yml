@@ -24,6 +24,25 @@ jobs:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
       - run: make lint
+      # release-please bumps each crate's version in Cargo.lock through an
+      # entry of its own, and every release build is --locked: a workspace
+      # member without one would fail the release.
+      - name: Every workspace member has a release-please entry
+        run: |
+          cargo metadata --no-deps --format-version 1 --locked | python3 -c '
+          import ast, json, sys
+          members = sorted(package["name"] for package in json.load(sys.stdin)["packages"])
+          with open("release-please-config.json") as config:
+              files = json.load(config)["packages"]["."]["extra-files"]
+          listed = {
+              ast.literal_eval(entry["jsonpath"].split("== ")[1].split(")")[0])
+              for entry in files
+              if isinstance(entry, dict) and entry["path"] == "Cargo.lock"
+          }
+          missing = [name for name in members if name not in listed]
+          if missing:
+              sys.exit("no release-please entry for " + ", ".join(missing))
+          '
 
   msrv:
     runs-on: ubuntu-latest
