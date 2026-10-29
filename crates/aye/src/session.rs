@@ -15,7 +15,8 @@ use aye_config::AyeConfig;
 use aye_engine::{Adapter, Policy, Project, Refiner};
 use aye_events::{
     AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event,
-    ExitCode, ProjectPath, Record, RunId, SCHEMA_VERSION, Severity, Stamper, StopReason, TestId,
+    ExitCode, ProjectPath, Record, RerunCommand, RunId, SCHEMA_VERSION, Severity, Stamper,
+    StopReason, TestId,
 };
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter, StoredRunId};
@@ -777,24 +778,19 @@ impl Here<'_> {
         };
         match &mut result.reproduce {
             Some(reproduce) => {
-                // `aye [aye's options] <id> [-- <the framework's>]`.
-                let command = &mut reproduce.command;
-                let options = command.iter().position(|arg| arg == "--");
-                let id = command[..options.unwrap_or(command.len())]
-                    .iter()
-                    .position(|arg| arg == result.id.as_str());
-                if command.first().is_some_and(|aye| aye == "aye")
-                    && let Some(at) = id.filter(|at| *at > 0)
-                {
-                    command[at] = local;
+                if let Some(mut rerun) = RerunCommand::parse(&reproduce.command, &result.id) {
+                    rerun.target = local;
+                    reproduce.command = rerun.to_command();
                 }
             }
             None if result.outcome.is_bad() => {
-                let mut command = vec!["aye".to_string()];
-                command.extend(self.rerun_args.iter().cloned());
-                command.push(local);
+                let rerun = RerunCommand {
+                    options: self.rerun_args.to_vec(),
+                    target: local,
+                    framework_args: Vec::new(),
+                };
                 result.reproduce = Some(aye_events::Reproduce {
-                    command,
+                    command: rerun.to_command(),
                     ..aye_events::Reproduce::default()
                 });
             }

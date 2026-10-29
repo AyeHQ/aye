@@ -63,7 +63,7 @@ pub use path::{
     DiagnosticPath, FramePath, InvalidProjectPath, LineNumber, Location, ProjectPath,
     ProjectPathRef, Span,
 };
-pub use result::{Captured, Counts, Previous, Reproduce, Resource, TestResult};
+pub use result::{Captured, Counts, Previous, Reproduce, RerunCommand, Resource, TestResult};
 pub use run::{
     BatchIndex, EnvironmentId, InvalidRunNumber, RunId, RunNumber, Stamper, WorkerIndex,
 };

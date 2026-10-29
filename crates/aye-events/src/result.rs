@@ -139,6 +139,67 @@ pub struct Reproduce {
     pub inputs: BTreeMap<String, String>,
 }
 
+/// The command that reruns one test, as aye's adapters write it in a
+/// [`Reproduce`]: `aye`, aye's own options that shaped the run (`-c
+/// FILE`), the test, then `--` and the framework's arguments when the run
+/// had some (`aye_engine.reproduce`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RerunCommand {
+    /// aye's options, before the test.
+    pub options: Vec<String>,
+    /// The test: its id, or, spelled from where aye ran, its file and the
+    /// names in it.
+    pub target: String,
+    /// The arguments after `--`; the command has no `--` when there are
+    /// none.
+    pub framework_args: Vec<String>,
+}
+
+impl RerunCommand {
+    /// `command` taken apart, `id` being the test it reruns: `aye` first,
+    /// and the target the first argument before the first `--` that is the
+    /// id. `None` for a command that isn't written so (another program, an
+    /// id it doesn't hold, an argument between the id and the `--`, a `--`
+    /// with nothing after it), which [`to_command`](Self::to_command)
+    /// couldn't give back as it was.
+    pub fn parse(command: &[String], id: &TestId) -> Option<Self> {
+        if command.first().is_none_or(|aye| aye != "aye") {
+            return None;
+        }
+        let end = command
+            .iter()
+            .position(|arg| arg == "--")
+            .unwrap_or(command.len());
+        let at = command[..end]
+            .iter()
+            .position(|arg| arg == id.as_str())
+            .filter(|at| *at > 0)?;
+        let framework_args = command.get(end + 1..).unwrap_or_default();
+        if at + 1 != end || (end < command.len() && framework_args.is_empty()) {
+            return None;
+        }
+        Some(Self {
+            options: command[1..at].to_vec(),
+            target: command[at].clone(),
+            framework_args: framework_args.to_vec(),
+        })
+    }
+
+    /// The command: `aye`, the options, the target, then `--` and the
+    /// framework's arguments when there are some.
+    pub fn to_command(&self) -> Vec<String> {
+        let mut command = Vec::with_capacity(self.options.len() + self.framework_args.len() + 3);
+        command.push("aye".to_owned());
+        command.extend(self.options.iter().cloned());
+        command.push(self.target.clone());
+        if !self.framework_args.is_empty() {
+            command.push("--".to_owned());
+            command.extend(self.framework_args.iter().cloned());
+        }
+        command
+    }
+}
+
 /// Totals for a run; a fold over its `test_finished` events alone: counts
 /// are test results.
 ///
@@ -201,6 +262,52 @@ impl Counts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn args(text: &str) -> Vec<String> {
+        text.split_whitespace().map(str::to_owned).collect()
+    }
+
+    /// A command an adapter writes is taken apart and given back as it was;
+    /// any other isn't taken apart.
+    #[test]
+    fn a_rerun_command_reads_and_writes_back_as_written() {
+        let id = TestId::new("tests/t.py::test_x");
+        for (command, options, framework_args) in [
+            ("aye tests/t.py::test_x", "", ""),
+            ("aye -c ci.toml tests/t.py::test_x", "-c ci.toml", ""),
+            (
+                "aye tests/t.py::test_x -- -p no:cacheprovider -x",
+                "",
+                "-p no:cacheprovider -x",
+            ),
+            (
+                "aye -c a tests/t.py::test_x -- -- tests/t.py::test_x",
+                "-c a",
+                "-- tests/t.py::test_x",
+            ),
+        ] {
+            let rerun = RerunCommand::parse(&args(command), &id).unwrap();
+            assert_eq!(rerun.options, args(options), "{command}");
+            assert_eq!(rerun.target, id.as_str());
+            assert_eq!(rerun.framework_args, args(framework_args), "{command}");
+            assert_eq!(rerun.to_command(), args(command));
+        }
+        for command in [
+            "",
+            "pytest tests/t.py::test_x",
+            "aye",
+            "aye tests/t.py",
+            "aye -- tests/t.py::test_x",
+            "aye tests/t.py::test_x -v -- -x",
+            "aye tests/t.py::test_x --",
+        ] {
+            assert_eq!(RerunCommand::parse(&args(command), &id), None, "{command}");
+        }
+        assert_eq!(
+            RerunCommand::parse(&args("aye aye"), &TestId::new("aye")),
+            None
+        );
+    }
 
     #[test]
     fn counts_fold_outcomes() {
