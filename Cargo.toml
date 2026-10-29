@@ -27,7 +27,7 @@ aye-runner = { path = "crates/aye-runner", version = "=0.0.1" }
 aye-select = { path = "crates/aye-select", version = "=0.0.1" }
 # x-release-please-end
 
-anstream = "0.6"
+anstream = "1.0"
 anstyle = "1"
 anyhow = "1"
 clap = { version = "4", features = ["derive", "wrap_help"] }
