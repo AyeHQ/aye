@@ -1,0 +1,5 @@
+# LF everywhere, Windows checkouts included (git's `core.autocrlf` would
+# turn them into CRLF there): the Python sources aye embeds (the worker,
+# aye's engine, the executors), the suites and the recorded results are then
+# the same bytes on every platform. Binary files are detected and left alone.
+* text=auto eol=lf
