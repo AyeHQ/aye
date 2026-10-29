@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use aye_engine::ast::visitor::{self, Visitor};
 use aye_engine::ast::{Expr, ExprCall, ModModule, Stmt, StmtFunctionDef};
 use aye_engine::{Ranged, SourceFile, TextSize};
+use aye_events::Fnv64;
 
 use crate::marks::{Decorator, Scoped, decorator};
 use crate::scope::{
@@ -1710,14 +1711,6 @@ pub(crate) struct Supports {
     package_bases: Mutex<HashMap<PathBuf, PathBuf>>,
 }
 
-fn hash(source: &str) -> u64 {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0100_0000_01b3;
-    source
-        .bytes()
-        .fold(OFFSET, |h, b| (h ^ u64::from(b)).wrapping_mul(PRIME))
-}
-
 fn parse_file(path: &Path) -> Option<Summary> {
     let source = std::fs::read_to_string(path).ok()?;
     let parsed = ruff_python_parser::parse_module(&source).ok()?;
@@ -1728,7 +1721,7 @@ fn parse_file(path: &Path) -> Option<Summary> {
 impl Supports {
     /// The summary of a support file handed to the recognizer.
     pub(crate) fn of(&self, file: &SourceFile<'_>) -> Arc<Summary> {
-        let key = (file.abs.to_path_buf(), hash(file.source));
+        let key = (file.abs.to_path_buf(), Fnv64::hash(file.source.as_bytes()));
         if let Some(found) = self.parsed.lock().expect("lock").get(&key) {
             return Arc::clone(found);
         }

@@ -60,8 +60,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aye_events::{
-    Counts, DiagnosticCode, DiagnosticOrigin, ErrorClass, Event, ExitCode, ProjectPath, Record,
-    RunId, RunNumber, Severity, StopReason,
+    Counts, DiagnosticCode, DiagnosticOrigin, ErrorClass, Event, ExitCode, Fnv128, ProjectPath,
+    Record, RunId, RunNumber, Severity, StopReason,
 };
 use flate2::Compression;
 use flate2::read::GzDecoder;
@@ -239,12 +239,7 @@ impl<'de> Deserialize<'de> for StoredRunId {
 /// Stable across builds and platforms; it tells whether a file changed,
 /// and nothing more.
 pub fn digest(bytes: &[u8]) -> String {
-    const OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
-    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
-    let hash = bytes.iter().fold(OFFSET, |hash, &byte| {
-        (hash ^ u128::from(byte)).wrapping_mul(PRIME)
-    });
-    format!("{hash:032x}")
+    format!("{:032x}", Fnv128::hash(bytes))
 }
 
 /// Keeps the log of the run fed to it, as a consumer of the stream: each

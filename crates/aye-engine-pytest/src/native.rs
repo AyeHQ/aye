@@ -37,7 +37,7 @@ use aye_engine::{
     Adapter, AdapterError, Claim, EmbeddedModule, Executor, MODEL_MODULE, NATIVE_ENGINE_MODULE,
     Project, REWRITE_MODULE, Recognition, Recognizer, Setting, SourceFile,
 };
-use aye_events::{AdapterName, Diagnostic, DiagnosticCode, Severity};
+use aye_events::{AdapterName, Diagnostic, DiagnosticCode, Fnv64, Severity};
 use serde_json::{Value, json};
 
 use crate::{PytestConfig, PytestRecognizer, config::ImportMode};
@@ -357,20 +357,14 @@ fn native_context(config: &PytestConfig) -> Value {
 /// A 64-bit FNV-1a digest of the executor's module names and sources, in
 /// hex.
 fn modules_digest() -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut hash = Fnv64::new();
     for module in &MODULES {
-        for byte in module
-            .name
-            .bytes()
-            .chain([0])
-            .chain(module.source.bytes())
-            .chain([0])
-        {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        for text in [module.name, module.source] {
+            hash.write(text.as_bytes());
+            hash.write(&[0]);
         }
     }
-    format!("{hash:016x}")
+    format!("{:016x}", hash.finish())
 }
 
 /// Python's `str()` of a TOML scalar, as `[tool.pytest.ini_options]`

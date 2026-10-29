@@ -13,9 +13,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use aye_events::Fnv128;
 use aye_static::EnvVars;
-
-use crate::refine::Fnv;
 
 /// What refinement depends on outside the project's files. Every part goes
 /// into the refinement cache's key; see [`crate::Collector::with_environment`].
@@ -58,7 +57,7 @@ impl Environment {
     /// A digest of everything this environment stands for, or `None` when
     /// the interpreter can't be identified.
     pub(crate) fn digest(&self, cwd: &Path) -> Option<u128> {
-        let mut hash = Fnv::new();
+        let mut hash = Fnv128::new();
         interpreter(
             &aye_fs::absolute(cwd, self.interpreter.as_ref()?),
             &mut hash,
@@ -87,7 +86,7 @@ impl Environment {
 
 /// Hash what identifies the interpreter at `python` and its installed
 /// packages. `None` when it doesn't exist or its packages can't be found.
-fn interpreter(python: &Path, hash: &mut Fnv) -> Option<()> {
+fn interpreter(python: &Path, hash: &mut Fnv128) -> Option<()> {
     let real = fs::canonicalize(python).ok()?;
     let meta = fs::metadata(&real).ok()?;
     hash.part(b"interpreter");

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use aye_engine::{RefineRequest, Refined, Refiner, Setting};
-use aye_events::{AdapterName, Diagnostic, DiagnosticCode, ProjectPath, Severity};
+use aye_events::{AdapterName, Diagnostic, DiagnosticCode, Fnv128, ProjectPath, Severity};
 
 use crate::source::Source;
 use crate::standalone::{self, Scope};
@@ -78,7 +78,7 @@ impl Collector<'_> {
             let cache = match (self.options.cache_dir.as_deref(), environment) {
                 (Some(dir), Some(environment)) if !self.loads_by_name(&context, &scope) => {
                     // The arguments after `--`, as adapters were given them.
-                    let mut args = Fnv::new();
+                    let mut args = Fnv128::new();
                     for arg in self.project.framework_args {
                         args.part(arg.as_bytes());
                     }
@@ -326,7 +326,7 @@ impl Cache {
         context: &serde_json::Value,
         settings: &[Setting],
     ) -> Self {
-        let mut hash = Fnv::new();
+        let mut hash = Fnv128::new();
         for part in parts {
             hash.part(part);
         }
@@ -362,7 +362,7 @@ impl Cache {
         digest: u128,
         support: impl Iterator<Item = (&'a str, u128)>,
     ) -> String {
-        let mut hash = Fnv::new();
+        let mut hash = Fnv128::new();
         hash.part(&self.base.to_le_bytes());
         hash.part(rel.as_bytes());
         hash.part(&digest.to_le_bytes());
@@ -447,37 +447,48 @@ impl Collector<'_> {
 
 /// The content digest of a file.
 pub(crate) fn digest(bytes: &[u8]) -> u128 {
-    let mut hash = Fnv::new();
-    hash.bytes(bytes);
-    hash.finish()
+    Fnv128::hash(bytes)
 }
 
-/// FNV-1a, 128 bits: stable across builds and platforms, unlike `std`'s
-/// hasher, which is all a cache key needs.
-pub(crate) struct Fnv(u128);
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
 
-impl Fnv {
-    const OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
-    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
+    use aye_engine::Setting;
+    use aye_events::AdapterName;
 
-    pub(crate) fn new() -> Self {
-        Self(Self::OFFSET)
-    }
+    use super::{Cache, FORMAT, digest};
 
-    fn bytes(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.0 = (self.0 ^ u128::from(byte)).wrapping_mul(Self::PRIME);
-        }
-    }
-
-    /// Length-prefixed, so that consecutive parts can't run into each other.
-    pub(crate) fn part(&mut self, bytes: &[u8]) {
-        let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        self.bytes(&len.to_le_bytes());
-        self.bytes(bytes);
-    }
-
-    pub(crate) fn finish(&self) -> u128 {
-        self.0
+    /// A cache entry's key, from the run's inputs, the adapter's, the file
+    /// and its support files, pinned: entries written by another aye of
+    /// the same `FORMAT` must keep answering. Changing what the key holds
+    /// or how it is hashed bumps `FORMAT`.
+    #[test]
+    fn keys_are_pinned() {
+        let settings = [Setting {
+            name: "python_files".into(),
+            value: "test_*.py".into(),
+            origin: "default".into(),
+        }];
+        let cache = Cache::new(
+            Path::new("/cache"),
+            &[
+                FORMAT.as_bytes(),
+                b"0.0.1",
+                b"/root",
+                b"/root",
+                &7u128.to_le_bytes(),
+            ],
+            &AdapterName::from("pytest"),
+            &serde_json::json!({"native": {"rootdir": "relative", "args": ["-x"]}}),
+            &settings,
+        );
+        let file = digest(b"def test_a(): pass\n");
+        let support = [("conftest.py", digest(b"import pytest\n"))];
+        assert_eq!(
+            cache.key("tests/test_a.py", file, support.into_iter()),
+            "2b8d189545df6dd813e51e0ff1f3a71b"
+        );
+        assert_eq!(cache.path("k"), Path::new("/cache/refine/pytest/k.json"));
     }
 }

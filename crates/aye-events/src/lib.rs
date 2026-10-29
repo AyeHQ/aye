@@ -36,6 +36,7 @@
 mod affinity;
 mod case;
 mod diagnostic;
+mod digest;
 mod event;
 mod failure;
 mod id;
@@ -51,6 +52,7 @@ pub use case::{Case, Certainty};
 pub use diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticOrigin, ErrorClass, Severity, SummaryKind,
 };
+pub use digest::{Fnv64, Fnv128};
 pub use event::{Envelope, Event, Record};
 pub use failure::{
     Assertion, Columns, Compare, CompareKind, ComparisonOp, Difference, Failure, FailureSignature,

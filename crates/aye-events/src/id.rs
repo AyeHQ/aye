@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::digest::Fnv64;
 use crate::path::ProjectPathRef;
 
 /// The canonical path id of a test: the file path relative to the project
@@ -151,11 +152,7 @@ impl TestKey {
     pub const DIGITS: usize = 16;
 
     pub fn of(id: &str) -> Self {
-        const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-        const PRIME: u64 = 0x0100_0000_01b3;
-        let mut hash = id
-            .bytes()
-            .fold(OFFSET, |h, b| (h ^ u64::from(b)).wrapping_mul(PRIME));
+        let mut hash = Fnv64::hash(id.as_bytes());
         hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
         hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
         hash ^= hash >> 31;
