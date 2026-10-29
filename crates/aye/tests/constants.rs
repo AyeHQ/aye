@@ -1,16 +1,17 @@
 //! The constants Python and Rust must agree on, read from the Python aye
 //! embeds (parsed, not run): the outcomes and their severities, the
-//! phases, the scopes, the service names and the services the engine
-//! provides itself, the protocol version, and the diagnostic codes and
-//! severities Python emits. Each is written once on each side, and a difference is a value
-//! one side sends that the other misreads or drops.
+//! phases, the scopes, the frameworks' statuses, the service names and the
+//! services the engine provides itself, the protocol version, and the
+//! diagnostic codes and severities Python emits. Each is written once on
+//! each side, and a difference is a value one side sends that the other
+//! misreads or drops.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use aye_engine::ast::visitor::{self, Visitor};
 use aye_engine::ast::{Expr, ModModule, Stmt};
 use aye_engine::{EmbeddedModule, PROTOCOL_VERSION, services};
-use aye_events::{DiagnosticCode, Outcome, Phase, Scope, Severity};
+use aye_events::{DiagnosticCode, FrameworkStatus, Outcome, Phase, Scope, Severity};
 use serde_json::{Value, json};
 
 /// Every Python module aye embeds, once each: the engine's, each adapter's,
@@ -206,6 +207,42 @@ fn scopes_are_the_same_on_both_sides() {
         class_values(&parse(&aye_engine::MODEL_MODULE), "Scope", integer),
         rust
     );
+}
+
+/// The statuses a batch ends with, which the runner reads as
+/// `FrameworkStatus`es: pytest's, as the pytest adapter's executor names
+/// them, and unittest's, as `python -m unittest` exits.
+#[test]
+fn framework_statuses_are_the_same_on_both_sides() {
+    let module = |name: &str| {
+        let module = embedded().into_iter().find(|m| m.name == name).unwrap();
+        parse(&module)
+    };
+    let number = |status: FrameworkStatus| u64::try_from(status.get()).ok();
+    let pytest = module("aye_pytest_native");
+    for (name, status) in [
+        ("OK", FrameworkStatus::OK),
+        ("TESTS_FAILED", FrameworkStatus::TESTS_FAILED),
+        ("INTERRUPTED", FrameworkStatus::INTERRUPTED),
+        ("INTERNAL_ERROR", FrameworkStatus::INTERNAL_ERROR),
+        ("USAGE_ERROR", FrameworkStatus::USAGE_ERROR),
+        ("NO_TESTS_COLLECTED", FrameworkStatus::NO_TESTS),
+    ] {
+        assert_eq!(module_int(&pytest, name), number(status), "pytest's {name}");
+    }
+    let unittest = module("aye_engine_unittest");
+    for (name, status) in [
+        ("OK", FrameworkStatus::OK),
+        ("FAILED", FrameworkStatus::TESTS_FAILED),
+        ("INTERRUPTED", FrameworkStatus::INTERRUPTED),
+        ("NO_TESTS", FrameworkStatus::NO_TESTS),
+    ] {
+        assert_eq!(
+            module_int(&unittest, name),
+            number(status),
+            "unittest's {name}"
+        );
+    }
 }
 
 #[test]

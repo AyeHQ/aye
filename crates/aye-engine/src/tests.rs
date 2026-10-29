@@ -83,8 +83,8 @@ fn worker_lines_are_replies_or_records() {
         serde_json::from_str::<WorkerLine>(done).unwrap(),
         WorkerLine::Reply(Reply::BatchDone {
             batch,
-            status: Some(1)
-        }) if batch == BatchIndex::from_u32(0)
+            status: Some(status)
+        }) if batch == BatchIndex::from_u32(0) && status == FrameworkStatus::TESTS_FAILED
     ));
 }
 

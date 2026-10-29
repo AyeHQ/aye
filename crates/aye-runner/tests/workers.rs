@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 
 use aye_engine::{EmbeddedModule, Executor, Policy, RefineRequest, Refiner, Reply, Request};
 use aye_events::{
-    AdapterName, AffinityKey, BatchIndex, Case, DiagnosticCode, Event, Outcome, ProjectPath,
-    Record, Stamper, StopReason, TestId, TestResult, WorkerIndex,
+    AdapterName, AffinityKey, BatchIndex, Case, DiagnosticCode, Event, FrameworkStatus, Outcome,
+    ProjectPath, Record, Stamper, StopReason, TestId, TestResult, WorkerIndex,
 };
 #[cfg(unix)]
 use aye_runner::Worker;
@@ -629,7 +629,7 @@ fn records_are_stamped_and_ordered() {
     assert_eq!((summary.requested, summary.finished), (3, 3));
     assert_eq!((summary.counts.passed, summary.counts.failed), (2, 1));
     assert_eq!(summary.batches.len(), 1);
-    assert_eq!(summary.batches[0].status, Some(1));
+    assert_eq!(summary.batches[0].status, Some(FrameworkStatus::new(1)));
     assert_eq!(summary.batches[0].end, BatchEnd::Done);
     assert!(!summary.internal_error && !summary.stopped_early && summary.crashes.is_empty());
     let Event::WorkerFinished { exit_status, error } = &records[13].event else {
@@ -1608,7 +1608,7 @@ fn a_batch_the_framework_interrupts_stops_the_run() {
     );
     assert!(summary.interrupted && !summary.internal_error);
     assert_eq!(summary.stopped, Some(StopReason::Framework));
-    assert_eq!(summary.batches[0].status, Some(2));
+    assert_eq!(summary.batches[0].status, Some(FrameworkStatus::new(2)));
     assert_eq!(
         summary.not_run,
         [
@@ -1706,7 +1706,7 @@ fn an_exit_with_a_usage_error_status_is_an_interruption() {
     ]);
     assert!(summary.interrupted && !summary.internal_error);
     assert_eq!(summary.stopped, Some(StopReason::Framework));
-    assert_eq!(summary.batches[0].status, Some(4));
+    assert_eq!(summary.batches[0].status, Some(FrameworkStatus::new(4)));
     assert_eq!(
         summary.not_run,
         [
@@ -1733,7 +1733,7 @@ fn an_internal_error_that_stops_a_batch_stops_the_run_as_an_internal_error() {
     assert_eq!(summary.stopped, Some(StopReason::Framework));
     assert_eq!(
         batch_of(&summary, &records, "a.py::test_exit_session_3").status,
-        Some(3)
+        Some(FrameworkStatus::INTERNAL_ERROR)
     );
     assert!(
         outcomes(&records).contains(&(B_SLEEPS, Outcome::Passed)),
@@ -1779,7 +1779,10 @@ fn other_statuses_alone_do_not_stop_the_run() {
             "{status}"
         );
         assert_eq!(summary.internal_error, status == 3, "{status}");
-        assert_eq!(batch_of(&summary, &records, &first).status, Some(status));
+        assert_eq!(
+            batch_of(&summary, &records, &first).status,
+            Some(FrameworkStatus::new(status))
+        );
     }
 }
 

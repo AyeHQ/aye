@@ -121,7 +121,9 @@ fn every_event() -> Vec<Event> {
             failure: Some(failure),
             duration: Duration::from_millis(2),
         },
-        Event::BatchFinished { status: Some(1) },
+        Event::BatchFinished {
+            status: Some(FrameworkStatus::TESTS_FAILED),
+        },
         Event::WorkerFinished {
             exit_status: Some(0),
             error: None,

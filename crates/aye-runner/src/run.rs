@@ -17,8 +17,8 @@ use aye_engine::{
 };
 use aye_events::{
     AdapterName, BatchIndex, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, Event,
-    Failure, LifetimeId, Outcome, ProjectPath, Record, Severity, Stamper, StopReason, TestId,
-    TestResult, WorkerIndex,
+    Failure, FrameworkStatus, LifetimeId, Outcome, ProjectPath, Record, Severity, Stamper,
+    StopReason, TestId, TestResult, WorkerIndex,
 };
 use aye_static::EnvVars;
 
@@ -32,12 +32,6 @@ const POLL: Duration = Duration::from_millis(50);
 /// as long to stop.
 const INTERRUPT_GRACE: Duration = Duration::from_secs(10);
 
-/// pytest's status for a session whose tests failed.
-const STATUS_TESTS_FAILED: i32 = 1;
-/// pytest's status for an interrupted session.
-const STATUS_INTERRUPTED: i32 = 2;
-/// pytest's status for an internal error (`INTERNALERROR`).
-const STATUS_INTERNAL_ERROR: i32 = 3;
 /// The context key under which a batch re-queued after a crash names the
 /// tests that ran before it (see [`Shared::crashed`]).
 const RAN_IDS: &str = "ran_ids";
@@ -156,7 +150,7 @@ pub struct BatchSummary {
     pub worker: WorkerIndex,
     pub cases: u32,
     /// The framework's own status, from `batch_done`.
-    pub status: Option<i32>,
+    pub status: Option<FrameworkStatus>,
     pub end: BatchEnd,
 }
 
@@ -863,7 +857,7 @@ enum Message {
     BatchFinished {
         worker: WorkerIndex,
         batch: BatchIndex,
-        status: Option<i32>,
+        status: Option<FrameworkStatus>,
         end: BatchEnd,
         /// What the framework's end of the batch means for the run.
         verdict: Verdict,
@@ -1190,7 +1184,7 @@ enum Stopping {
 enum End {
     /// `batch_done`, with the framework's status.
     Done {
-        status: Option<i32>,
+        status: Option<FrameworkStatus>,
         track: Track,
     },
     Failed(String, Track),
@@ -2148,11 +2142,11 @@ impl Verdict {
     /// says it alone. Usage errors are the binary's to find, from their
     /// diagnostics. Status 1 from a `clean` batch (no bad outcome, no error)
     /// fails the run.
-    fn of(status: Option<i32>, stopped: bool, clean: bool) -> Self {
+    fn of(status: Option<FrameworkStatus>, stopped: bool, clean: bool) -> Self {
         Self {
-            stop: stopped || status == Some(STATUS_INTERRUPTED),
-            internal_error: status == Some(STATUS_INTERNAL_ERROR),
-            failed: clean && status == Some(STATUS_TESTS_FAILED),
+            stop: stopped || status == Some(FrameworkStatus::INTERRUPTED),
+            internal_error: status == Some(FrameworkStatus::INTERNAL_ERROR),
+            failed: clean && status == Some(FrameworkStatus::TESTS_FAILED),
         }
     }
 }
@@ -2253,13 +2247,31 @@ mod tests {
             stop: true,
             ..Verdict::default()
         };
-        assert_eq!(Verdict::of(Some(2), false, false), stop);
+        assert_eq!(
+            Verdict::of(Some(FrameworkStatus::new(2)), false, false),
+            stop
+        );
         // `pytest.exit(returncode=…)`, whatever the code: 4 is no usage error.
-        for status in [Some(0), Some(2), Some(4), Some(5), Some(7), None] {
+        for status in [
+            Some(FrameworkStatus::new(0)),
+            Some(FrameworkStatus::new(2)),
+            Some(FrameworkStatus::new(4)),
+            Some(FrameworkStatus::new(5)),
+            Some(FrameworkStatus::new(7)),
+            None,
+        ] {
             assert_eq!(Verdict::of(status, true, false), stop, "{status:?}");
         }
         // A status alone says nothing about the tests left, but 2.
-        for status in [Some(0), Some(1), Some(4), Some(5), Some(7), Some(-1), None] {
+        for status in [
+            Some(FrameworkStatus::new(0)),
+            Some(FrameworkStatus::new(1)),
+            Some(FrameworkStatus::new(4)),
+            Some(FrameworkStatus::new(5)),
+            Some(FrameworkStatus::new(7)),
+            Some(FrameworkStatus::new(-1)),
+            None,
+        ] {
             assert_eq!(
                 Verdict::of(status, false, false),
                 Verdict::default(),
@@ -2271,7 +2283,7 @@ mod tests {
     #[test]
     fn status_3_is_an_internal_error_and_stops_the_run_only_when_the_batch_was_stopped() {
         assert_eq!(
-            Verdict::of(Some(3), true, false),
+            Verdict::of(Some(FrameworkStatus::new(3)), true, false),
             Verdict {
                 stop: true,
                 internal_error: true,
@@ -2280,7 +2292,7 @@ mod tests {
         );
         // pytest's INTERNALERROR in `pytest_sessionfinish`: every test ran.
         assert_eq!(
-            Verdict::of(Some(3), false, true),
+            Verdict::of(Some(FrameworkStatus::new(3)), false, true),
             Verdict {
                 stop: false,
                 internal_error: true,
@@ -2292,10 +2304,14 @@ mod tests {
     #[test]
     fn status_1_from_a_batch_where_nothing_failed_fails_the_run() {
         // A conftest's `session.exitstatus = 1`, `--cov-fail-under`.
-        assert!(Verdict::of(Some(1), false, true).failed);
+        assert!(Verdict::of(Some(FrameworkStatus::new(1)), false, true).failed);
         // A bad test or an error diagnostic explains it.
-        assert!(!Verdict::of(Some(1), false, false).failed);
-        for status in [Some(0), Some(5), None] {
+        assert!(!Verdict::of(Some(FrameworkStatus::new(1)), false, false).failed);
+        for status in [
+            Some(FrameworkStatus::new(0)),
+            Some(FrameworkStatus::new(5)),
+            None,
+        ] {
             assert!(!Verdict::of(status, false, true).failed, "{status:?}");
         }
     }

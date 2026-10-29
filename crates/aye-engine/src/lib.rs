@@ -174,8 +174,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use aye_events::{
-    AdapterName, BatchIndex, Case, Diagnostic, LineNumber, ProjectPath, ProjectPathRef, Record,
-    Span, TestId,
+    AdapterName, BatchIndex, Case, Diagnostic, FrameworkStatus, LineNumber, ProjectPath,
+    ProjectPathRef, Record, Span, TestId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -604,7 +604,7 @@ pub enum Reply {
     BatchDone {
         batch: BatchIndex,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        status: Option<i32>,
+        status: Option<FrameworkStatus>,
     },
     /// The worker failed outside any test while handling a request.
     Failed {

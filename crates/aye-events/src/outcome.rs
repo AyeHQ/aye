@@ -1,5 +1,7 @@
-//! Outcomes: of a test, of the runs before, the phase it happened in, and
-//! how a run ended and why it stopped early.
+//! Outcomes: of a test, of the runs before, the phase it happened in, how
+//! a framework ended a batch, and how a run ended and why it stopped early.
+
+use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -214,6 +216,48 @@ impl TryFrom<u8> for ExitCode {
     }
 }
 
+/// A framework's own status for a batch, as its session would have exited:
+/// pytest's exit code, and unittest's as `python -m unittest` exits, which
+/// shares pytest's values. Any other a framework gives is kept as it was
+/// (`pytest.exit(returncode=7)`). `batch_finished`'s `status`, and the
+/// protocol's `batch_done`'s; what it means for the run is the runner's to
+/// decide.
+///
+/// It prints and serializes as its number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct FrameworkStatus(i32);
+
+impl FrameworkStatus {
+    /// Every test passed, or was skipped or expected to fail.
+    pub const OK: Self = Self(0);
+    /// Some test failed: pytest's `TESTS_FAILED`, unittest's `FAILED`.
+    pub const TESTS_FAILED: Self = Self(1);
+    /// The session was interrupted.
+    pub const INTERRUPTED: Self = Self(2);
+    /// pytest's `INTERNAL_ERROR`.
+    pub const INTERNAL_ERROR: Self = Self(3);
+    /// pytest's `USAGE_ERROR`.
+    pub const USAGE_ERROR: Self = Self(4);
+    /// No test was collected: pytest's `NO_TESTS_COLLECTED`, unittest's
+    /// `NO_TESTS`.
+    pub const NO_TESTS: Self = Self(5);
+
+    pub const fn new(status: i32) -> Self {
+        Self(status)
+    }
+
+    pub const fn get(self) -> i32 {
+        self.0
+    }
+}
+
+impl fmt::Display for FrameworkStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 string_enum! {
     /// Why a run stopped before every selected test ran: `run_finished`'s
     /// `stopped`, and the run store's. The runner gives the first reason
@@ -290,6 +334,29 @@ mod tests {
             format!("\"{}f\"", "p".repeat(19))
         );
         assert_eq!(OutcomeTrail::from("pfz"), OutcomeTrail::from("pf"));
+    }
+
+    /// A status is the number it was, and pytest's values are what they
+    /// name.
+    #[test]
+    fn a_framework_status_is_its_number() {
+        let statuses = [
+            FrameworkStatus::OK,
+            FrameworkStatus::TESTS_FAILED,
+            FrameworkStatus::INTERRUPTED,
+            FrameworkStatus::INTERNAL_ERROR,
+            FrameworkStatus::USAGE_ERROR,
+            FrameworkStatus::NO_TESTS,
+        ];
+        assert_eq!(statuses.map(FrameworkStatus::get), [0, 1, 2, 3, 4, 5]);
+        for status in [-1, 0, 7] {
+            let status = FrameworkStatus::new(status);
+            assert_eq!(serde_json::to_string(&status).unwrap(), status.to_string());
+            assert_eq!(
+                serde_json::from_str::<FrameworkStatus>(&status.to_string()).unwrap(),
+                status
+            );
+        }
     }
 
     #[test]

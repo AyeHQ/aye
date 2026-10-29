@@ -8,7 +8,7 @@ use crate::diagnostic::Diagnostic;
 use crate::failure::Failure;
 use crate::id::{AdapterName, TestId};
 use crate::lifetime::{LifetimeId, Scope};
-use crate::outcome::{ExitCode, Outcome, StopReason};
+use crate::outcome::{ExitCode, FrameworkStatus, Outcome, StopReason};
 use crate::result::{Counts, TestResult};
 use crate::run::{BatchIndex, EnvironmentId, RunId, RunNumber, WorkerIndex};
 use crate::serde_ext::{is_zero, millis};
@@ -173,7 +173,7 @@ pub enum Event {
     BatchFinished {
         /// The framework's own status for the batch, if it has one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        status: Option<i32>,
+        status: Option<FrameworkStatus>,
     },
     WorkerFinished {
         #[serde(default, skip_serializing_if = "Option::is_none")]
