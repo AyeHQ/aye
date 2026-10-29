@@ -42,8 +42,9 @@
 //!   `UnitTestCase.collect` (unittest methods sorted by name, parametrize not
 //!   applied). Venvs are detected as pytest does (`pyvenv.cfg` or
 //!   `conda-meta/history`). The crate also depends on `aye-config`, for its
-//!   loaders. [`Pytest::prepare`] always returns a recognizer: pytest is the
-//!   default for Python tests.
+//!   loaders, on `aye-fs` for paths, and on `aye-static` for the variables
+//!   it reads. [`Pytest::prepare`] always returns a recognizer: pytest is
+//!   the default for Python tests.
 //! - **Canonical ids are relative to the aye project root**; pytest's own
 //!   node ids are relative to its rootdir. The two differ only in the file
 //!   part, which the front-end translates using the rootdir in

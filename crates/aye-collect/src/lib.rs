@@ -9,9 +9,9 @@
 //! is each engine's recognizer. If a framework's name pattern or id algorithm
 //! appears in this crate, the boundary has leaked.
 //!
-//! Depends on: aye-engine, aye-events, aye-config (path normalization),
-//! aye-history (marking the state directory). Must not depend on any
-//! `aye-engine-*`.
+//! Depends on: aye-engine, aye-events, aye-fs (paths, and marking the state
+//! directory), aye-static (the variables it reads by name). Must not depend
+//! on any `aye-engine-*`.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **Stopping and progress.** [`Collector::with_stop`] takes a flag the

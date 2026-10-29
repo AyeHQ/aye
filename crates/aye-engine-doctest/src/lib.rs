@@ -18,7 +18,8 @@
 //!   so plain `pytest --doctest-modules` / `--doctest-glob` is the referee.
 //!   The executor (`python/aye_engine_doctest.py`) imports only the standard
 //!   library and runs on Python 3.10 and later, with or without pytest. The
-//!   crate also depends on `aye-config`, for its loaders and `[tool.aye]`.
+//!   crate also depends on `aye-config`, for its loaders and `[tool.aye]`,
+//!   on `aye-fs` for paths, and on `aye-static` for the variables it reads.
 //!   Per-example re-runs and `--accept` are not implemented yet.
 //! - **Ids.** A module gives one case per `DocTest` with examples, named as
 //!   `DocTestFinder().find(module, module.__name__)` names it, in its order

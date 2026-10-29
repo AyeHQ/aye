@@ -147,7 +147,6 @@ dependencies = [
  "aye-events",
  "aye-fs",
  "aye-history",
- "aye-provision",
  "aye-render",
  "aye-runner",
  "aye-select",
@@ -162,11 +161,9 @@ dependencies = [
 name = "aye-collect"
 version = "0.0.1"
 dependencies = [
- "aye-config",
  "aye-engine",
  "aye-events",
  "aye-fs",
- "aye-history",
  "aye-static",
  "ruff_python_parser",
  "serde_json",
@@ -303,7 +300,6 @@ version = "0.0.1"
 dependencies = [
  "aye-engine",
  "aye-events",
- "aye-provision",
  "aye-static",
  "serde_json",
  "tempfile",

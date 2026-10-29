@@ -23,8 +23,8 @@
 //!   the same tests, except that before 3.11 an imported
 //!   `unittest.FunctionTestCase` makes a test of its own, which aye doesn't
 //!   predict. Besides the contract, the crate depends on `aye-config` (for
-//!   `[tool.aye]`), `ruff_python_parser` (to read the project modules a test
-//!   module imports from) and `serde_json`.
+//!   `[tool.aye]`), `aye-fs` (for paths), `ruff_python_parser` (to read the
+//!   project modules a test module imports from) and `serde_json`.
 //! - **Configuration** is `[tool.aye.unittest]` in the project root's
 //!   `pyproject.toml`: `start-directory` (default `.`), `pattern` (default
 //!   `test*.py`) and `top-level-directory` (default: the start directory),
