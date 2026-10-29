@@ -1,0 +1,11 @@
+A guide, in a text file pytest collects by its name.
+
+    >>> from pkg.shapes import Square
+    >>> Square(2).area()
+    4
+
+State carries over between examples:
+
+    >>> total = Square(1).area() + Square(2).area()
+    >>> total
+    5

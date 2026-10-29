@@ -1,0 +1,6 @@
+[project]
+name = "suite-dynamic"
+version = "0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
