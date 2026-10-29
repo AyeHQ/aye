@@ -15,7 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use aye_engine::{EmbeddedModule, Executor, Policy, RefineRequest, Refiner, Reply, Request};
-use aye_events::{Case, Event, Outcome, Record, TestId, TestResult};
+use aye_events::{Case, Event, Outcome, ProjectPath, Record, TestId, TestResult};
 #[cfg(unix)]
 use aye_runner::Worker;
 use aye_runner::{
@@ -1181,7 +1181,7 @@ fn refinement_round_trips() {
         .runner
         .refine(&RefineRequest {
             adapter: "fake".into(),
-            files: vec!["a.py".into(), "b.py".into()],
+            files: vec![path("a.py"), path("b.py")],
             context: serde_json::Value::Null,
             digests_only: false,
         })
@@ -1194,7 +1194,7 @@ fn refinement_round_trips() {
         .runner
         .refine(&RefineRequest {
             adapter: "fake".into(),
-            files: vec!["a.py".into()],
+            files: vec![path("a.py")],
             context: "explode".into(),
             digests_only: false,
         })
@@ -1431,7 +1431,7 @@ fn a_thread_left_running_while_refining_does_not_hang_refinement() {
         .runner
         .refine(&RefineRequest {
             adapter: "fake".into(),
-            files: vec!["a.py".into()],
+            files: vec![path("a.py")],
             context: "thread".into(),
             digests_only: false,
         })
@@ -2064,7 +2064,7 @@ impl Fixture {
         self.runner
             .refine(&RefineRequest {
                 adapter: "listing".into(),
-                files: files.iter().map(|f| (*f).to_string()).collect(),
+                files: files.iter().map(|f| path(f)).collect(),
                 context: serde_json::Value::Null,
                 digests_only: false,
             })
@@ -2077,13 +2077,17 @@ fn listing(id: &str) -> Case {
     Case::new(id, "listing")
 }
 
-fn session(files: &[&str]) -> std::collections::BTreeMap<String, Vec<String>> {
+fn session(files: &[&str]) -> std::collections::BTreeMap<String, Vec<ProjectPath>> {
     [(
         "listing".to_string(),
-        files.iter().map(|f| (*f).to_string()).collect(),
+        files.iter().map(|f| path(f)).collect(),
     )]
     .into_iter()
     .collect()
+}
+
+fn path(file: &str) -> ProjectPath {
+    ProjectPath::new(file).unwrap()
 }
 
 fn started_pids(records: &[Record]) -> HashMap<u32, u32> {

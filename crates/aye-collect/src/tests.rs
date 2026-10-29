@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use aye_engine::{Claim, Ranged, RefineError, RefineRequest, Refined, Setting, ast};
-use aye_events::Certainty;
+use aye_events::{Certainty, ProjectPath};
 
 use super::*;
 
@@ -931,7 +931,7 @@ fn a_file_in_a_directory_the_adapter_reported_about_gets_no_note() {
     struct SkipsSub;
     impl Refiner for SkipsSub {
         fn refine(&self, request: &RefineRequest) -> Result<Refined, RefineError> {
-            let skips = request.files.iter().any(|f| f.starts_with("sub/"));
+            let skips = request.files.iter().any(|f| f.as_str().starts_with("sub/"));
             Ok(Refined {
                 cases: Vec::new(),
                 diagnostics: skips
@@ -1107,7 +1107,10 @@ fn refined_cases_replace_the_static_ones() {
         *refiner.requests.lock().unwrap(),
         [RefineRequest {
             adapter: "fake".to_string(),
-            files: vec!["b_check.py".to_string(), "c_check.py".to_string()],
+            files: vec![
+                ProjectPath::new("b_check.py").unwrap(),
+                ProjectPath::new("c_check.py").unwrap(),
+            ],
             context: serde_json::json!({"rootdir": "/fake"}),
             digests_only: false,
         }]
@@ -1615,7 +1618,7 @@ fn a_file_claimed_as_tests_and_support_keys_itself_and_the_files_below() {
             .collect::<Vec<_>>()
     };
     assert_eq!(files(), ["both.py", "sub/d_check.py"]);
-    assert_eq!(files(), [] as [std::string::String; 0]);
+    assert_eq!(files(), [] as [&str; 0]);
     write(root, "both.py", "def dynamic(): pass\n# edited\n");
     assert_eq!(files(), ["both.py", "sub/d_check.py"]);
     write(root, "sub/d_check.py", "def dynamic(): pass\n# edited\n");
@@ -1692,12 +1695,16 @@ fn only_clean_results_are_cached() {
     let replies: [(&str, Reply); 6] = [
         ("an import error", |r| Refined {
             cases: Vec::new(),
-            diagnostics: vec![diagnostic(Severity::Error, "collection-error", &r.files[0])],
+            diagnostics: vec![diagnostic(
+                Severity::Error,
+                "collection-error",
+                r.files[0].as_str(),
+            )],
             digests: None,
         }),
         ("a module-level skip", |r| Refined {
             cases: Vec::new(),
-            diagnostics: vec![diagnostic(Severity::Info, "skipped", &r.files[0])],
+            diagnostics: vec![diagnostic(Severity::Info, "skipped", r.files[0].as_str())],
             digests: None,
         }),
         ("no tests", |_| Refined::default()),

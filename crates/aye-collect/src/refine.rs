@@ -174,7 +174,7 @@ impl Collector<'_> {
                 adapter: (*adapter).to_string(),
                 files: misses
                     .iter()
-                    .map(|(at, _, _)| tree.entries[*at].rel.as_str().to_owned())
+                    .map(|(at, _, _)| tree.entries[*at].rel.clone())
                     .collect(),
                 context,
                 digests_only: false,

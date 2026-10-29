@@ -173,7 +173,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use aye_events::{BatchId, Case, Diagnostic, LineNumber, ProjectPathRef, Record, Span, TestId};
+use aye_events::{
+    BatchId, Case, Diagnostic, LineNumber, ProjectPath, ProjectPathRef, Record, Span, TestId,
+};
 use serde::{Deserialize, Serialize};
 
 pub use ruff_python_ast as ast;
@@ -433,8 +435,7 @@ pub trait Refiner {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefineRequest {
     pub adapter: String,
-    /// Relative to the project root.
-    pub files: Vec<String>,
+    pub files: Vec<ProjectPath>,
     #[serde(default)]
     pub context: serde_json::Value,
     /// List the files for the batches to come, and answer with their
@@ -457,7 +458,7 @@ pub struct Refined {
     /// own is the SHA-1 of the ids joined by newlines), so that two workers'
     /// listings can be compared without the cases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub digests: Option<BTreeMap<String, String>>,
+    pub digests: Option<BTreeMap<ProjectPath, String>>,
 }
 
 #[derive(Debug, thiserror::Error)]

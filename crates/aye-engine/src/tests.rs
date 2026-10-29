@@ -18,13 +18,13 @@ fn requests_round_trip() {
         },
         Request::Refine(RefineRequest {
             adapter: "pytest".into(),
-            files: vec!["tests/test_dynamic.py".into()],
+            files: vec![ProjectPath::new("tests/test_dynamic.py").unwrap()],
             context: serde_json::json!({"rootdir": "/repo"}),
             digests_only: false,
         }),
         Request::Refine(RefineRequest {
             adapter: "pytest".into(),
-            files: vec!["tests/test_dynamic.py".into()],
+            files: vec![ProjectPath::new("tests/test_dynamic.py").unwrap()],
             context: serde_json::Value::Null,
             digests_only: true,
         }),
@@ -92,7 +92,7 @@ fn worker_lines_are_replies_or_records() {
 fn session_listing_fields_are_left_out_when_unused_and_default_to_off() {
     let request = RefineRequest {
         adapter: "pytest".into(),
-        files: vec!["t.py".into()],
+        files: vec![ProjectPath::new("t.py").unwrap()],
         context: serde_json::Value::Null,
         digests_only: false,
     };

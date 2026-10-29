@@ -14,8 +14,8 @@ use aye_collect::{Collector, Environment, Options, Prepared};
 use aye_config::AyeConfig;
 use aye_engine::{Adapter, Policy, Project, Refiner};
 use aye_events::{
-    Case, Counts, Diagnostic, DiagnosticPath, Event, ExitCode, Record, SCHEMA_VERSION, Severity,
-    TestId,
+    Case, Counts, Diagnostic, DiagnosticPath, Event, ExitCode, ProjectPath, Record, SCHEMA_VERSION,
+    Severity, TestId,
 };
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter};
@@ -1515,20 +1515,20 @@ fn run_exit_code(
 fn session_files(
     cases: &[Case],
     within: Option<(&[PathBuf], &Path)>,
-) -> BTreeMap<String, Vec<String>> {
-    let mut files: BTreeMap<String, Vec<String>> = BTreeMap::new();
+) -> BTreeMap<String, Vec<ProjectPath>> {
+    let mut files: BTreeMap<String, Vec<ProjectPath>> = BTreeMap::new();
     let mut seen: HashSet<(&str, &str)> = HashSet::new();
     for case in cases {
-        let path = case.id.path().as_str();
+        let path = case.id.path();
         let reached = within.is_none_or(|(paths, root)| {
-            let file = normalize_absolute(&root.join(path));
+            let file = normalize_absolute(&root.join(path.as_str()));
             paths.iter().any(|start| file.starts_with(start))
         });
-        if reached && seen.insert((case.adapter.as_str(), path)) {
+        if reached && seen.insert((case.adapter.as_str(), path.as_str())) {
             files
                 .entry(case.adapter.clone())
                 .or_default()
-                .push(path.to_string());
+                .push(path.to_project_path());
         }
     }
     files

@@ -19,7 +19,7 @@ use aye_engine::{
 };
 use aye_events::{
     BatchId, Case, Counts, Diagnostic, DiagnosticPath, EnvironmentId, Event, Failure, LifetimeId,
-    Outcome, Record, Severity, TestId, TestResult, WorkerId,
+    Outcome, ProjectPath, Record, Severity, TestId, TestResult, WorkerId,
 };
 use aye_static::EnvVars;
 
@@ -52,7 +52,7 @@ const RAN_IDS: &str = "ran_ids";
 const LISTING_DIFFERS: &str = "listing-differs";
 
 /// By file, a digest of its tests' ids in order ([`Refined::digests`]).
-type Digests = BTreeMap<String, String>;
+type Digests = BTreeMap<ProjectPath, String>;
 
 /// What a [`Runner`] needs to start workers.
 #[derive(Debug, Clone, Default)]
@@ -98,7 +98,7 @@ pub struct Plan {
     /// By adapter, every file collection claimed for its tests (selected or
     /// not), in collection order: what each worker of an adapter whose
     /// executor lists the session lists before its first batch.
-    pub session_files: BTreeMap<String, Vec<String>>,
+    pub session_files: BTreeMap<String, Vec<ProjectPath>>,
 }
 
 impl Default for Plan {
@@ -890,7 +890,7 @@ fn lane_env(lane: WorkerId, lanes: u32) -> Vec<(OsString, OsString)> {
 struct Listings {
     reference: Mutex<HashMap<String, Reference>>,
     published: Condvar,
-    warned: Mutex<HashSet<String>>,
+    warned: Mutex<HashSet<ProjectPath>>,
 }
 
 enum Reference {
@@ -1266,7 +1266,7 @@ struct Shared<'a> {
     policy: &'a Policy,
     contexts: &'a HashMap<String, serde_json::Value>,
     /// The plan's session files, by adapter.
-    sessions: &'a BTreeMap<String, Vec<String>>,
+    sessions: &'a BTreeMap<String, Vec<ProjectPath>>,
     listings: Listings,
     /// The adapter whose session the first lane lists first, for the others
     /// to compare theirs with (several lanes only).
@@ -1467,7 +1467,7 @@ impl Shared<'_> {
         let mut parked: Option<(Worker, String, bool)> = None;
         // The files whose tests this lane's worker lists otherwise than the
         // first lane's: their ids run on the first lane.
-        let mut pinned: HashSet<String> = HashSet::new();
+        let mut pinned: HashSet<ProjectPath> = HashSet::new();
         match self.early_start(lane) {
             Ok(None) => {}
             Ok(Some((started, of, digests))) => {
@@ -1869,7 +1869,7 @@ impl Shared<'_> {
         let Some(session) = self.sessions.get(adapter).filter(|_| lists) else {
             return Ok((worker, None));
         };
-        let files: Vec<String> = session
+        let files: Vec<ProjectPath> = session
             .iter()
             .filter(|file| !listed.contains_key(*file))
             .cloned()
@@ -1909,14 +1909,14 @@ impl Shared<'_> {
         adapter: &str,
         digests: Option<&Digests>,
         send: &dyn Fn(Message),
-    ) -> HashSet<String> {
+    ) -> HashSet<ProjectPath> {
         let Some(digests) = digests.filter(|_| lane != 0) else {
             return HashSet::new();
         };
         let Some(reference) = self.listings.reference(adapter, &|| self.stopping()) else {
             return HashSet::new();
         };
-        let differ: Vec<&String> = self
+        let differ: Vec<&ProjectPath> = self
             .sessions
             .get(adapter)
             .into_iter()
@@ -1931,7 +1931,7 @@ impl Shared<'_> {
                     diagnostic: Diagnostic {
                         severity: Severity::Warning,
                         code: LISTING_DIFFERS.into(),
-                        path: DiagnosticPath::as_written((*file).clone()),
+                        path: (*file).clone().into(),
                         span: None,
                         message: format!(
                             "worker {lane} lists other tests in this file than worker 0 \
