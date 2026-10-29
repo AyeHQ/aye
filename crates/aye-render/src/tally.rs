@@ -243,7 +243,7 @@ impl ErrorKinds {
     pub(crate) fn count(&mut self, diagnostic: &Diagnostic, from_batch: bool) -> bool {
         let key = (
             diagnostic.code.clone(),
-            diagnostic.path.clone(),
+            diagnostic.path.to_string(),
             diagnostic.message.clone(),
         );
         if !self.seen.insert(key) {

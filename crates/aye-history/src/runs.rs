@@ -485,7 +485,7 @@ impl Run {
                 if diagnostic.severity == Severity::Error
                     || (diagnostic.severity == Severity::Info && diagnostic.code == "skipped") =>
             {
-                self.file(&diagnostic.path);
+                self.file(diagnostic.path.as_str());
             }
             Event::CollectionFinished { .. } => {
                 let files = std::mem::take(&mut self.files);

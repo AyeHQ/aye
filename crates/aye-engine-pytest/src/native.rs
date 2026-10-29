@@ -213,7 +213,7 @@ impl Recognizer for NativeRecognizer {
                     diagnostics: vec![Diagnostic {
                         severity: Severity::Error,
                         code: "usage-error".into(),
-                        path: file.rel.to_string(),
+                        path: file.rel.to_project_path().into(),
                         span: None,
                         message: "pytest's doctest plugin would collect doctests here, which \
                                   aye runs only with its doctest adapter: add \"doctest\" to \

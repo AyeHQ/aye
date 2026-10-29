@@ -181,7 +181,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_engine::{Project, Recognition, Recognizer, Refiner, SourceFile};
-use aye_events::{Case, Diagnostic, ProjectPathRef, Severity, TestId};
+use aye_events::{Case, Diagnostic, DiagnosticPath, ProjectPathRef, Severity, TestId};
 
 mod environment;
 mod parallel;
@@ -553,7 +553,7 @@ impl<'a> Collector<'a> {
             tree.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
                 code: code.to_string(),
-                path: rel,
+                path: DiagnosticPath::as_written(rel),
                 span: None,
                 message,
             });
@@ -780,7 +780,7 @@ impl<'a> Collector<'a> {
                 notes.push(Diagnostic {
                     severity: Severity::Info,
                     code: codes::NO_TESTS.to_string(),
-                    path: rel.as_str().to_owned(),
+                    path: rel.clone().into(),
                     span: None,
                     message: format!("claimed for tests by {}, but has none", names.join(", ")),
                 });
@@ -887,7 +887,7 @@ impl<'a> Collector<'a> {
         Diagnostic {
             severity: Severity::Warning,
             code: codes::DUPLICATE_ID.to_string(),
-            path: case.id.path().to_string(),
+            path: DiagnosticPath::as_written(case.id.path().as_str()),
             span: case.span.clone(),
             message: format!(
                 "{} collects `{}` more than once; aye lists it once, \

@@ -467,7 +467,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_engine::{AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile};
-use aye_events::{Certainty, Diagnostic, Severity};
+use aye_events::{Certainty, Diagnostic, DiagnosticPath, Severity};
 use aye_fs::normalize_absolute;
 use aye_static::EnvVars;
 
@@ -1753,7 +1753,11 @@ impl Recognizer for PytestRecognizer {
                 recognition.diagnostics.push(Diagnostic {
                     severity: Severity::Error,
                     code: "collection-error".into(),
-                    path: if rel.is_empty() { ".".into() } else { rel },
+                    path: if rel.is_empty() {
+                        DiagnosticPath::Root
+                    } else {
+                        DiagnosticPath::as_written(rel)
+                    },
                     span: None,
                     message,
                 });

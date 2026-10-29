@@ -459,7 +459,7 @@ fn warnings_are_grouped_by_code_below_very_verbose() {
         records.push(Record::new(Event::Diagnostic(aye_events::Diagnostic {
             severity: aye_events::Severity::Warning,
             code: (*code).into(),
-            path: format!("tests/t{i}.py"),
+            path: format!("tests/t{i}.py").into(),
             span: None,
             message: "never runs".into(),
         })));

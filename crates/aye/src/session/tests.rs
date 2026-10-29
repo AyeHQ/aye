@@ -404,7 +404,7 @@ fn diagnostic_codes_choose_the_exit_code() {
     let diagnostic = |severity, code: &str| Diagnostic {
         severity,
         code: code.into(),
-        path: String::new(),
+        path: DiagnosticPath::Nowhere,
         span: None,
         message: String::new(),
     };
@@ -1221,7 +1221,7 @@ fn a_file_two_adapters_load_in_one_module_is_one_collection_error() {
             Event::Diagnostic(Diagnostic {
                 severity: Severity::Error,
                 code: codes::COLLECTION_ERROR.to_string(),
-                path: path.to_string(),
+                path: path.into(),
                 span: None,
                 message: format!("cannot import {path}"),
             }),
@@ -1280,7 +1280,7 @@ fn a_collection_error_from_refinement_counts_as_the_pytest_adapters() {
     let error = |path: &str| Diagnostic {
         severity: Severity::Error,
         code: codes::COLLECTION_ERROR.to_string(),
-        path: path.to_string(),
+        path: path.into(),
         span: None,
         message: format!("cannot import {path}"),
     };
@@ -1353,7 +1353,7 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
     let diagnostic = |severity, code: &str, path: &str| Diagnostic {
         severity,
         code: code.to_string(),
-        path: path.to_string(),
+        path: path.into(),
         span: None,
         message: "m".to_string(),
     };
@@ -1452,7 +1452,7 @@ fn a_conftest_two_adapters_fail_to_load_is_one_error() {
     let diagnostic = |code: &str, path: &str, message: &str| Diagnostic {
         severity: Severity::Error,
         code: code.to_string(),
-        path: path.to_string(),
+        path: path.into(),
         span: None,
         message: message.to_string(),
     };
@@ -1572,7 +1572,7 @@ fn a_file_below_a_broken_conftest_gets_no_no_tests_note() {
     let diagnostic = |severity: Severity, code: &str, path: &str| Diagnostic {
         severity,
         code: code.to_string(),
-        path: path.to_string(),
+        path: path.into(),
         span: None,
         message: String::new(),
     };

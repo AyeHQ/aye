@@ -237,7 +237,7 @@ impl<W: Write> GithubAnnotations<W> {
         if diagnostic.severity != Severity::Error
             || !self.errors.insert((
                 diagnostic.code.clone(),
-                diagnostic.path.clone(),
+                diagnostic.path.to_string(),
                 diagnostic.message.clone(),
             ))
         {
@@ -246,7 +246,7 @@ impl<W: Write> GithubAnnotations<W> {
         let line = diagnostic.span.as_ref().and_then(|span| span.line);
         // A diagnostic about no file in particular (pytest rejecting its
         // arguments) is annotated on none.
-        let file = (!diagnostic.path.is_empty()).then(|| self.file(&diagnostic.path));
+        let file = (!diagnostic.path.is_nowhere()).then(|| self.file(diagnostic.path.as_str()));
         let command = command(file.as_deref(), line, &diagnostic.code, &diagnostic.message);
         writeln!(self.out, "{command}")
     }

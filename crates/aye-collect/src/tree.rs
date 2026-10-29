@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use aye_engine::Claim;
-use aye_events::{Diagnostic, ProjectPath, Severity};
+use aye_events::{Diagnostic, DiagnosticPath, ProjectPath, Severity};
 use walkdir::WalkDir;
 
 use crate::{Prepared, codes};
@@ -106,7 +106,9 @@ impl<'r> Tree<'r> {
                         self.diagnostics.push(Diagnostic {
                             severity: Severity::Error,
                             code: codes::UNREADABLE.to_string(),
-                            path: aye_fs::relative_through_root(path, self.root),
+                            path: DiagnosticPath::as_written(aye_fs::relative_through_root(
+                                path, self.root,
+                            )),
                             span: None,
                             message: format!("cannot read: {err}"),
                         });

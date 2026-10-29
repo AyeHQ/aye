@@ -779,7 +779,7 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
         self.diagnostics.push(Diagnostic {
             severity,
             code: code.to_string(),
-            path: self.file.rel.to_string(),
+            path: self.file.rel.to_project_path().into(),
             span: Some(self.file.span(range)),
             message,
         });

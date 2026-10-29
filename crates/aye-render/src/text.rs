@@ -590,7 +590,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
                 return self.result_line(
                     Outcome::Skipped,
                     None,
-                    &diagnostic.path,
+                    diagnostic.path.as_str(),
                     None,
                     Some(&diagnostic.message),
                 );
@@ -623,8 +623,8 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             Severity::Info => ("info", DIM),
         };
         let at = match diagnostic.span.as_ref().and_then(|span| span.line) {
-            Some(line) => format!(" {}", self.location(&diagnostic.path, line)),
-            None if diagnostic.path.is_empty() => String::new(),
+            Some(line) => format!(" {}", self.location(diagnostic.path.as_str(), line)),
+            None if diagnostic.path.is_nowhere() => String::new(),
             None => format!(" {}", diagnostic.path),
         };
         let mut lines = diagnostic.message.lines();

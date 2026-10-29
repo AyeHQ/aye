@@ -14,7 +14,8 @@ use aye_collect::{Collector, Environment, Options, Prepared};
 use aye_config::AyeConfig;
 use aye_engine::{Adapter, Policy, Project, Refiner};
 use aye_events::{
-    Case, Counts, Diagnostic, Event, ExitCode, Record, SCHEMA_VERSION, Severity, TestId,
+    Case, Counts, Diagnostic, DiagnosticPath, Event, ExitCode, Record, SCHEMA_VERSION, Severity,
+    TestId,
 };
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter};
@@ -542,7 +543,7 @@ impl Session {
             not_found.push(Diagnostic {
                 severity: Severity::Error,
                 code: codes::NOT_FOUND.to_string(),
-                path,
+                path: DiagnosticPath::as_written(path),
                 span: None,
                 message: not_found_message(selector),
             });
@@ -866,12 +867,15 @@ impl OneModuleErrors {
     fn refined(&mut self, adapter: &str, diagnostic: &Diagnostic) {
         if diagnostic.severity != Severity::Error
             || diagnostic.code != codes::COLLECTION_ERROR
-            || diagnostic.path.is_empty()
-            || registry::is_conftest(&diagnostic.path)
+            || diagnostic.path.is_nowhere()
+            || registry::is_conftest(diagnostic.path.as_str())
         {
             return;
         }
-        let counts = self.reported.entry(diagnostic.path.clone()).or_default();
+        let counts = self
+            .reported
+            .entry(diagnostic.path.to_string())
+            .or_default();
         match counts.iter_mut().find(|(by, _)| by == adapter) {
             Some((_, count)) => *count += 1,
             None => counts.push((adapter.to_string(), 1)),
@@ -889,7 +893,7 @@ impl OneModuleErrors {
             Event::Diagnostic(diagnostic)
                 if diagnostic.severity == Severity::Error
                     && diagnostic.code == codes::COLLECTION_ERROR
-                    && !diagnostic.path.is_empty() =>
+                    && !diagnostic.path.is_nowhere() =>
             {
                 let Some(adapter) = batch.and_then(|batch| self.adapters.get(&batch)) else {
                     return;
@@ -897,7 +901,10 @@ impl OneModuleErrors {
                 if !registry::collects_in_one_module(adapter) {
                     return;
                 }
-                let counts = self.reported.entry(diagnostic.path.clone()).or_default();
+                let counts = self
+                    .reported
+                    .entry(diagnostic.path.to_string())
+                    .or_default();
                 let mine = if let Some((_, count)) = counts.iter_mut().find(|(by, _)| by == adapter)
                 {
                     *count += 1;
@@ -973,10 +980,12 @@ impl OneConftestError {
             codes::COLLECTION_ERROR => "collection error",
             _ => return,
         };
-        if diagnostic.severity != Severity::Error || !registry::is_conftest(&diagnostic.path) {
+        if diagnostic.severity != Severity::Error
+            || !registry::is_conftest(diagnostic.path.as_str())
+        {
             return;
         }
-        let key = (diagnostic.code.clone(), diagnostic.path.clone());
+        let key = (diagnostic.code.clone(), diagnostic.path.to_string());
         let Some((first, message)) = self.first.get(&key) else {
             let first = (adapter.map(str::to_string), diagnostic.message.clone());
             self.first.insert(key, first);
@@ -1073,7 +1082,7 @@ impl Reach {
     /// the run starts from (as `pytest <those paths>` loads it first), or
     /// some argument named nothing. Everything else is the run's.
     fn keeps(&self, root: &Path, diagnostic: &Diagnostic) -> bool {
-        let at = || normalize_absolute(&root.join(&diagnostic.path));
+        let at = || normalize_absolute(&root.join(diagnostic.path.as_str()));
         match (diagnostic.severity, diagnostic.code.as_str()) {
             (Severity::Info, codes::SKIPPED) => {
                 let at = at();
@@ -1083,9 +1092,9 @@ impl Reach {
                     || self
                         .words
                         .iter()
-                        .any(|word| dotted_reach(word, &diagnostic.path) != Named::Nothing)
+                        .any(|word| dotted_reach(word, diagnostic.path.as_str()) != Named::Nothing)
             }
-            (Severity::Error, codes::USAGE_ERROR) if !diagnostic.path.is_empty() => {
+            (Severity::Error, codes::USAGE_ERROR) if !diagnostic.path.is_nowhere() => {
                 if self.unmatched {
                     return true;
                 }
@@ -1109,8 +1118,8 @@ impl Reach {
 fn broken_conftest_dirs(diagnostics: &[Diagnostic]) -> Vec<&str> {
     diagnostics
         .iter()
-        .filter(|d| d.severity == Severity::Error && registry::is_conftest(&d.path))
-        .map(|d| &d.path[..d.path.len() - "conftest.py".len()])
+        .filter(|d| d.severity == Severity::Error && registry::is_conftest(d.path.as_str()))
+        .map(|d| &d.path.as_str()[..d.path.as_str().len() - "conftest.py".len()])
         .collect()
 }
 
@@ -1123,7 +1132,9 @@ fn broken_conftest_dirs(diagnostics: &[Diagnostic]) -> Vec<&str> {
 fn explained_by_a_conftest(broken: &[&str], diagnostic: &Diagnostic) -> bool {
     diagnostic.severity == Severity::Info
         && diagnostic.code == aye_collect::codes::NO_TESTS
-        && broken.iter().any(|dir| diagnostic.path.starts_with(dir))
+        && broken
+            .iter()
+            .any(|dir| diagnostic.path.as_str().starts_with(dir))
 }
 
 /// What a dotted name names of a path collection reported skipped.

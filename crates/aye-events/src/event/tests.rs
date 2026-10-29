@@ -73,7 +73,7 @@ fn every_event() -> Vec<Event> {
         Event::Diagnostic(Diagnostic {
             severity: Severity::Warning,
             code: "duplicate-definition".into(),
-            path: "tests/test_cart.py".into(),
+            path: ProjectPath::new("tests/test_cart.py").unwrap().into(),
             span: Some(Span {
                 path: ProjectPath::new("tests/test_cart.py").unwrap(),
                 start: 10,

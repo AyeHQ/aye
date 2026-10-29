@@ -1165,7 +1165,7 @@ impl DoctestRecognizer {
             recognition.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
                 code: "collection-error".into(),
-                path: file.rel.to_string(),
+                path: file.rel.to_project_path().into(),
                 span: None,
                 message: format!(
                     "import file mismatch:\nimported module 'conftest' has this __file__ \

@@ -18,8 +18,8 @@ use aye_engine::{
     WorkerLine,
 };
 use aye_events::{
-    BatchId, Case, Counts, Diagnostic, EnvironmentId, Event, Failure, LifetimeId, Outcome, Record,
-    Severity, TestId, TestResult, WorkerId,
+    BatchId, Case, Counts, Diagnostic, DiagnosticPath, EnvironmentId, Event, Failure, LifetimeId,
+    Outcome, Record, Severity, TestId, TestResult, WorkerId,
 };
 use aye_static::EnvVars;
 
@@ -513,7 +513,7 @@ impl Runner {
                 Event::Diagnostic(Diagnostic {
                     severity: Severity::Error,
                     code: "no-executor".into(),
-                    path: path.into(),
+                    path: DiagnosticPath::as_written(path),
                     span: None,
                     message: format!(
                         "no executor for the {adapter} adapter; {count} test{} not run",
@@ -974,7 +974,7 @@ enum Message {
         worker: WorkerId,
         batch: BatchId,
         code: &'static str,
-        path: String,
+        path: DiagnosticPath,
         message: String,
     },
     Crashed(Crash),
@@ -1931,7 +1931,7 @@ impl Shared<'_> {
                     diagnostic: Diagnostic {
                         severity: Severity::Warning,
                         code: LISTING_DIFFERS.into(),
-                        path: (*file).clone(),
+                        path: DiagnosticPath::as_written((*file).clone()),
                         span: None,
                         message: format!(
                             "worker {lane} lists other tests in this file than worker 0 \
@@ -2274,12 +2274,10 @@ fn is_interrupt(failure: Option<&Failure>) -> bool {
     failure.is_some_and(|failure| failure.exception.as_deref() == Some("KeyboardInterrupt"))
 }
 
-fn first_path(batch: &Assigned) -> String {
-    batch
-        .ids
-        .first()
-        .map(|id| id.path().to_string())
-        .unwrap_or_default()
+fn first_path(batch: &Assigned) -> DiagnosticPath {
+    batch.ids.first().map_or(DiagnosticPath::Nowhere, |id| {
+        DiagnosticPath::as_written(id.path().as_str())
+    })
 }
 
 fn shorten(line: &str) -> String {
@@ -2468,7 +2466,7 @@ mod tests {
         track.see(&Event::Diagnostic(Diagnostic {
             severity: Severity::Warning,
             code: "session-failed".into(),
-            path: String::new(),
+            path: DiagnosticPath::Nowhere,
             span: None,
             message: String::new(),
         }));
@@ -2521,7 +2519,7 @@ mod tests {
             Event::Diagnostic(Diagnostic {
                 severity,
                 code: code.into(),
-                path: String::new(),
+                path: DiagnosticPath::Nowhere,
                 span: None,
                 message: "pytest stopped the session".into(),
             })

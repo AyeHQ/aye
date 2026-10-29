@@ -804,7 +804,7 @@ impl ModuleSkips {
         }
         let diagnostic = crate::tally::module_skip(record).filter(|_| !self.collect_only)?;
         self.paths
-            .insert(diagnostic.path.clone())
+            .insert(diagnostic.path.to_string())
             .then_some(diagnostic)
     }
 

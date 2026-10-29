@@ -99,7 +99,7 @@ impl Recognizer for Fake {
                         recognition.diagnostics.push(Diagnostic {
                             severity,
                             code: code.to_string(),
-                            path: file.rel.to_string(),
+                            path: file.rel.to_project_path().into(),
                             span: Some(file.span(def.range())),
                             message: format!("{name} is broken"),
                         });
@@ -899,7 +899,7 @@ fn a_file_whose_adapter_says_why_it_has_no_tests_gets_no_note() {
                     .map(|code| Diagnostic {
                         severity: Severity::Info,
                         code: code.to_string(),
-                        path: request.files[0].clone(),
+                        path: request.files[0].clone().into(),
                         span: None,
                         message: "…".to_string(),
                     })
@@ -938,7 +938,7 @@ fn a_file_in_a_directory_the_adapter_reported_about_gets_no_note() {
                     .then(|| Diagnostic {
                         severity: Severity::Info,
                         code: "skipped".to_string(),
-                        path: "sub".to_string(),
+                        path: "sub".into(),
                         span: None,
                         message: "could not import 'missing'".to_string(),
                     })
@@ -1344,7 +1344,7 @@ fn a_refined_file_keeps_only_the_frameworks_errors() {
                 .map(|file| Diagnostic {
                     severity: Severity::Error,
                     code: "collection-error".to_string(),
-                    path: file.clone(),
+                    path: file.clone().into(),
                     span: None,
                     message: "the framework could not collect it".to_string(),
                 })
@@ -1676,7 +1676,7 @@ fn only_clean_results_are_cached() {
         Diagnostic {
             severity,
             code: code.to_string(),
-            path: path.to_string(),
+            path: path.into(),
             span: None,
             message: "…".to_string(),
         }

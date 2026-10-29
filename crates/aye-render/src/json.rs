@@ -1190,7 +1190,7 @@ impl<W: Write> JsonLines<W> {
     fn module_skip_line(&mut self, diagnostic: &Diagnostic) -> io::Result<()> {
         self.line(&Line::Test {
             key: None,
-            id: shared::head(&diagnostic.path, ID_MAX),
+            id: shared::head(diagnostic.path.as_str(), ID_MAX),
             outcome: Outcome::Skipped.as_str(),
             ms: 0,
             why: None,
@@ -1221,13 +1221,13 @@ impl<W: Write> JsonLines<W> {
             || !self.diagnostics.insert((
                 severity,
                 diagnostic.code.clone(),
-                diagnostic.path.clone(),
+                diagnostic.path.to_string(),
                 diagnostic.message.clone(),
             ))
         {
             return Ok(());
         }
-        let path = shared::head(&diagnostic.path, PATH_MAX);
+        let path = shared::head(diagnostic.path.as_str(), PATH_MAX);
         let line = diagnostic.span.as_ref().and_then(|span| span.line);
         let code = shared::head(&diagnostic.code, DIAGNOSTIC_CODE_MAX);
         let message = shared::head(&diagnostic.message, COLLECTION_ERROR_MAX);

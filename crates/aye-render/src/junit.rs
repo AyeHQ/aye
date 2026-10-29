@@ -528,13 +528,13 @@ impl Junit {
     fn module_skip(&mut self, diagnostic: &Diagnostic) {
         self.totals.tests += 1;
         self.totals.skipped += 1;
-        let (classname, name) = names(&diagnostic.path);
+        let (classname, name) = names(diagnostic.path.as_str());
         let line = diagnostic.span.as_ref().and_then(|span| span.line);
         let mut xml = format!(
             "    <testcase classname=\"{}\" name=\"{}\"{} time=\"0.000\">\n",
             attr(&self.classname(&classname)),
             attr(&name),
-            self.location(&diagnostic.path, line)
+            self.location(diagnostic.path.as_str(), line)
         );
         element(
             &mut xml,
@@ -553,13 +553,13 @@ impl Junit {
         }
         self.totals.tests += 1;
         self.totals.errors += 1;
-        let (classname, name) = names(&diagnostic.path);
+        let (classname, name) = names(diagnostic.path.as_str());
         let line = diagnostic.span.as_ref().and_then(|span| span.line);
         let mut xml = format!(
             "    <testcase classname=\"{}\" name=\"{}\"{} time=\"0.000\">\n",
             attr(&self.classname(&classname)),
             attr(&name),
-            self.location(&diagnostic.path, line)
+            self.location(diagnostic.path.as_str(), line)
         );
         let first = diagnostic.message.lines().next().unwrap_or_default();
         element(

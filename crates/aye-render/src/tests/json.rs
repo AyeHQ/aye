@@ -593,7 +593,7 @@ fn an_error_every_batch_repeats_is_reported_once() {
     let record = Record::new(Event::Diagnostic(aye_events::Diagnostic {
         severity: aye_events::Severity::Error,
         code: "usage-error".into(),
-        path: String::new(),
+        path: aye_events::DiagnosticPath::Nowhere,
         span: None,
         message: "unrecognized arguments: --bogus".into(),
     }));
@@ -698,7 +698,7 @@ fn very_verbose_lines_are_bounded() {
     let diagnostic = Record::new(Event::Diagnostic(aye_events::Diagnostic {
         severity: aye_events::Severity::Warning,
         code: "c".repeat(300),
-        path: "p".repeat(900),
+        path: "p".repeat(900).into(),
         span: None,
         message: "m".repeat(9000),
     }));

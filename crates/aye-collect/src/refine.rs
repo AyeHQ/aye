@@ -288,7 +288,7 @@ fn fallback(
     Diagnostic {
         severity,
         code: code.to_string(),
-        path: tree.entries[at].rel.as_str().to_owned(),
+        path: tree.entries[at].rel.clone().into(),
         span: None,
         message,
     }

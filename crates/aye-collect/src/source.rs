@@ -54,7 +54,7 @@ pub(crate) fn load(abs: &Path, rel: &ProjectPath) -> (Option<Source>, Option<Dia
             let diagnostic = Diagnostic {
                 severity: Severity::Error,
                 code: codes::UNREADABLE.to_string(),
-                path: rel.as_str().to_owned(),
+                path: rel.clone().into(),
                 span: None,
                 message: format!("cannot read: {err}"),
             };
@@ -104,7 +104,7 @@ fn syntax_error(rel: &ProjectPath, text: &str, lines: &LineIndex, err: &ParseErr
     Diagnostic {
         severity: Severity::Error,
         code: codes::SYNTAX_ERROR.to_string(),
-        path: rel.as_str().to_owned(),
+        path: rel.clone().into(),
         span: Some(Span {
             path: rel.clone(),
             start: start.to_u32(),

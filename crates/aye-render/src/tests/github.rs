@@ -132,7 +132,7 @@ fn a_diagnostic_about_no_file_is_annotated_on_none() {
     let record = Record::new(Event::Diagnostic(aye_events::Diagnostic {
         severity: aye_events::Severity::Error,
         code: "usage-error".into(),
-        path: String::new(),
+        path: aye_events::DiagnosticPath::Nowhere,
         span: None,
         message: "unrecognized arguments: --bogus".into(),
     }));

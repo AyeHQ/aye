@@ -228,6 +228,109 @@ fn misspelling(path: &str) -> Option<&'static str> {
     None
 }
 
+/// Where a diagnostic points: at no file (`""` on the wire: a usage error,
+/// a worker's failure outside any file), at the project's root (`"."`: a
+/// conftest at the root that failed), or at a path in the project.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub enum DiagnosticPath {
+    #[default]
+    Nowhere,
+    Root,
+    At(ProjectPath),
+}
+
+impl DiagnosticPath {
+    /// `path` as a worker, a stored log or a relativizer wrote it: `""` is
+    /// nowhere, `.` the root, and anything else a path kept as written.
+    pub fn as_written(path: impl Into<Box<str>>) -> Self {
+        let path: Box<str> = path.into();
+        match &*path {
+            "" => Self::Nowhere,
+            "." => Self::Root,
+            _ => Self::At(ProjectPath::as_written(path)),
+        }
+    }
+
+    /// As the wire spells it.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Nowhere => "",
+            Self::Root => ".",
+            Self::At(path) => path.as_str(),
+        }
+    }
+
+    /// The path it points at, when it points at one below the root.
+    pub fn path(&self) -> Option<&ProjectPath> {
+        match self {
+            Self::At(path) => Some(path),
+            Self::Nowhere | Self::Root => None,
+        }
+    }
+
+    pub fn is_nowhere(&self) -> bool {
+        matches!(self, Self::Nowhere)
+    }
+}
+
+/// A path written as `""` or `.` is nowhere or the root, as on the wire.
+impl From<ProjectPath> for DiagnosticPath {
+    fn from(path: ProjectPath) -> Self {
+        Self::as_written(path.0)
+    }
+}
+
+/// As [`DiagnosticPath::as_written`].
+impl From<&str> for DiagnosticPath {
+    fn from(path: &str) -> Self {
+        Self::as_written(path)
+    }
+}
+
+/// As [`DiagnosticPath::as_written`].
+impl From<String> for DiagnosticPath {
+    fn from(path: String) -> Self {
+        Self::as_written(path)
+    }
+}
+
+impl fmt::Display for DiagnosticPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl PartialEq<str> for DiagnosticPath {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for DiagnosticPath {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<ProjectPath> for DiagnosticPath {
+    fn eq(&self, other: &ProjectPath) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Serialize for DiagnosticPath {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// Never rejects, as [`DiagnosticPath::as_written`].
+impl<'de> Deserialize<'de> for DiagnosticPath {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Box::<str>::deserialize(deserializer).map(Self::as_written)
+    }
+}
+
 /// A file and a byte range in it. Separate from ids: failure locations,
 /// snapshots and the source rewriter all point at spans.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,6 +421,28 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["abs", "t.py"]
         );
+    }
+
+    #[test]
+    fn a_diagnostic_points_nowhere_at_the_root_or_at_a_path() {
+        for (text, path) in [
+            ("", DiagnosticPath::Nowhere),
+            (".", DiagnosticPath::Root),
+            (
+                "tests/t.py",
+                DiagnosticPath::At(ProjectPath::new("tests/t.py").unwrap()),
+            ),
+            (
+                "/abs/t.py",
+                DiagnosticPath::At(ProjectPath::as_written("/abs/t.py")),
+            ),
+        ] {
+            let json = serde_json::to_string(text).unwrap();
+            let read: DiagnosticPath = serde_json::from_str(&json).unwrap();
+            assert_eq!(read, path, "{text}");
+            assert_eq!(serde_json::to_string(&read).unwrap(), json);
+            assert_eq!(read.as_str(), text);
+        }
     }
 
     #[test]
