@@ -93,11 +93,10 @@
 //!   so recognizers report them and collection passes them through.
 //!   Collection adds `no-tests` (info) for a test file no adapter finds a
 //!   test in, unless every adapter claiming it claims such files whatever
-//!   their names (pytest's doctest modules: every module): asked about a
-//!   file of the same kind, in the same directory, named nothing in
-//!   particular (`__aye_any_name__.py`), it claims that one too, so a file
-//!   without tests is no surprise. The rule knows no framework's patterns:
-//!   it only asks the recognizers. Nor is it added for a file an adapter
+//!   their names (pytest's doctest modules: every module), as
+//!   `Recognizer::claims_any_name` says for the file's directory and
+//!   extension: a file without tests is no surprise then. The rule knows no
+//!   framework's patterns: it only asks the recognizers. Nor is it added for a file an adapter
 //!   already reported about (a module the framework skipped or ignores, a
 //!   class it won't collect) or, in refinement, about a directory it is
 //!   in (a conftest that skipped the directory), which says why already.
@@ -182,7 +181,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use aye_adapter::{Project, Recognition, Recognizer, Requested, SourceFile};
+use aye_adapter::{Project, Recognition, Recognizer, SourceFile};
 use aye_events::{
     AdapterName, Case, ContentDigest, Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPathRef,
     Severity, TestId,
@@ -942,15 +941,10 @@ impl PartialOrd for WalkKey {
     }
 }
 
-/// The name of a file no recognizer is expected to claim by its name: a
-/// recognizer that claims it claims modules whatever their names (pytest's
-/// doctest modules, `python_files = *.py`).
-const PROBE: &str = "__aye_any_name__";
-
 /// Whether `recognizer` would claim for tests any file of `rel`'s kind in
-/// its directory, whatever its name: then a file of that kind without tests
-/// is no surprise, and gets no `no-tests` note. Asked once per directory,
-/// extension and recognizer.
+/// its directory, whatever its name ([`Recognizer::claims_any_name`]): then
+/// a file of that kind without tests is no surprise, and gets no
+/// `no-tests` note. Asked once per directory, extension and recognizer.
 fn claims_any_name(
     probes: &mut HashMap<(String, String, usize), bool>,
     recognizer: &Prepared,
@@ -961,19 +955,7 @@ fn claims_any_name(
     let extension = name.rsplit_once('.').map_or("", |(_, ext)| ext);
     *probes
         .entry((dir.to_string(), extension.to_string(), index))
-        .or_insert_with(|| {
-            let mut probe = String::new();
-            if !dir.is_empty() {
-                probe.push_str(dir);
-                probe.push('/');
-            }
-            probe.push_str(PROBE);
-            if !extension.is_empty() {
-                probe.push('.');
-                probe.push_str(extension);
-            }
-            recognizer.1.claim(&probe, Requested::Found).has_tests()
-        })
+        .or_insert_with(|| recognizer.1.claims_any_name(dir, extension))
 }
 
 #[cfg(test)]

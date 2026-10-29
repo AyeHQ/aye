@@ -259,6 +259,10 @@ pub struct JunitDefaults {
     pub family: Option<String>,
 }
 
+/// The name of a file no recognizer is expected to claim by its name
+/// ([`Recognizer::claims_any_name`]).
+const ANY_NAME: &str = "__aye_any_name__";
+
 /// An adapter's static face, configured for one project.
 pub trait Recognizer: Send + Sync {
     /// Where to look when no paths are given (pytest's `testpaths`, or the
@@ -270,6 +274,27 @@ pub trait Recognizer: Send + Sync {
 
     /// What `rel` is to this adapter, asked about as `requested` says.
     fn claim(&self, rel: &str, requested: Requested) -> Claim;
+
+    /// Whether this recognizer claims for tests every file found in `dir`
+    /// (relative to the project root, `/` separators, empty for the root)
+    /// with `extension` (empty for none), whatever its name: pytest's
+    /// doctest modules, `python_files = *.py`. Collection then expects no
+    /// test of such a file, and says nothing of one without. By default,
+    /// whether [`Recognizer::claim`] claims one named nothing in particular
+    /// there (`__aye_any_name__.<extension>`).
+    fn claims_any_name(&self, dir: &str, extension: &str) -> bool {
+        let mut probe = String::new();
+        if !dir.is_empty() {
+            probe.push_str(dir);
+            probe.push('/');
+        }
+        probe.push_str(ANY_NAME);
+        if !extension.is_empty() {
+            probe.push('.');
+            probe.push_str(extension);
+        }
+        self.claim(&probe, Requested::Found).has_tests()
+    }
 
     /// Predict the tests in `file`, which was claimed as `requested` says.
     /// `support` holds the support files that apply to it (pytest's
