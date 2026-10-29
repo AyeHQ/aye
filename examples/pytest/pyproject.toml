@@ -1,0 +1,16 @@
+[project]
+name = "shop"
+version = "0.1.0"
+description = "A tiny shop, tested with pytest: an example project for aye."
+requires-python = ">=3.10"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Import `shop` from this directory without installing it.
+pythonpath = ["."]
+# Every mark must be registered; --strict-markers makes a typo an error.
+addopts = "--strict-markers"
+markers = ["slow: takes longer than the rest (deselect with -m \"not slow\")"]

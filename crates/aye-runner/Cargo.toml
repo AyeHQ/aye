@@ -1,0 +1,23 @@
+[package]
+name = "aye-runner"
+description = "The aye runner: workers, warm daemon, scheduling, backends, services and the worker transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+aye-engine = { workspace = true }
+aye-events = { workspace = true }
+aye-provision = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
