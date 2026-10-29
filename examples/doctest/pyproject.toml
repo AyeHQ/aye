@@ -1,0 +1,15 @@
+[project]
+name = "shop"
+version = "0.1.0"
+description = "A tiny shop whose documentation is its tests: an example project for aye."
+requires-python = ">=3.10"
+
+[tool.aye]
+adapters = ["doctest"]
+
+[tool.aye.doctest]
+# Run the examples in the modules' docstrings, as `pytest --doctest-modules`
+# does, and those in text files named test*.txt, as `pytest --doctest-glob`
+# does by default.
+modules = true
+glob = ["test*.txt"]

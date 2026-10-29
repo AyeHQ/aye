@@ -1,0 +1,13 @@
+{"run":"d7d2db88733c0c60","seq":0,"t_ms":0.002,"event":"run_started","schema_version":1,"aye_version":"0.0.1","root":"/repo","workers":1}
+{"run":"d7d2db88733c0c60","seq":1,"t_ms":0.064,"event":"collection_started"}
+{"run":"d7d2db88733c0c60","seq":2,"t_ms":145.284,"event":"diagnostic","severity":"info","code":"skipped","path":"tests/test_s.py","message":"whole module"}
+{"run":"d7d2db88733c0c60","seq":3,"t_ms":145.327,"event":"diagnostic","severity":"info","code":"no-tests","path":"tests/test_s.py","message":"claimed for tests by pytest, but has none"}
+{"run":"d7d2db88733c0c60","seq":4,"t_ms":145.377,"event":"case_collected","id":"tests/test_b.py::test_b","adapter":"pytest","span":{"path":"tests/test_b.py","start":4,"end":10,"line":1},"keywords":["tests","test_b.py","test_b"],"affinity":["import:test_b","tests/test_b.py"],"certainty":"exact"}
+{"run":"d7d2db88733c0c60","seq":5,"t_ms":145.398,"event":"collection_finished","selected":1,"deselected":0,"refined_files":1,"duration_ms":145.32}
+{"run":"d7d2db88733c0c60","worker":0,"seq":6,"t_ms":234.045,"event":"worker_started","pid":30992,"python":"/repo/.venv/bin/python"}
+{"run":"d7d2db88733c0c60","worker":0,"batch":0,"seq":7,"t_ms":234.107,"event":"batch_started","adapter":"pytest","cases":1}
+{"run":"d7d2db88733c0c60","worker":0,"batch":0,"seq":8,"t_ms":258.001,"event":"test_started","id":"tests/test_b.py::test_b"}
+{"run":"d7d2db88733c0c60","worker":0,"batch":0,"seq":9,"t_ms":258.252,"event":"test_finished","id":"tests/test_b.py::test_b","outcome":"passed","duration_ms":0.342}
+{"run":"d7d2db88733c0c60","worker":0,"batch":0,"seq":10,"t_ms":264.167,"event":"batch_finished","status":0}
+{"run":"d7d2db88733c0c60","worker":0,"seq":11,"t_ms":286.899,"event":"worker_finished","exit_status":0}
+{"run":"d7d2db88733c0c60","seq":12,"t_ms":286.958,"event":"run_finished","exit_code":0,"counts":{"passed":1,"failed":0,"error":0,"skipped":0,"expected_failure":0,"unexpected_pass":0,"deselected":0},"duration_ms":287.047}

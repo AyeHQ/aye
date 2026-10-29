@@ -1,0 +1,10 @@
+[project]
+name = "suite-doctest"
+version = "0"
+
+[tool.aye]
+adapters = ["doctest"]
+
+[tool.pytest.ini_options]
+addopts = "--doctest-modules --doctest-glob=test*.txt --doctest-glob=*.rst --doctest-glob=*.md"
+doctest_optionflags = "ELLIPSIS NUMBER"

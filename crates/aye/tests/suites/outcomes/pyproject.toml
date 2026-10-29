@@ -1,0 +1,8 @@
+[project]
+name = "suite-outcomes"
+version = "0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: slow tests", "db: needs the database"]
+addopts = "--strict-markers"
