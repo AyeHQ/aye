@@ -23,13 +23,8 @@ fn selectors_are_made_relative_to_the_root() {
 fn paths_outside_the_root_climb_out_instead_of_doubling_the_slash() {
     let root = Path::new("/repo/sub");
     assert_eq!(selector(root, root, "../x/test_a.py"), "../x/test_a.py");
-    assert_eq!(relative(Path::new("/repo/x"), root), "../x");
-    assert_eq!(relative(Path::new("/repo/sub/a/b"), root), "a/b");
-    assert_eq!(relative(root, root), "");
-    assert_eq!(
-        relative(Path::new("/elsewhere"), Path::new("/")),
-        "elsewhere"
-    );
+    assert_eq!(relative_below_root(Path::new("/repo/x"), root), "../x");
+    assert_eq!(relative_below_root(Path::new("/repo/sub/a/b"), root), "a/b");
 }
 
 #[test]
@@ -80,8 +75,8 @@ fn a_root_reached_through_dot_dot_is_normalized() {
             "tests/test_b.py::t",
         ),
     ] {
-        let given = [normalize(&cwd.join(path_part(arg)))];
-        let found = normalize(&aye_config::find_root(&aye_config::common_ancestor(
+        let given = [normalize_absolute(&cwd.join(path_part(arg)))];
+        let found = normalize_absolute(&aye_config::find_root(&aye_fs::common_ancestor(
             &cwd, &given,
         )));
         assert_eq!(found, root, "{arg} from {}", cwd.display());
@@ -649,48 +644,11 @@ fn the_junit_report_can_come_from_the_framework() {
     assert_eq!(junit_prefix(&context("x.xml")), "");
 }
 
-/// The home directory `~` stands for, as [`expand_path`] finds it.
+/// The home directory `~` stands for, as [`aye_fs::expand_path`] finds it.
 fn home() -> Option<String> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()
-}
-
-#[test]
-fn report_paths_expand_as_pytest_expands_them() {
-    // A variable this process has, whatever the platform.
-    let (name, value) = std::env::vars()
-        .find(|(name, value)| {
-            !name.is_empty()
-                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                && !value.contains(['$', '~'])
-        })
-        .unwrap();
-    for (given, want) in [
-        ("out.xml".to_string(), "out.xml".to_string()),
-        (format!("${name}/a.xml"), format!("{value}/a.xml")),
-        (format!("${{{name}}}/a.xml"), format!("{value}/a.xml")),
-        (format!("x${{{name}}}.xml"), format!("x{value}.xml")),
-        // Unset variables, and what isn't a reference, stay as written.
-        (
-            "$AYE_UNSET_FOR_TESTS_7/a${AYE_UNSET_FOR_TESTS_7}".into(),
-            "$AYE_UNSET_FOR_TESTS_7/a${AYE_UNSET_FOR_TESTS_7}".into(),
-        ),
-        ("a$/b$".into(), "a$/b$".into()),
-        ("${unclosed/a".into(), "${unclosed/a".into()),
-        ("${}x".into(), "${}x".into()),
-        ("~someone/a.xml".into(), "~someone/a.xml".into()),
-        ("a/~/b".into(), "a/~/b".into()),
-    ] {
-        assert_eq!(expand_path(&given), PathBuf::from(&want), "{given}");
-    }
-    let Some(home) = home() else { return };
-    let home = home.trim_end_matches(['/', std::path::MAIN_SEPARATOR]);
-    assert_eq!(expand_path("~"), PathBuf::from(home));
-    assert_eq!(
-        expand_path("~/r/a.xml"),
-        PathBuf::from(format!("{home}/r/a.xml"))
-    );
 }
 
 #[cfg(unix)]

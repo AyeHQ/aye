@@ -114,9 +114,9 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
         .iter()
         .map(|test| session::path_part(test))
         .filter(|path| session::is_path_like(&cwd, path))
-        .map(|path| session::normalize(&cwd.join(path)))
+        .map(|path| aye_fs::normalize_absolute(&cwd.join(path)))
         .collect();
-    let root = session::normalize(&aye_config::find_root(&aye_config::common_ancestor(
+    let root = aye_fs::normalize_absolute(&aye_config::find_root(&aye_fs::common_ancestor(
         &cwd, &given,
     )));
     let config = AyeConfig::load(&root).map_err(|err| Problem::Usage(err.to_string()))?;

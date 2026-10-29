@@ -6,8 +6,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use aye_config::{Origin, Sourced, common_ancestor, ini_section, read_toml, split_args};
+use aye_config::{Origin, Sourced, ini_section, read_toml, split_args};
 use aye_engine::{AdapterError, Project, Setting};
+use aye_fs::common_ancestor;
 use aye_static::{EnvVars, ProcessEnv};
 
 /// Config file names, in the order pytest 9 tries them in each directory.
@@ -372,7 +373,7 @@ fn determine_setup(
         return Ok((rootdir, inifile, config));
     };
     // `absolutepath(os.path.expandvars(rootdir_cmd_arg))`.
-    let rootdir = crate::normalize(&project.cwd.join(expandvars(arg)));
+    let rootdir = aye_fs::normalize_absolute(&project.cwd.join(expandvars(arg)));
     if !rootdir.is_dir() {
         return Err(AdapterError::Config(format!(
             "Directory '{}' not found. Check your '--rootdir' option.",
@@ -953,7 +954,7 @@ fn report_path(cwd: &Path, value: &str) -> Result<Option<PathBuf>, AdapterError>
         )));
     }
     let expanded = expanduser(&expandvars(value));
-    Ok(Some(crate::normalize(&cwd.join(expanded))))
+    Ok(Some(aye_fs::normalize_absolute(&cwd.join(expanded))))
 }
 
 /// pytest's doctest options that take no value, and those that take one.

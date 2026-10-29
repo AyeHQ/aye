@@ -60,7 +60,7 @@ impl Environment {
     pub(crate) fn digest(&self, cwd: &Path) -> Option<u128> {
         let mut hash = Fnv::new();
         interpreter(
-            &aye_config::absolute(cwd, self.interpreter.as_ref()?),
+            &aye_fs::absolute(cwd, self.interpreter.as_ref()?),
             &mut hash,
         )?;
         let mut variables = self
@@ -230,7 +230,7 @@ impl Environment {
     /// packages (`include-system-site-packages = false`, venv's default)
     /// counts only its own.
     pub fn installs(&self, cwd: &Path, names: &[&str]) -> Option<bool> {
-        let python = aye_config::absolute(cwd, self.interpreter.as_ref()?);
+        let python = aye_fs::absolute(cwd, self.interpreter.as_ref()?);
         let real = fs::canonicalize(&python).ok()?;
         let layout = Layout::of(&python, &real);
         if layout.importable().is_empty() {
@@ -252,7 +252,7 @@ impl Environment {
         let Some(python) = &self.interpreter else {
             return HashSet::new();
         };
-        let python = aye_config::absolute(cwd, python);
+        let python = aye_fs::absolute(cwd, python);
         let Ok(real) = fs::canonicalize(&python) else {
             return HashSet::new();
         };
@@ -305,7 +305,7 @@ impl Environment {
             None => std::env::var_os(EnvVars::PYTHONPATH),
         };
         for dir in pythonpath.iter().flat_map(std::env::split_paths) {
-            modules_in(&aye_config::absolute(cwd, &dir), &mut names);
+            modules_in(&aye_fs::absolute(cwd, &dir), &mut names);
         }
         names
     }

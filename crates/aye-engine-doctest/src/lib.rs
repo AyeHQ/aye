@@ -820,7 +820,7 @@ impl DoctestRecognizer {
             return project
                 .args
                 .iter()
-                .map(|a| aye_config::absolute(project.cwd, a))
+                .map(|a| aye_fs::absolute(project.cwd, a))
                 .collect();
         }
         if project.cwd == self.config.rootdir && !self.config.testpaths.is_empty() {
@@ -1389,7 +1389,7 @@ impl DoctestRecognizer {
 /// Python's `glob.glob(pattern, recursive=True)` from `base`: the existing
 /// paths matching `pattern`, sorted per directory, `**` matching any depth.
 fn glob(base: &Path, pattern: &str) -> Vec<PathBuf> {
-    let absolute = aye_config::absolute(base, Path::new(pattern));
+    let absolute = aye_fs::absolute(base, Path::new(pattern));
     let has_magic = |s: &str| s.contains(['*', '?', '[']);
     if !has_magic(pattern) {
         return if absolute.exists() {

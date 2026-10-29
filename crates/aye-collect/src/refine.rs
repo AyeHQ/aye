@@ -262,7 +262,7 @@ impl Collector<'_> {
             if init == abs || !init.is_file() {
                 continue;
             }
-            let rel = crate::tree::relative(&init, root);
+            let rel = aye_fs::relative_through_root(&init, root);
             let hash = *memo.entry((init.clone(), recognizer)).or_insert_with(|| {
                 let (source, _) = crate::source::load(&init, &rel);
                 let source = source.filter(|s| !s.is_lossy())?;

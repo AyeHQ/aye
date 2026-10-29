@@ -530,7 +530,7 @@ impl<'a> Collector<'a> {
         }
         let all = (0..self.recognizers.len()).fold(0, |all: Mask, i| all | 1 << i);
         for (abs, target) in self.normalize_targets(targets) {
-            let rel = tree::relative(&abs, self.project.root);
+            let rel = aye_fs::relative_through_root(&abs, self.project.root);
             let (code, message) = if abs.is_dir() {
                 if !tree.walk(&abs, all, tick) {
                     return false;
@@ -570,11 +570,11 @@ impl<'a> Collector<'a> {
         let resolved: Vec<(PathBuf, &PathBuf)> = targets
             .iter()
             .map(|target| {
-                let abs = aye_config::absolute(self.project.cwd, target);
+                let abs = aye_fs::absolute(self.project.cwd, target);
                 let abs = if abs.starts_with(root) {
                     abs
                 } else {
-                    aye_config::relative_to(root, &abs).map_or(abs, |rel| root.join(rel))
+                    aye_fs::relative_to(root, &abs).map_or(abs, |rel| root.join(rel))
                 };
                 (abs, target)
             })
@@ -609,7 +609,7 @@ impl<'a> Collector<'a> {
         let mut roots: Vec<(PathBuf, Mask)> = Vec::new();
         for (i, (_, recognizer)) in self.recognizers.iter().enumerate() {
             for root in recognizer.roots(&self.project) {
-                let root = aye_config::absolute(self.project.cwd, &root);
+                let root = aye_fs::absolute(self.project.cwd, &root);
                 match roots.iter_mut().find(|(seen, _)| *seen == root) {
                     Some((_, mask)) => *mask |= 1 << i,
                     None => roots.push((root, 1 << i)),

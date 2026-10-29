@@ -145,6 +145,7 @@ dependencies = [
  "aye-engine-pytest",
  "aye-engine-unittest",
  "aye-events",
+ "aye-fs",
  "aye-history",
  "aye-provision",
  "aye-render",
@@ -164,6 +165,7 @@ dependencies = [
  "aye-config",
  "aye-engine",
  "aye-events",
+ "aye-fs",
  "aye-history",
  "aye-static",
  "ruff_python_parser",
@@ -176,6 +178,7 @@ dependencies = [
 name = "aye-config"
 version = "0.0.1"
 dependencies = [
+ "aye-fs",
  "serde",
  "shlex",
  "tempfile",
@@ -205,6 +208,7 @@ dependencies = [
  "aye-config",
  "aye-engine",
  "aye-events",
+ "aye-fs",
  "aye-static",
  "ruff_python_parser",
  "serde_json",
@@ -219,6 +223,7 @@ dependencies = [
  "aye-config",
  "aye-engine",
  "aye-events",
+ "aye-fs",
  "aye-static",
  "ruff_python_parser",
  "serde_json",
@@ -234,6 +239,7 @@ dependencies = [
  "aye-config",
  "aye-engine",
  "aye-events",
+ "aye-fs",
  "ruff_python_parser",
  "serde_json",
  "tempfile",
@@ -245,6 +251,13 @@ version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "aye-fs"
+version = "0.0.1"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]

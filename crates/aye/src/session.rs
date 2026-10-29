@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{self, IsTerminal as _};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -14,6 +14,7 @@ use aye_collect::{Collector, Environment, Options, Prepared};
 use aye_config::AyeConfig;
 use aye_engine::{Adapter, Policy, Project, Refiner};
 use aye_events::{Case, Counts, Diagnostic, Event, ExitCode, Record, SCHEMA_VERSION, Severity};
+use aye_fs::{normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter};
 use aye_render::{
     ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
@@ -128,9 +129,9 @@ impl Session {
             .iter()
             .map(|test| path_part(test))
             .filter(|path| is_path_like(&cwd, path))
-            .map(|path| normalize(&cwd.join(path)))
+            .map(|path| normalize_absolute(&cwd.join(path)))
             .collect();
-        let root = normalize(&aye_config::find_root(&aye_config::common_ancestor(
+        let root = normalize_absolute(&aye_config::find_root(&aye_fs::common_ancestor(
             &cwd, &given,
         )));
         let positionals: Vec<Positional> = args
@@ -146,7 +147,7 @@ impl Session {
                 continue;
             };
             let as_given = path_part(test);
-            if normalize(&cwd.join(as_given)) == *path {
+            if normalize_absolute(&cwd.join(as_given)) == *path {
                 paths.push(PathBuf::from(as_given));
             } else {
                 paths.push(path.clone());
@@ -823,12 +824,12 @@ impl Here<'_> {
         let (path, rest) = id
             .split_once("::")
             .map_or((id, None), |(p, r)| (p, Some(r)));
-        let from_cwd = normalize(&self.cwd.join(path));
-        let from_root = normalize(&self.root.join(path));
+        let from_cwd = normalize_absolute(&self.cwd.join(path));
+        let from_root = normalize_absolute(&self.root.join(path));
         if from_cwd == from_root || !from_cwd.exists() {
             return None;
         }
-        let mut local = relative(&from_root, self.cwd);
+        let mut local = relative_below_root(&from_root, self.cwd);
         if let Some(rest) = rest {
             local.push_str("::");
             local.push_str(rest);
@@ -1030,7 +1031,7 @@ impl Reach {
         if positionals.iter().all(|p| p.path.is_some()) {
             return None;
         }
-        let at_root = |relative: &str| normalize(&root.join(relative));
+        let at_root = |relative: &str| normalize_absolute(&root.join(relative));
         let mut paths = Vec::new();
         let mut words = Vec::new();
         let mut selected: Vec<PathBuf> = Vec::new();
@@ -1074,7 +1075,7 @@ impl Reach {
     /// the run starts from (as `pytest <those paths>` loads it first), or
     /// some argument named nothing. Everything else is the run's.
     fn keeps(&self, root: &Path, diagnostic: &Diagnostic) -> bool {
-        let at = || normalize(&root.join(&diagnostic.path));
+        let at = || normalize_absolute(&root.join(&diagnostic.path));
         match (diagnostic.severity, diagnostic.code.as_str()) {
             (Severity::Info, codes::SKIPPED) => {
                 let at = at();
@@ -1495,7 +1496,7 @@ fn session_files(
     for case in cases {
         let path = case.id.path();
         let reached = within.is_none_or(|(paths, root)| {
-            let file = normalize(&root.join(path));
+            let file = normalize_absolute(&root.join(path));
             paths.iter().any(|start| file.starts_with(start))
         });
         if reached && seen.insert((case.adapter.as_str(), path)) {
@@ -1576,7 +1577,7 @@ fn with_requested(mut context: serde_json::Value, requested: &[String]) -> serde
 /// See [`Session::junit`].
 fn junit_path(cwd: &Path, given: Option<&Path>, prepared: &[Prepared]) -> Option<PathBuf> {
     let path = match given {
-        Some(given) => expand_path(&given.to_string_lossy()),
+        Some(given) => aye_fs::expand_path(&given.to_string_lossy(), |name| std::env::var_os(name)),
         None => context_strings(prepared, "junitxml")
             .into_iter()
             .next()
@@ -1779,52 +1780,6 @@ fn pick(given: Option<&str>, framework: Passed) -> Pick {
     }
 }
 
-/// `os.path.expanduser(os.path.expandvars(path))`, as pytest reads a
-/// report's path: `$NAME` and `${NAME}` become the variable's value when it
-/// is set, then a leading `~` becomes the home directory (`~user` is left
-/// as it is).
-fn expand_path(path: &str) -> PathBuf {
-    let mut out = String::with_capacity(path.len());
-    let mut rest = path;
-    while let Some(at) = rest.find('$') {
-        out.push_str(&rest[..at]);
-        let after = &rest[at + 1..];
-        let word = |s: &str| {
-            s.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .unwrap_or(s.len())
-        };
-        // The name, and how long the reference is after the `$`.
-        let reference = match after.strip_prefix('{') {
-            Some(braced) => braced.find('}').map(|end| (&braced[..end], end + 2)),
-            None => Some(word(after))
-                .filter(|end| *end > 0)
-                .map(|end| (&after[..end], end)),
-        };
-        let Some((name, len)) = reference else {
-            out.push('$');
-            rest = after;
-            continue;
-        };
-        match std::env::var(name) {
-            Ok(value) if !name.is_empty() => out.push_str(&value),
-            _ => out.push_str(&rest[at..=at + len]),
-        }
-        rest = &after[len..];
-    }
-    out.push_str(rest);
-    let separators = ['/', std::path::MAIN_SEPARATOR];
-    if let Some(tail) = out.strip_prefix('~')
-        && (tail.is_empty() || tail.starts_with(separators))
-        && let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
-    {
-        let home = home.to_string_lossy();
-        let home = home.trim_end_matches(separators);
-        let expanded = format!("{home}{tail}");
-        return PathBuf::from(if expanded.is_empty() { "/" } else { &expanded });
-    }
-    PathBuf::from(out)
-}
-
 /// The output format, and where it came from: `--output`, else
 /// `[tool.aye] output`, else text. aye-config accepts only the values in
 /// `aye_config::OUTPUTS`, each of which parses.
@@ -1879,12 +1834,12 @@ pub(crate) fn resolve(cwd: &Path, root: &Path, arg: &str) -> Positional {
         .split_once("::")
         .map_or((arg, None), |(p, r)| (p, Some(r)));
     let from_root = || {
-        let at_root = normalize(&root.join(path));
+        let at_root = normalize_absolute(&root.join(path));
         (Path::new(path).is_relative() && at_root.starts_with(root) && at_root.exists())
             .then_some(at_root)
     };
     let absolute = if is_path_like(cwd, path) {
-        let from_cwd = normalize(&cwd.join(path));
+        let from_cwd = normalize_absolute(&cwd.join(path));
         if from_cwd.exists() {
             from_cwd
         } else {
@@ -1913,69 +1868,6 @@ pub(crate) fn resolve(cwd: &Path, root: &Path, arg: &str) -> Positional {
         path: Some(absolute),
         id: rest.is_some(),
     }
-}
-
-/// Remove `.` and `..` without touching the filesystem.
-pub(crate) fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
-}
-
-/// `path` relative to the root as collection's ids spell it: also when it
-/// is spelled through another name of a directory in the project (macOS's
-/// `/tmp` is `/private/tmp`), by [`aye_config::relative_to`]; else
-/// [`relative`], climbing out with `..`.
-fn root_relative(path: &Path, root: &Path) -> String {
-    aye_config::relative_to(root, path).map_or_else(|| relative(path, root), |rest| slashed(&rest))
-}
-
-/// A relative path's components joined with `/`.
-fn slashed(path: &Path) -> String {
-    path.components()
-        .filter(|c| !matches!(c, Component::RootDir | Component::Prefix(_)))
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-/// `path` relative to `base` with `/` separators, climbing out with `..`
-/// when it lies elsewhere; absolute when they share nothing. Both are
-/// absolute and normalized.
-fn relative(path: &Path, base: &Path) -> String {
-    if let Ok(rest) = path.strip_prefix(base) {
-        return slashed(rest);
-    }
-    let shared = path
-        .components()
-        .zip(base.components())
-        .take_while(|(a, b)| a == b)
-        .count();
-    let anchored = path
-        .components()
-        .take(shared)
-        .any(|c| matches!(c, Component::Normal(_)));
-    if !anchored {
-        return path.to_string_lossy().replace('\\', "/");
-    }
-    let path_parts: Vec<Component> = path.components().collect();
-    let up = base.components().count() - shared;
-    std::iter::repeat_n("..".to_string(), up)
-        .chain(
-            path_parts[shared..]
-                .iter()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned()),
-        )
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 /// Where the project root lies in the repository, for GitHub annotations:

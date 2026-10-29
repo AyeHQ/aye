@@ -76,10 +76,10 @@ impl UnittestConfig {
                 shown()
             )));
         }
-        let start = aye_config::absolute(root, Path::new(&start_directory.value));
+        let start = aye_fs::absolute(root, Path::new(&start_directory.value));
         let top = top_level_directory.value.as_deref().map_or_else(
             || start.clone(),
-            |top| aye_config::absolute(root, Path::new(top)),
+            |top| aye_fs::absolute(root, Path::new(top)),
         );
         for (key, dir) in [(START_DIRECTORY, &start), (TOP_LEVEL_DIRECTORY, &top)] {
             if !dir.is_dir() {

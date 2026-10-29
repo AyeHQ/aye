@@ -280,7 +280,7 @@ mod module;
 mod tests;
 
 use std::collections::HashMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use aye_engine::{
@@ -288,6 +288,7 @@ use aye_engine::{
     Setting, SourceFile,
 };
 use aye_events::{Case, Certainty, Span};
+use aye_fs::normalize_absolute;
 
 pub use config::UnittestConfig;
 pub use fnmatch::{fnmatch, valid_module_name};
@@ -332,21 +333,6 @@ impl Adapter for Unittest {
     }
 }
 
-/// `os.path.abspath` without touching the file system.
-fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
-        }
-    }
-    out
-}
-
 fn is_package(dir: &Path) -> bool {
     dir.join("__init__.py").is_file()
 }
@@ -371,13 +357,13 @@ pub struct UnittestRecognizer {
 
 impl UnittestRecognizer {
     pub fn new(project: &Project<'_>) -> Result<Self, AdapterError> {
-        let root = normalize(project.root);
+        let root = normalize_absolute(project.root);
         let config = UnittestConfig::load(&root)?;
-        let start = normalize(&config.start);
-        let top = normalize(&config.top);
+        let start = normalize_absolute(&config.start);
+        let top = normalize_absolute(&config.top);
         let mut starts = vec![(start.clone(), top.clone())];
         for arg in project.args {
-            let path = normalize(&project.cwd.join(arg));
+            let path = normalize_absolute(&project.cwd.join(arg));
             // A directory holding the start directory walks it; one inside
             // it narrows discovery from it.
             if !path.is_dir() || start.starts_with(&path) || path.starts_with(&start) {
@@ -398,7 +384,7 @@ impl UnittestRecognizer {
         let named = project
             .args
             .iter()
-            .map(|arg| normalize(&project.cwd.join(arg)))
+            .map(|arg| normalize_absolute(&project.cwd.join(arg)))
             .filter(|path| path.is_file() && path.extension().is_some_and(|e| e == "py"))
             .collect();
         Ok(Self {
@@ -591,7 +577,7 @@ impl Recognizer for UnittestRecognizer {
     /// Towards a start directory, and below one only into packages, as
     /// discovery recurses.
     fn descend(&self, dir: &Path) -> bool {
-        let dir = normalize(dir);
+        let dir = normalize_absolute(dir);
         let mut inside = false;
         for (start, _) in &self.starts {
             if start.starts_with(&dir) {
@@ -613,7 +599,7 @@ impl Recognizer for UnittestRecognizer {
         if explicit {
             return Claim::Tests;
         }
-        let abs = normalize(&self.root.join(rel));
+        let abs = normalize_absolute(&self.root.join(rel));
         let Some((start, top)) = self.start_for(&abs) else {
             return Claim::Ignore;
         };
@@ -639,7 +625,7 @@ impl Recognizer for UnittestRecognizer {
     }
 
     fn recognize(&self, file: &SourceFile<'_>, _support: &[SourceFile<'_>]) -> Recognition {
-        let abs = normalize(file.abs);
+        let abs = normalize_absolute(file.abs);
         if let Some(package) = self.unimportable(&abs) {
             // Its `__init__.py` is refined, to report the import error.
             let refine = (abs == package.join("__init__.py")).then(|| {

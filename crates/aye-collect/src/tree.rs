@@ -101,7 +101,7 @@ impl<'r> Tree<'r> {
                         self.diagnostics.push(Diagnostic {
                             severity: Severity::Error,
                             code: codes::UNREADABLE.to_string(),
-                            path: relative(path, self.root),
+                            path: aye_fs::relative_through_root(path, self.root),
                             span: None,
                             message: format!("cannot read: {err}"),
                         });
@@ -166,7 +166,7 @@ impl<'r> Tree<'r> {
         }
         let at = self.entries.len();
         self.entries.push(Entry {
-            rel: relative(&abs, self.root),
+            rel: aye_fs::relative_through_root(&abs, self.root),
             abs: abs.clone(),
             walked: false,
             explicit: false,
@@ -287,30 +287,4 @@ impl Entry {
             self.support |= bit;
         }
     }
-}
-
-/// `path` relative to `root` with `/` separators, climbing out with `..` when
-/// it lies elsewhere.
-pub(crate) fn relative(path: &Path, root: &Path) -> String {
-    let parts = |path: &Path| -> Vec<String> {
-        path.components()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned())
-            .collect()
-    };
-    if let Ok(rest) = path.strip_prefix(root) {
-        return parts(rest).join("/");
-    }
-    let (path_parts, root_parts) = (parts(path), parts(root));
-    let common = path_parts
-        .iter()
-        .zip(&root_parts)
-        .take_while(|(a, b)| a == b)
-        .count();
-    if common == 0 {
-        return path.to_string_lossy().replace('\\', "/");
-    }
-    std::iter::repeat_n("..".to_string(), root_parts.len() - common)
-        .chain(path_parts[common..].iter().cloned())
-        .collect::<Vec<_>>()
-        .join("/")
 }
