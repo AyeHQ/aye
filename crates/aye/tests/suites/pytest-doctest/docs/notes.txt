@@ -1,0 +1,4 @@
+Notes, not a test file: the name doesn't match test*.txt.
+
+    >>> 1 + 1
+    3

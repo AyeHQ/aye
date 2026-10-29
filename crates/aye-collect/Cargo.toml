@@ -1,0 +1,25 @@
+[package]
+name = "aye-collect"
+description = "Static collection infrastructure for aye: walk, parse, recognize, refine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+aye-config = { workspace = true }
+aye-engine = { workspace = true }
+aye-events = { workspace = true }
+aye-history = { workspace = true }
+ruff_python_parser = { workspace = true }
+serde_json = { workspace = true }
+walkdir = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

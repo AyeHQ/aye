@@ -1,0 +1,12 @@
+{
+  "referee": "pytest",
+  "collected": [
+    "sub/tests/test_rooted.py::test_regular",
+    "sub/tests/test_rooted.py::check_custom_prefix"
+  ],
+  "outcomes": {
+    "sub/tests/test_rooted.py::check_custom_prefix": "passed",
+    "sub/tests/test_rooted.py::test_regular": "passed"
+  },
+  "exit_code": 0
+}
