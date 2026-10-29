@@ -32,9 +32,15 @@ impl TestId {
     }
 
     /// The id without its parameter id: `t.py::test_x[1]` → `t.py::test_x`.
+    /// The parameter id opens at the first `[` after the path, since names
+    /// never hold one, and the id must end with its `]`; a file's name may
+    /// hold `[` (`t[1].py::test_x[1]` → `t[1].py::test_x`).
     pub fn without_params(&self) -> &str {
-        match self.0.find('[') {
-            Some(at) if self.0.ends_with(']') && self.0[..at].contains("::") => &self.0[..at],
+        let Some((path, names)) = self.0.split_once("::") else {
+            return &self.0;
+        };
+        match names.find('[') {
+            Some(at) if names.ends_with(']') => &self.0[..path.len() + "::".len() + at],
             _ => &self.0,
         }
     }
@@ -96,6 +102,25 @@ mod tests {
             TestId::new("tests/t[1].py::test_x").without_params(),
             "tests/t[1].py::test_x"
         );
+    }
+
+    /// A `[` in the file's name opens no parameter id: the parameters are
+    /// the names' (finding 1 of docs/reorganisation.md).
+    #[test]
+    fn a_bracket_in_the_path_is_not_a_parameter_id() {
+        for (id, without) in [
+            ("tests/t[1].py::test_x[a]", "tests/t[1].py::test_x"),
+            (
+                "tests/t[1].py::TestX::test_y[a-1]",
+                "tests/t[1].py::TestX::test_y",
+            ),
+            ("tests/t[1].py::test_x[a[1]]", "tests/t[1].py::test_x"),
+            ("tests/t[1].py", "tests/t[1].py"),
+            ("tests/t[1].py::test_x[a", "tests/t[1].py::test_x[a"),
+            ("tests/t.py::test_x[a::b]", "tests/t.py::test_x"),
+        ] {
+            assert_eq!(TestId::new(id).without_params(), without, "{id}");
+        }
     }
 
     #[test]
