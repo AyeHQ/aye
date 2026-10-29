@@ -81,6 +81,10 @@ impl From<io::Error> for Problem {
     }
 }
 
+#[expect(
+    clippy::print_stderr,
+    reason = "aye's own messages, outside the event stream"
+)]
 pub(crate) fn main(args: &ShowArgs) -> ExitCode {
     match show(args) {
         Ok(()) => ExitCode::Ok,

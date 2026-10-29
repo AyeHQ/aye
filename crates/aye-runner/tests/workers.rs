@@ -2,6 +2,11 @@
 //! names say what each test does. Skipped when no Python is available: they
 //! use `.venv` from `uv sync`, or `AYE_TEST_PYTHON`.
 
+#![expect(
+    clippy::iter_over_hash_type,
+    reason = "each worker's calls are checked alone, in any order"
+)]
+
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};

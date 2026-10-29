@@ -2454,6 +2454,10 @@ impl Modules {
             .collect();
         // The names those classes go by, for what aye can't resolve.
         let mut names: HashSet<String> = loaded.iter().map(|l| l.name.clone()).collect();
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "fills a set: the order shows nowhere"
+        )]
         for (path, index) in &classes {
             if let Some(owner) = self.summary(path)
                 && let Some(class) = owner.classes.get(*index)

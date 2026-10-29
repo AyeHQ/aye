@@ -4727,7 +4727,7 @@ impl DictKey {
         } else if f.is_infinite() || f.fract() != 0.0 {
             Some(Self::Float(f.to_bits()))
         } else if f.abs() < LIMIT {
-            #[allow(clippy::cast_possible_truncation, reason = "integral and below 2^126")]
+            #[expect(clippy::cast_possible_truncation, reason = "integral and below 2^126")]
             Some(Self::Int(f as i128))
         } else {
             Some(Self::BigFloat(f.to_bits()))

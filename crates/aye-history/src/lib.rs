@@ -485,7 +485,10 @@ fn duration(ms: f64) -> Duration {
 }
 
 /// Milliseconds on disk keep microseconds, as on the wire.
-#[allow(clippy::trivially_copy_pass_by_ref)] // signature fixed by serde
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "signature fixed by serde"
+)]
 fn micros<S: serde::Serializer>(ms: &f64, s: S) -> Result<S::Ok, S::Error> {
     let rounded = (ms * 1000.0).round() / 1000.0;
     s.serialize_f64(if rounded.is_finite() { rounded } else { *ms })

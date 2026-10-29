@@ -350,7 +350,10 @@ pub struct Difference {
     pub right: Option<String>,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde passes a reference"
+)]
 const fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
@@ -896,7 +899,6 @@ mod millis {
 
     use serde::{Deserialize, Deserializer, Serializer};
 
-    #[allow(clippy::trivially_copy_pass_by_ref)] // signature fixed by serde
     pub(crate) fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_f64((d.as_secs_f64() * 1_000_000.0).round() / 1000.0)
     }
@@ -919,7 +921,7 @@ mod millis {
 
         use serde::{Deserializer, Serializer};
 
-        #[allow(clippy::ref_option)] // signature fixed by serde
+        #[expect(clippy::ref_option, reason = "signature fixed by serde")]
         pub(crate) fn serialize<S: Serializer>(
             d: &Option<Duration>,
             s: S,
@@ -978,7 +980,10 @@ mod millis {
 }
 
 /// For `skip_serializing_if`.
-#[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde passes a reference"
+)]
 const fn is_zero(n: &u64) -> bool {
     *n == 0
 }

@@ -627,6 +627,10 @@ impl<'a> Failed<'a> {
         let mut paths = Vec::new();
         let mut params: HashMap<&str, Vec<&TestId>> = HashMap::new();
         let mut files = HashSet::new();
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "fills lookups; what reaches output is sorted"
+        )]
         for id in ids {
             let text = id.as_str();
             files.insert(text.split_once("::").map_or(text, |(path, _)| path));

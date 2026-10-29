@@ -309,6 +309,7 @@ struct Weights<'a> {
 impl<'a> Weights<'a> {
     fn new(exact: &'a HashMap<TestId, Duration>) -> Self {
         let mut unparametrized: HashMap<&str, Duration> = HashMap::new();
+        #[expect(clippy::iter_over_hash_type, reason = "sums, in any order")]
         for (id, duration) in exact {
             let base = id.without_params();
             if base.len() != id.as_str().len() {

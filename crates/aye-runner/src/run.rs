@@ -1325,6 +1325,10 @@ impl Shared<'_> {
     fn halt(&self) {
         self.killing.store(true, Ordering::SeqCst);
         self.queue.halt();
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "signals every busy worker; which goes first is not observable"
+        )]
         for busy in lock(&self.busy).values() {
             busy.killer.kill();
         }
@@ -1339,6 +1343,10 @@ impl Shared<'_> {
     fn wind_down(&self) {
         self.killing.store(true, Ordering::SeqCst);
         self.queue.halt();
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "signals every busy worker; which goes first is not observable"
+        )]
         for busy in lock(&self.busy).values_mut() {
             if busy.stopping == Stopping::No {
                 busy.stopping = Stopping::Interrupted;
@@ -1350,6 +1358,10 @@ impl Shared<'_> {
     /// Kill the workers [`Shared::wind_down`] interrupted that are still
     /// busy.
     fn kill_interrupted(&self) {
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "signals every busy worker; which goes first is not observable"
+        )]
         for busy in lock(&self.busy).values() {
             if busy.stopping == Stopping::Interrupted {
                 busy.killer.kill();

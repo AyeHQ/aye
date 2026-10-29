@@ -814,6 +814,10 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
             .extend(self.scope.module_imports.fixtures.iter().cloned());
         let classes = self.classes;
         let mut class_fixtures = HashMap::new();
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "fills a map: the order shows nowhere"
+        )]
         for (start, info) in classes {
             let class = self.class_def(*start);
             class_fixtures.insert(*start, self.fixtures_in(&info.ns, class));

@@ -514,12 +514,14 @@ struct Summary {
     more: Option<&'static str>,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)] // signature fixed by serde
 fn is_zero<T: Default + PartialEq>(n: &T) -> bool {
     *n == T::default()
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)] // signature fixed by serde
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "signature fixed by serde"
+)]
 const fn is_false(b: &bool) -> bool {
     !*b
 }

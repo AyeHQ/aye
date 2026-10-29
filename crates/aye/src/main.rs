@@ -252,6 +252,10 @@ use args::{Args, ShowArgs};
 use aye_events::ExitCode;
 use session::Session;
 
+#[expect(
+    clippy::print_stderr,
+    reason = "aye's own messages, outside the event stream"
+)]
 fn main() -> process::ExitCode {
     let mut raw: Vec<std::ffi::OsString> = std::env::args_os().collect();
     // `aye show` shows a stored run, unless `show` is a path: as `config`.

@@ -274,7 +274,10 @@ impl Session {
         )
     }
 
-    #[allow(clippy::too_many_lines)] // one run, top to bottom
+    #[expect(
+        clippy::print_stderr,
+        reason = "aye's own messages, outside the event stream"
+    )]
     pub(crate) fn run(mut self) -> ExitCode {
         let started = Instant::now();
         // A report that can't be written fails before anything runs, not
@@ -1228,6 +1231,10 @@ impl Stream<'_> {
     /// this run). Then every reporter gets every record: one that fails
     /// (stdout, a closed pipe) stops writing, and the others carry on.
     /// Then history folds it, and the run store keeps it.
+    #[expect(
+        clippy::print_stderr,
+        reason = "aye's own messages, outside the event stream"
+    )]
     fn deliver_to(
         reporters: &mut Tee<'_>,
         history: &mut Option<Remember<'_>>,
@@ -1252,6 +1259,10 @@ impl Stream<'_> {
         store.record(record);
     }
 
+    #[expect(
+        clippy::print_stderr,
+        reason = "aye's own messages, outside the event stream"
+    )]
     fn finish(
         mut self,
         code: ExitCode,
@@ -1368,6 +1379,10 @@ impl<R: Reporter> Reporter for File<R> {
         self.inner.report(record)
     }
 
+    #[expect(
+        clippy::print_stderr,
+        reason = "aye's own messages, outside the event stream"
+    )]
     fn finish(&mut self) -> io::Result<()> {
         if let Err(err) = self.inner.finish() {
             eprintln!("aye: error: {err}");
@@ -1397,6 +1412,10 @@ impl Remember<'_> {
         }
     }
 
+    #[expect(
+        clippy::print_stderr,
+        reason = "aye's own messages, outside the event stream"
+    )]
     fn save(&self) {
         if self.history.changed()
             && let Err(err) = self.history.save(&self.dir)
@@ -1964,6 +1983,11 @@ const COLLECTING_GRACE: Duration = Duration::from_millis(1500);
 /// Ctrl-C (or SIGTERM, SIGHUP): before the run, stop collection (`stop` the
 /// collector watches), and exit anyway if that takes too long; during the
 /// run (`running`), stop it cleanly.
+#[expect(clippy::print_stderr, reason = "says why aye stopped")]
+#[expect(
+    clippy::exit,
+    reason = "a second signal, or a collection that doesn't stop in time, ends aye at once"
+)]
 fn install_interrupt(
     stop: aye_runner::StopHandle,
     collecting: Arc<AtomicBool>,

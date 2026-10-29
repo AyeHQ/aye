@@ -19,6 +19,7 @@ use std::process::{Command, Output};
 use aye_render::Keys;
 use serde_json::Value;
 
+#[expect(clippy::print_stderr, reason = "a test says why it skips")]
 fn python() -> Option<PathBuf> {
     let candidate = std::env::var_os("AYE_TEST_PYTHON").map_or_else(
         || {
