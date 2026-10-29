@@ -1,6 +1,8 @@
 //! The wire types. Everything that crosses a process boundary or an engine
 //! boundary is defined here and nowhere else: events, outcomes and a test's
-//! outcomes in earlier runs, structured failures, captured output, the
+//! outcomes in earlier runs, structured failures (an assertion's operator,
+//! the kind of values it compared, the signature that groups identical
+//! failures), captured output, the command that reruns a test, the
 //! collected `Case` with its tags, requirements, affinity keys and
 //! certainty, run metadata (a framework's status for a batch, why a run
 //! stopped early), and the schema version; the identities and paths they
@@ -9,8 +11,9 @@
 //! affinity keys, a run's id and its number in the run store, its lanes and
 //! batches, the project-relative path, and what a diagnostic and a frame
 //! point at; the stamper that writes a run's part of each record's
-//! envelope; and the diagnostic codes, with what an error means for the
-//! exit code, the summary and the run store.
+//! envelope; the diagnostic codes, with what an error means for the exit
+//! code, the summary and the run store; and FNV-1a, the one hash aye
+//! computes, with the digest of a file's content it gives.
 //!
 //! A run is its event log: summaries, history rows, run diffs and every
 //! renderer are folds over it. Events are self-contained and bounded, and
@@ -27,8 +30,9 @@
 //! release that caches results, even if it only comes from the sandbox
 //! tripwire.
 //!
-//! Owns: the schema and its version, and what an error diagnostic means for
-//! a run (`diagnostic/classify.rs`). No traits, no I/O.
+//! Owns: the schema and its version, what an error diagnostic means for a
+//! run (`diagnostic/classify.rs`), and the digests (`digest.rs`). No
+//! traits, no I/O.
 //!
 //! Depends on: serde, and aye-index for the index types. Must not depend on
 //! any other aye crate.
