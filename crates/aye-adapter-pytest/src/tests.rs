@@ -409,7 +409,7 @@ fn differential(python: &Path, root: &Path) -> Result<Vec<String>, String> {
 }
 
 /// Compare with pytest on a directory of your own:
-/// `AYE_PYTEST_DIFF_DIR=/tmp/suite cargo test -p aye-engine-pytest -- --ignored --nocapture diff_dir`.
+/// `AYE_PYTEST_DIFF_DIR=/tmp/suite cargo test -p aye-adapter-pytest -- --ignored --nocapture diff_dir`.
 #[test]
 #[ignore = "manual: needs AYE_PYTEST_DIFF_DIR and a Python with pytest"]
 fn diff_dir() {

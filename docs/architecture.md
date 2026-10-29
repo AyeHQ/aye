@@ -15,12 +15,12 @@ The full definitions are in `crates/aye-engine/src/lib.rs`.
 - **Engine**: aye's engine, in Python, inside workers. What a test is and how
   it executes: tests, lifetimes, the order of setup and teardown, outcomes.
   "Engine" alone always means aye's, and it runs every test: no framework's
-  engine does.
+  engine does. It lives in `aye-engine`.
 - **Adapter**: maps one existing framework (pytest, unittest, doctest) onto
   aye's engine. Its front-end reads the framework's tests into aye's model
   and never runs them; for pytest, the test modules and conftests import
   aye's own `pytest` module, which stands in for pytest's authoring API.
-  Until the crates are renamed, the `aye-engine-*` crates are the adapters.
+  Each adapter is an `aye-adapter-*` crate, implementing `aye-adapter`.
 - **Framework**: what people write tests against (pytest, unittest). aye
   doesn't ship one yet.
 - **Library**: aye's importable features (patching, fakes, decorators,
@@ -97,7 +97,7 @@ argv ─▶ aye: args, Session
           │
           ├─▶ aye-config ─────────▶ project root, [tool.aye]
           ├─▶ aye-runner ─────────▶ the interpreter
-          ├─▶ registry ───────────▶ the adapters, in priority order
+          ├─▶ registry ───────────▶ the adapters (aye-adapter-*), in priority order
           ├─▶ adapters prepare ───▶ a recognizer each (pytest's config,
           │                         [tool.aye.unittest], [tool.aye.doctest])
           ├─▶ aye-collect ────────▶ cases ◀── refine ── worker (imports flagged files)
@@ -121,7 +121,7 @@ argv ─▶ aye: args, Session
 ## Crates
 
 The leaf crates (`aye-index`, `aye-static`, `aye-fs`) depend on no aye
-crate. Runner crates never depend on an `aye-engine-*` crate. Only the binary
+crate. Runner crates never depend on an `aye-adapter-*` crate. Only the binary
 links the adapters. `aye-runner`, `aye-render`, `aye-history` and
 `aye-select` compile no Ruff: the runner speaks `aye-protocol` and embeds
 `aye-engine`, and only `aye-collect` and the adapters, through
@@ -145,9 +145,9 @@ responsibility, boundaries and decisions.
 | `aye-render` | Renderers: text, JSON lines (at each verbosity, up to the raw events), JUnit XML, GitHub annotations; test keys (`Keys`), what the summaries count beside the tests (`Tally`), and what `aye show` asks of them (`ShowMode`, `ShowContext`). |
 | `aye-history` | `.aye/history.json`: durations, outcomes (the last, and the recent ones, with when a bad streak began) and last failed, folded from the stream; and the run store, `.aye/runs` (`runs.rs`): each run's id (`StoredRunId`: its number, `r81`, or a hex id from before runs were numbered), log, gzip-compressed, its summary, `last`, retention. Both are written through `aye-fs`. |
 | `aye-provision` | Design only, for the Python matrix (Step 5): environments from uv or paths you supply. Today interpreter discovery in `aye-runner` stands in for it. |
-| `aye-engine-pytest` | The pytest adapter: pytest's config discovery, the static recognizer (for claims and `--co --no-refine`), and, embedded, aye's own `pytest` module (`python/native/aye_pytest_shim.py`), the pytest front-end (`aye_pytest_frontend.py`) and its executor (`aye_pytest_native.py`), on aye's engine (`aye-engine`'s `aye_model.py`, `aye_native_engine.py`, `aye_rewrite.py`). |
-| `aye-engine-unittest` | The unittest adapter: `[tool.aye.unittest]`, discovery as `python -m unittest discover` does it, the static recognizer, and a native executor (`python/aye_engine_unittest.py`). |
-| `aye-engine-doctest` | The doctest adapter: when doctests are on, the static recognizer of docstrings and text files (pytest's doctest options, `[tool.aye.doctest]`), and a native executor (`python/aye_engine_doctest.py`). |
+| `aye-adapter-pytest` | The pytest adapter: pytest's config discovery, the static recognizer (for claims and `--co --no-refine`), and, embedded, aye's own `pytest` module (`python/native/aye_pytest_shim.py`), the pytest front-end (`aye_pytest_frontend.py`) and its executor (`aye_pytest_native.py`), on aye's engine (`aye-engine`'s `aye_model.py`, `aye_native_engine.py`, `aye_rewrite.py`). |
+| `aye-adapter-unittest` | The unittest adapter: `[tool.aye.unittest]`, discovery as `python -m unittest discover` does it, the static recognizer, and a native executor (`python/aye_engine_unittest.py`). |
+| `aye-adapter-doctest` | The doctest adapter: when doctests are on, the static recognizer of docstrings and text files (pytest's doctest options, `[tool.aye.doctest]`), and a native executor (`python/aye_engine_doctest.py`). |
 
 The Python package under `python/aye` is only a shim, so that `python -m aye`
 finds the binary. The worker, aye's engine, aye's `pytest` module and every
@@ -900,7 +900,7 @@ pytest is never imported: aye runs them with an interpreter that has no
 pytest, and where one is installed, aye's `pytest` module wins over it.
 Inside the worker the layers are:
 
-- **aye's `pytest` module** (`aye-engine-pytest/python/native/aye_pytest_shim.py`,
+- **aye's `pytest` module** (`aye-adapter-pytest/python/native/aye_pytest_shim.py`,
   installed as `pytest`, with the `_pytest.*` modules suites import from,
   before any test or conftest is imported, so it shadows a real pytest):
   the authoring API as data (marks, fixtures, `param`, `raises`, `warns`,
@@ -927,7 +927,7 @@ front-end is the single truth for ids (`aye --co --no-refine` lists the
 static prediction instead). Its context carries a `native` section (the
 resolved settings, the raw ini values for `getini`, pytest's options as
 the front-end parses them, and those options parsed with pytest's dest
-names; see `aye-engine-pytest`'s `native.rs`). The other adapters' workers
+names; see `aye-adapter-pytest`'s `native.rs`). The other adapters' workers
 get aye's `pytest` module too (the doctest adapter imports conftests),
 `aye config` says `engine   native`, and static `-k` and `-m` are the last
 word on every case. What aye can't run fails with a clear message, never a

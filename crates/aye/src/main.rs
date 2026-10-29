@@ -5,7 +5,7 @@
 //! presentation in `aye-render`. Linking an adapter here is the only place
 //! an adapter is depended on.
 //!
-//! Depends on: every runner crate and every `aye-engine-*` crate.
+//! Depends on: every runner crate and every `aye-adapter-*` crate.
 //!
 //! Decided (implementation, October 2026):
 //! - **No whole-home runs.** With no path, a run from the home directory or

@@ -1,4 +1,4 @@
-//! The unittest engine. Native: it does not go through pytest.
+//! The unittest adapter. Native: it does not go through pytest.
 //!
 //! Rust half: recognition of `TestCase` subclasses (including through in-module
 //! bases), `test*` methods, `load_tests`, skip and expected-failure decorators,
@@ -9,11 +9,11 @@
 //! that `TestSuite.run` does today, reports `subTest` blocks as sub-outcomes,
 //! and gives unittest suites the parallelism, selection and history unittest
 //! never had. Twisted trial, nose2 and testslide are meant to run through
-//! this engine; none does yet.
+//! this adapter; none does yet.
 //!
 //! Django is a set of services (settings, test databases, live-server ports)
-//! used by this engine and by the pytest engine, not a fourth engine; it lands
-//! later behind the services interface in `aye-protocol`.
+//! used by this adapter and by the pytest adapter, not a fourth adapter; it
+//! lands later behind the services interface in `aye-protocol`.
 //!
 //! Depends on: aye-adapter, aye-events, aye-protocol.
 //!

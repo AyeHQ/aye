@@ -16,7 +16,7 @@
 //! the runner's import hook.
 //!
 //! Owns: the traits. Does not own: any framework's rules, which live in the
-//! `aye-engine-*` crates; the worker protocol (`aye-protocol`); aye's
+//! `aye-adapter-*` crates; the worker protocol (`aye-protocol`); aye's
 //! engine (`aye-engine`).
 //!
 //! Depends on: aye-events, aye-protocol, and Ruff's `ruff_python_ast`,

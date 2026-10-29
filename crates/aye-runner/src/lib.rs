@@ -4,13 +4,13 @@
 //! dynamic hand-out, serial groups, crash recovery), capability routing, the
 //! sandbox policy and its enforcers, services provided into the worker, the
 //! transport, and the embedded worker (`python/aye_worker.py`) that hosts
-//! whichever engine executors the runner sends it.
+//! whichever adapters' executors the runner sends it.
 //!
 //! Owns: how tests run, where, and in what order. Does not own: what a test is
 //! or how one executes inside the framework; it calls the engine for that.
 //!
 //! Depends on: aye-engine, aye-events, aye-protocol, aye-static. Must not
-//! depend on any `aye-engine-*`.
+//! depend on any `aye-adapter-*`.
 //!
 //! Environments come from `aye-provision` (uv as a subprocess, or paths the
 //! user supplies); the runner requests them per matrix row and per backend,

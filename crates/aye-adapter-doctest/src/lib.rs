@@ -1,4 +1,4 @@
-//! The doctest engine.
+//! The doctest adapter.
 //!
 //! Rust half: collection of docstrings and text files (`.txt`, `.rst`, any
 //! file a glob names) into one case per docstring or file

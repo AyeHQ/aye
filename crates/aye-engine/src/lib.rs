@@ -13,8 +13,10 @@
 //!   always means aye's.
 //! - **Adapter**: maps one existing framework onto aye's engine. It recognises
 //!   the framework's tests, translates its setup into lifetimes and its results
-//!   into outcomes. aye ships the pytest, unittest and doctest adapters; Django
-//!   is a set of services used by the unittest and pytest adapters.
+//!   into outcomes. aye ships the pytest, unittest and doctest adapters
+//!   (`aye-adapter-pytest`, `aye-adapter-unittest`, `aye-adapter-doctest`,
+//!   each implementing `aye-adapter`); Django is a set of services used by
+//!   the unittest and pytest adapters.
 //! - **Framework**: what people write tests against, an authoring API
 //!   (fixtures, `TestCase`, assertions) plus its own engine and usually its own
 //!   runner. pytest and unittest are frameworks. aye does not ship one yet;
@@ -36,9 +38,8 @@
 //! resources, read through aye's own `pytest` module, so pytest itself is
 //! never imported.
 //!
-//! Until the crates are renamed, `aye-engine-pytest`, `aye-engine-unittest`
-//! and `aye-engine-doctest` are the adapters, and older text in the crate docs
-//! that says "engine" for a per-framework component means "adapter".
+//! Older text in the crate docs that says "engine" for a per-framework
+//! component means "adapter".
 //!
 //! aye's engine, in Python, embedded in the binary and installed in each
 //! worker's `sys.modules` from memory: the objects every executor builds on
@@ -51,7 +52,7 @@
 //!
 //! Owns: aye's engine, and the words above. Does not own: the worker
 //! protocol (`aye-protocol`), what an adapter implements (`aye-adapter`),
-//! or any framework's rules (the `aye-engine-*` crates).
+//! or any framework's rules (the `aye-adapter-*` crates).
 //!
 //! Depends on: aye-protocol. Must not depend on Ruff, the runner or any
 //! adapter.
