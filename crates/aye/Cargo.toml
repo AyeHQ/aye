@@ -36,6 +36,7 @@ aye-runner = { workspace = true }
 aye-select = { workspace = true }
 
 [dev-dependencies]
+ruff_python_parser = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 

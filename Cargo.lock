@@ -152,6 +152,7 @@ dependencies = [
  "aye-select",
  "clap",
  "ctrlc",
+ "ruff_python_parser",
  "serde_json",
  "tempfile",
 ]
