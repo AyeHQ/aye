@@ -46,12 +46,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use aye_engine::ast::visitor::{Visitor, walk_expr};
-use aye_engine::ast::{
+use aye_adapter::ast::visitor::{Visitor, walk_expr};
+use aye_adapter::ast::{
     self, Expr, ExprAttribute, ExprCall, ExprContext, Identifier, Number, Operator, Parameters,
     Pattern, Stmt, StmtClassDef, StmtFunctionDef, UnaryOp,
 };
-use aye_engine::{Ranged, TextRange, TextSize};
+use aye_adapter::{Ranged, TextRange, TextSize};
 
 use crate::ids::{Value, int_literal_decimal};
 
@@ -5165,7 +5165,7 @@ pub(crate) fn exclusive(a: &Bound<'_>, b: &Bound<'_>) -> bool {
 /// is imported, in its body or a class body: pytest then skips the whole
 /// module, depending on the environment.
 pub(crate) fn import_time_skip<'a>(body: &'a [Stmt], lookup: Lookup<'_, 'a>) -> Option<String> {
-    use aye_engine::ast::visitor::{Visitor, walk_expr, walk_stmt};
+    use aye_adapter::ast::visitor::{Visitor, walk_expr, walk_stmt};
 
     struct Finder<'s, 'a> {
         lookup: Lookup<'s, 'a>,
@@ -5209,7 +5209,7 @@ pub(crate) fn import_time_skip<'a>(body: &'a [Stmt], lookup: Lookup<'_, 'a>) -> 
 /// module for `unittest.SkipTest`), or an `assert` of a false literal.
 /// pytest reports the error as the module's collection error.
 pub(crate) fn import_time_raise<'a>(body: &'a [Stmt], lookup: Lookup<'_, 'a>) -> Option<String> {
-    use aye_engine::ast::visitor::{Visitor, walk_expr, walk_stmt};
+    use aye_adapter::ast::visitor::{Visitor, walk_expr, walk_stmt};
 
     /// Arguments aye reads without names: literals, and displays of them.
     fn literal(expr: &Expr) -> bool {
@@ -5342,7 +5342,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
-    use aye_engine::{LineIndex, Project, Recognition, Recognizer, SourceFile};
+    use aye_adapter::{LineIndex, Project, Recognition, Recognizer, SourceFile};
     use aye_events::Certainty;
 
     use super::*;

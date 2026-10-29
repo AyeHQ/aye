@@ -26,8 +26,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use aye_engine::ast::visitor::{self, Visitor};
-use aye_engine::ast::{self, Expr, Stmt};
+use aye_adapter::ast::visitor::{self, Visitor};
+use aye_adapter::ast::{self, Expr, Stmt};
 
 /// Standard-library modules whose import can't reach outside the key: no
 /// filesystem walks, processes, network, clock or randomness of their own.

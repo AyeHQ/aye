@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use aye_engine::{Claim, Ranged, Setting, ast};
+use aye_adapter::{Claim, Ranged, Setting, ast};
 use aye_events::{Certainty, DiagnosticCode, ProjectPath};
 use aye_protocol::{RefineError, RefineRequest, Refined};
 

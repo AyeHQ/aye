@@ -9,7 +9,7 @@
 //! diffs instead of two text blobs. Per-example re-runs and an `--accept`
 //! mode that rewrites expected output in place are planned.
 //!
-//! Depends on: aye-engine, aye-events, aye-protocol.
+//! Depends on: aye-adapter, aye-events, aye-protocol.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **This crate is the doctest adapter, and it is native**: it maps
@@ -317,7 +317,7 @@ mod tests;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use aye_engine::{
+use aye_adapter::{
     Adapter, AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile,
 };
 use aye_events::{
@@ -596,8 +596,8 @@ const NO_STATIC_DOCTESTS: &str =
 /// Whether importing a module surely succeeds: it holds nothing but
 /// constants (a docstring, `...`) and `pass`, as most packages'
 /// `__init__.py` files do (or nothing at all).
-fn surely_imports(module: &aye_engine::ast::ModModule) -> bool {
-    use aye_engine::ast::{Expr, Stmt};
+fn surely_imports(module: &aye_adapter::ast::ModModule) -> bool {
+    use aye_adapter::ast::{Expr, Stmt};
     module.body.iter().all(|stmt| match stmt {
         Stmt::Pass(_) => true,
         Stmt::Expr(expr) => matches!(
@@ -620,8 +620,8 @@ fn surely_imports(module: &aye_engine::ast::ModModule) -> bool {
 /// in a class body, and `setattr` or `type()` given anything but a string,
 /// are computed; so is a source that doesn't parse.
 fn computes_module(source: &str) -> bool {
-    use aye_engine::ast::visitor::{self, Visitor};
-    use aye_engine::ast::{Expr, Stmt};
+    use aye_adapter::ast::visitor::{self, Visitor};
+    use aye_adapter::ast::{Expr, Stmt};
 
     struct Assignments<'a> {
         params: Vec<Vec<&'a str>>,

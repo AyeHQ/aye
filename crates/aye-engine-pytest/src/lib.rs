@@ -23,8 +23,9 @@
 //! Owns: everything pytest-specific. Nothing here is questioned; the
 //! differential harness against plain pytest is the referee.
 //!
-//! Depends on: aye-engine, aye-events, aye-protocol. Must not be depended on
-//! by any runner crate; only the binary links it.
+//! Depends on: aye-adapter, aye-engine (the modules its front-end runs
+//! on), aye-events, aye-protocol. Must not be depended on by any runner
+//! crate; only the binary links it.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **The project scan covers what pytest's session can load**: the
@@ -466,7 +467,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use aye_engine::{AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile};
+use aye_adapter::{AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile};
 use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 use aye_fs::normalize_absolute;
 use aye_static::EnvVars;

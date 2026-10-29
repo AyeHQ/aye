@@ -4,7 +4,7 @@
 //! --collect-only -q` on pytest 9.1.1; `p1_suites_match_live_pytest`
 //! re-checks every file left unrefined against the pytest at hand.
 
-use aye_engine::Recognition;
+use aye_adapter::Recognition;
 use aye_events::Certainty;
 
 use super::suites::Suite;

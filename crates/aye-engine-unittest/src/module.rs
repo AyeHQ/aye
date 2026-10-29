@@ -19,9 +19,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use aye_engine::ast::visitor::{self, Visitor};
-use aye_engine::ast::{self, CmpOp, Expr, ExprCall, Stmt, StmtClassDef, StmtFunctionDef};
-use aye_engine::{LineIndex, Ranged, TextRange};
+use aye_adapter::ast::visitor::{self, Visitor};
+use aye_adapter::ast::{self, CmpOp, Expr, ExprCall, Stmt, StmtClassDef, StmtFunctionDef};
+use aye_adapter::{LineIndex, Ranged, TextRange};
 
 /// The test method prefix (`TestLoader.testMethodPrefix`).
 const PREFIX: &str = "test";

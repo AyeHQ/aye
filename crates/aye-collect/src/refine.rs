@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use aye_engine::Setting;
+use aye_adapter::Setting;
 use aye_events::{
     AdapterName, ContentDigest, Diagnostic, DiagnosticCode, Fnv128, ProjectPath, Severity,
 };
@@ -453,7 +453,7 @@ impl Collector<'_> {
 mod tests {
     use std::path::Path;
 
-    use aye_engine::Setting;
+    use aye_adapter::Setting;
     use aye_events::{AdapterName, ContentDigest};
 
     use super::{Cache, FORMAT};

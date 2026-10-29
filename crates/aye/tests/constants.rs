@@ -9,8 +9,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use aye_engine::ast::visitor::{self, Visitor};
-use aye_engine::ast::{DictItem, Expr, ModModule, Stmt};
+use aye_adapter::ast::visitor::{self, Visitor};
+use aye_adapter::ast::{DictItem, Expr, ModModule, Stmt};
 use aye_events::{
     CompareKind, ComparisonOp, DiagnosticCode, FrameworkStatus, Outcome, Phase, Scope, Severity,
 };
@@ -54,7 +54,7 @@ fn literal(expr: &Expr) -> Option<&str> {
 fn integer(expr: &Expr) -> Option<u64> {
     expr.as_number_literal_expr()
         .and_then(|n| n.value.as_int())
-        .and_then(aye_engine::ast::Int::as_u64)
+        .and_then(aye_adapter::ast::Int::as_u64)
 }
 
 /// The value of the module-level `name = <int>`.

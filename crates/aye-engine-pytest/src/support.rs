@@ -8,9 +8,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use aye_engine::ast::visitor::{self, Visitor};
-use aye_engine::ast::{Expr, ExprCall, ModModule, Stmt, StmtFunctionDef};
-use aye_engine::{Ranged, SourceFile, TextSize};
+use aye_adapter::ast::visitor::{self, Visitor};
+use aye_adapter::ast::{Expr, ExprCall, ModModule, Stmt, StmtFunctionDef};
+use aye_adapter::{Ranged, SourceFile, TextSize};
 use aye_events::Fnv64;
 
 use crate::marks::{Decorator, Scoped, decorator};
@@ -269,7 +269,7 @@ impl<'a> SysPathVisitor<'_, 'a> {
                 let base = self.directory(&attr.value, depth + 1)?;
                 base.ancestors().nth(index + 1).map(Path::to_path_buf)
             }
-            Expr::BinOp(op) if matches!(op.op, aye_engine::ast::Operator::Div) => {
+            Expr::BinOp(op) if matches!(op.op, aye_adapter::ast::Operator::Div) => {
                 let base = self.directory(&op.left, depth + 1)?;
                 let part = self.part(&op.right, depth)?;
                 normal(base.join(part))
@@ -2652,7 +2652,7 @@ def helper(): pass
         let abs = root.join("conftest.py");
         let source = "import pytest\npytest.importorskip('missing')\n";
         let parsed = ruff_python_parser::parse_module(source).unwrap();
-        let lines = aye_engine::LineIndex::from_source_text(source);
+        let lines = aye_adapter::LineIndex::from_source_text(source);
         let file = SourceFile {
             rel: aye_events::ProjectPathRef::as_written("conftest.py"),
             abs: &abs,

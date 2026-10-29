@@ -4,8 +4,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use aye_engine::ast::{Expr, ExprLambda, Stmt, StmtClassDef, StmtFunctionDef};
-use aye_engine::{Ranged, Recognition, SourceFile, TextRange, TextSize};
+use aye_adapter::ast::{Expr, ExprLambda, Stmt, StmtClassDef, StmtFunctionDef};
+use aye_adapter::{Ranged, Recognition, SourceFile, TextRange, TextSize};
 use aye_events::{AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity};
 
 use crate::fnmatch::matches_prefix_or_glob;
@@ -2995,7 +2995,7 @@ fn is_literal(expr: &Expr) -> bool {
 /// pytest collects whatever its name: a class statement, `type(…)` with
 /// three arguments, `types.new_class`, or a `__test__` it sets.
 pub(crate) fn makes_classes(body: &[Stmt]) -> bool {
-    use aye_engine::ast::visitor::Visitor;
+    use aye_adapter::ast::visitor::Visitor;
 
     let mut finder = ClassMaker(false);
     for stmt in body {
@@ -3010,7 +3010,7 @@ struct ClassMaker(bool);
 impl ClassMaker {
     /// [`makes_classes`] for an expression (a lambda's body).
     fn expr(expr: &Expr) -> bool {
-        use aye_engine::ast::visitor::Visitor;
+        use aye_adapter::ast::visitor::Visitor;
 
         let mut finder = Self(false);
         finder.visit_expr(expr);
@@ -3018,13 +3018,13 @@ impl ClassMaker {
     }
 }
 
-impl<'a> aye_engine::ast::visitor::Visitor<'a> for ClassMaker {
+impl<'a> aye_adapter::ast::visitor::Visitor<'a> for ClassMaker {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
         if matches!(stmt, Stmt::ClassDef(_)) {
             self.0 = true;
         }
         if !self.0 {
-            aye_engine::ast::visitor::walk_stmt(self, stmt);
+            aye_adapter::ast::visitor::walk_stmt(self, stmt);
         }
     }
 
@@ -3043,7 +3043,7 @@ impl<'a> aye_engine::ast::visitor::Visitor<'a> for ClassMaker {
             _ => {}
         }
         if !self.0 {
-            aye_engine::ast::visitor::walk_expr(self, expr);
+            aye_adapter::ast::visitor::walk_expr(self, expr);
         }
     }
 }

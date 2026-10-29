@@ -138,6 +138,7 @@ name = "aye"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "aye-adapter",
  "aye-collect",
  "aye-config",
  "aye-engine",
@@ -162,10 +163,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "aye-adapter"
+version = "0.0.1"
+dependencies = [
+ "aye-events",
+ "aye-protocol",
+ "get-size2",
+ "ruff_python_ast",
+ "ruff_python_parser",
+ "ruff_source_file",
+ "ruff_text_size",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "aye-collect"
 version = "0.0.1"
 dependencies = [
- "aye-engine",
+ "aye-adapter",
  "aye-events",
  "aye-fs",
  "aye-protocol",
@@ -194,22 +211,15 @@ version = "0.0.1"
 dependencies = [
  "aye-events",
  "aye-protocol",
- "get-size2",
- "ruff_python_ast",
- "ruff_python_parser",
- "ruff_source_file",
- "ruff_text_size",
- "serde",
  "serde_json",
- "thiserror",
 ]
 
 [[package]]
 name = "aye-engine-doctest"
 version = "0.0.1"
 dependencies = [
+ "aye-adapter",
  "aye-config",
- "aye-engine",
  "aye-events",
  "aye-fs",
  "aye-protocol",
@@ -224,6 +234,7 @@ dependencies = [
 name = "aye-engine-pytest"
 version = "0.0.1"
 dependencies = [
+ "aye-adapter",
  "aye-config",
  "aye-engine",
  "aye-events",
@@ -241,8 +252,8 @@ dependencies = [
 name = "aye-engine-unittest"
 version = "0.0.1"
 dependencies = [
+ "aye-adapter",
  "aye-config",
- "aye-engine",
  "aye-events",
  "aye-fs",
  "aye-protocol",

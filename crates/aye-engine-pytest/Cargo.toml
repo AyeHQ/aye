@@ -10,6 +10,7 @@ homepage.workspace = true
 authors.workspace = true
 
 [dependencies]
+aye-adapter = { workspace = true }
 aye-config = { workspace = true }
 aye-engine = { workspace = true }
 aye-events = { workspace = true }

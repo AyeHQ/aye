@@ -10,9 +10,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
+use aye_adapter::{Adapter, Project};
 use aye_collect::{Collector, Environment, Options, Prepared};
 use aye_config::AyeConfig;
-use aye_engine::{Adapter, Project};
 use aye_events::{
     AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event,
     ExitCode, ProjectPath, Record, RerunCommand, RunId, SCHEMA_VERSION, Severity, Stamper,

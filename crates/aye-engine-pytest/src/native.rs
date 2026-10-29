@@ -33,10 +33,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use aye_engine::{
-    Adapter, AdapterError, Claim, MODEL_MODULE, NATIVE_ENGINE_MODULE, Project, REWRITE_MODULE,
-    Recognition, Recognizer, Setting, SourceFile,
+use aye_adapter::{
+    Adapter, AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile,
 };
+use aye_engine::{MODEL_MODULE, NATIVE_ENGINE_MODULE, REWRITE_MODULE};
 use aye_events::{AdapterName, Diagnostic, DiagnosticCode, Fnv64, Severity};
 use aye_protocol::{EmbeddedModule, Executor};
 use serde_json::{Value, json};
@@ -1212,7 +1212,7 @@ mod tests {
         let recognizer = recognizer(root, &[]);
         assert_eq!(recognizer.claim("test_a.py", false), Claim::Tests);
         let parsed = ruff_python_parser::parse_module(source).unwrap();
-        let lines = aye_engine::LineIndex::from_source_text(source);
+        let lines = aye_adapter::LineIndex::from_source_text(source);
         let file = SourceFile {
             rel: aye_events::ProjectPathRef::as_written("test_a.py"),
             abs: &root.join("test_a.py"),
@@ -1246,7 +1246,7 @@ mod tests {
             .unwrap();
         assert_eq!(recognizer.claim("test_notes.txt", false), Claim::Tests);
         let parsed = ruff_python_parser::parse_module("").unwrap();
-        let lines = aye_engine::LineIndex::from_source_text(source);
+        let lines = aye_adapter::LineIndex::from_source_text(source);
         let file = SourceFile {
             rel: aye_events::ProjectPathRef::as_written("test_notes.txt"),
             abs: &root.join("test_notes.txt"),
@@ -1305,7 +1305,7 @@ mod tests {
             .unwrap();
         let recognize = |rel: &str, source: &str| {
             let parsed = ruff_python_parser::parse_module(source).unwrap();
-            let lines = aye_engine::LineIndex::from_source_text(source);
+            let lines = aye_adapter::LineIndex::from_source_text(source);
             let file = SourceFile {
                 rel: aye_events::ProjectPathRef::as_written(rel),
                 abs: &root.join(rel),
@@ -1338,7 +1338,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let parsed = ruff_python_parser::parse_module(exact).unwrap();
-        let lines = aye_engine::LineIndex::from_source_text(exact);
+        let lines = aye_adapter::LineIndex::from_source_text(exact);
         let file = SourceFile {
             rel: aye_events::ProjectPathRef::as_written("test_a.py"),
             abs: &root.join("test_a.py"),

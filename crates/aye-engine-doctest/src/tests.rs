@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use aye_engine::{Adapter, Claim, LineIndex, Project, Recognition, Recognizer, SourceFile};
+use aye_adapter::{Adapter, Claim, LineIndex, Project, Recognition, Recognizer, SourceFile};
 use aye_events::{Certainty, DiagnosticCode};
 
 use super::*;
@@ -22,7 +22,7 @@ struct Parsed {
     rel: String,
     abs: PathBuf,
     source: String,
-    ast: ruff_python_parser::Parsed<aye_engine::ast::ModModule>,
+    ast: ruff_python_parser::Parsed<aye_adapter::ast::ModModule>,
     lines: LineIndex,
 }
 

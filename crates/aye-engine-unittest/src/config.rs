@@ -3,8 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+use aye_adapter::{AdapterError, Setting};
 use aye_config::{Origin, Sourced};
-use aye_engine::{AdapterError, Setting};
 
 /// The table's keys.
 pub(crate) const START_DIRECTORY: &str = "start-directory";

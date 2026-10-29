@@ -6,8 +6,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use aye_adapter::{AdapterError, Project, Setting};
 use aye_config::{Origin, Sourced, ini_section, read_toml, split_args};
-use aye_engine::{AdapterError, Project, Setting};
 use aye_fs::common_ancestor;
 use aye_static::{EnvVars, ProcessEnv};
 

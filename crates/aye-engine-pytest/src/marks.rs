@@ -1,7 +1,7 @@
 //! Marks, decorators and `@pytest.mark.parametrize`, read from the source
 //! (`_pytest/mark/structures.py`).
 
-use aye_engine::ast::{Expr, ExprCall};
+use aye_adapter::ast::{Expr, ExprCall};
 
 use crate::ids::{IdItem, ParamSet, Value};
 use crate::scope::{Binding, Elem, Lookup, Resolved};
@@ -229,8 +229,8 @@ pub(crate) fn decorator<'s, 'a>(lookup: Lookup<'s, 'a>, expr: &'a Expr) -> Decor
 /// function decorated only with `functools.wraps(argument)`, on every path,
 /// and uses the argument for nothing but calling it: it then keeps the
 /// decorated object's name, marks, parameters and tests.
-fn returns_its_argument(def: &aye_engine::ast::StmtFunctionDef) -> bool {
-    use aye_engine::ast::Stmt;
+fn returns_its_argument(def: &aye_adapter::ast::StmtFunctionDef) -> bool {
+    use aye_adapter::ast::Stmt;
 
     let params = &def.parameters;
     let positional: Vec<_> = params.posonlyargs.iter().chain(&params.args).collect();
@@ -267,7 +267,7 @@ fn returns_its_argument(def: &aye_engine::ast::StmtFunctionDef) -> bool {
         depth: 0,
     };
     for stmt in &def.body {
-        aye_engine::ast::visitor::Visitor::visit_stmt(&mut check, stmt);
+        aye_adapter::ast::visitor::Visitor::visit_stmt(&mut check, stmt);
     }
     check.ok
 }
@@ -298,10 +298,10 @@ struct ArgUses<'w> {
     depth: usize,
 }
 
-impl<'a> aye_engine::ast::visitor::Visitor<'a> for ArgUses<'_> {
-    fn visit_stmt(&mut self, stmt: &'a aye_engine::ast::Stmt) {
-        use aye_engine::ast::Stmt;
-        use aye_engine::ast::visitor::walk_stmt;
+impl<'a> aye_adapter::ast::visitor::Visitor<'a> for ArgUses<'_> {
+    fn visit_stmt(&mut self, stmt: &'a aye_adapter::ast::Stmt) {
+        use aye_adapter::ast::Stmt;
+        use aye_adapter::ast::visitor::walk_stmt;
         match stmt {
             Stmt::Return(ret) if self.depth == 0 => {
                 let handed = match ret.value.as_deref() {
@@ -335,7 +335,7 @@ impl<'a> aye_engine::ast::visitor::Visitor<'a> for ArgUses<'_> {
     }
 
     fn visit_expr(&mut self, expr: &'a Expr) {
-        use aye_engine::ast::visitor::walk_expr;
+        use aye_adapter::ast::visitor::walk_expr;
         match expr {
             Expr::Name(name) if name.id.as_str() == self.arg => {
                 // Any use not handled below (passed along, stored,

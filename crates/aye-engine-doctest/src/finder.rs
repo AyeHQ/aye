@@ -18,8 +18,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use aye_engine::ast::{self, Expr, Stmt};
-use aye_engine::{Ranged, SourceFile, TextRange, TextSize};
+use aye_adapter::ast::{self, Expr, Stmt};
+use aye_adapter::{Ranged, SourceFile, TextRange, TextSize};
 
 use crate::parser;
 

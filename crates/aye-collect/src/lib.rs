@@ -9,10 +9,11 @@
 //! is each engine's recognizer. If a framework's name pattern or id algorithm
 //! appears in this crate, the boundary has leaked.
 //!
-//! Depends on: aye-engine, aye-events, aye-fs (paths, and marking the state
-//! directory), aye-protocol (refinement's messages and the `Refiner` it
-//! asks), aye-static (the variables it reads by name). Must not depend on
-//! any `aye-engine-*`.
+//! Depends on: aye-adapter (the recognizers it drives, and Ruff's syntax
+//! tree), aye-events, aye-fs (paths, and marking the state directory),
+//! aye-protocol (refinement's messages and the `Refiner` it asks),
+//! aye-static (the variables it reads by name). Must not depend on any
+//! `aye-engine-*`.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **Stopping and progress.** [`Collector::with_stop`] takes a flag the
@@ -181,7 +182,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use aye_engine::{Project, Recognition, Recognizer, SourceFile};
+use aye_adapter::{Project, Recognition, Recognizer, SourceFile};
 use aye_events::{
     AdapterName, Case, ContentDigest, Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPathRef,
     Severity, TestId,
