@@ -66,23 +66,36 @@ the selection; they may ignore the rest.
 | `framework_args?` | Everything after `--`, unchanged. An adapter may prefer its context's copy (the pytest adapter's front-end parses its context's `native.args`, where these come after `addopts` and `PYTEST_ADDOPTS`, filtered); the unittest adapter ignores them. Every adapter puts them in rerun commands: `aye <rerun_args> <id> -- <these>`, without `--junitxml`. |
 
 `context` is the adapter's own, from its recognizer, on `run` and `refine`
-alike. The binary and the runner add keys to every adapter's context, on
-`run` only:
+alike (`aye_protocol::AdapterContext`, which the adapter builds once from
+its typed context; an object's keys are written in order). The binary and
+the runner add keys to every adapter's context, on `run`, and the binary's
+to a lane's `refine` with `digests_only` too, so that it lists the session
+its batches run in (`aye_protocol::BatchContext`, whose keys
+`aye_protocol::context_keys` names). Each goes in only when it holds
+something, and only into an object, which `ran_ids` makes of a `null`
+context:
 
 | Key | |
 |---|---|
 | `requested_ids` | Added by the binary when the command line names ids with parameters (`path::test[x]`), relative to the root. The executor reports such an id `not-found` when the framework doesn't make it, instead of running the test's other parameters in its place, as the pytest adapter does for ids aye worked out itself. |
 | `rerun_args` | Added by the binary when there are some: aye's own options that shaped the run, as given (`["-c", "alt.ini"]` for `aye -c alt.ini`; never `--python`, the output's options or `--junitxml`), which an adapter puts before the id in a test's rerun command (`aye_engine.rerun_args(context)`). |
-| `selected_paths` | Added by the binary when some positional argument isn't a path (a dotted name, a test key): the paths the user's run starts from, absolute and spelled from the root, in the order of the arguments, each once: each path argument (an id's file), and the files of the collected cases each other argument selects, as `pytest <these>` would be given them. The adapter's own context saw only the path arguments (with none, its framework's default), and refinement never gets the key. The pytest front-end starts from these instead of `roots` (a context that differs from the one it listed with starts a new session in the worker), and the doctest executor works out the conftests pytest loads at start-up from them. |
+| `selected_paths` | Added by the binary when some positional argument isn't a path (a dotted name, a test key): the paths the user's run starts from, absolute and spelled from the root, in the order of the arguments, each once: each path argument (an id's file), and the files of the collected cases each other argument selects, as `pytest <these>` would be given them. The adapter's own context saw only the path arguments (with none, its framework's default), and collection's refinement never gets the key. The pytest front-end starts from these instead of `roots` (a context that differs from the one it listed with starts a new session in the worker), and the doctest executor works out the conftests pytest loads at start-up from them. |
 | `ran_ids` | Added by the runner to a batch it re-queued after its worker crashed: the tests that already ran, when an id that stands for several tests (a case without its parameters, pytest's stand-ins) may have run some of them. The adapters don't run them again; the unittest and doctest adapters count them, so an id listed n times skips its first n tests. |
 
-The binary reads these keys from any adapter's context, when present:
-`keyword` and `tags` (the framework's own `-k` and `-m`, applied statically to that
+`requested_ids`, `ran_ids` and `rerun_args` don't start another session in
+an executor that lists the session (`context_keys::SESSION_NEUTRAL`, the
+pytest executor's `BATCH_KEYS`); `selected_paths` does.
+
+An adapter's context also carries what its framework's configuration says
+about the run, which the binary takes from the adapter's
+`FrameworkDefaults` (`aye-adapter`), not from the context: `keyword` and
+`tags` (the framework's own `-k` and `-m`, applied statically to that
 adapter's cases when the command line gives none), `deselect` (id prefixes
 selection drops from that adapter's cases, counting them as deselected),
 `maxfail`, `xdist_workers`, `junitxml`, `junit_prefix` and the `junit_*`
 settings (the run's, when the command line gives none; from the first
-context that gives each).
+adapter that gives each). No executor reads them; they stay because the
+refinement cache's key hashes the context.
 
 ### The pytest adapter's context
 

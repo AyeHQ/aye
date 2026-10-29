@@ -63,10 +63,10 @@
 //!   (`[tool.aye.unittest]`) is still checked: its bad values are usage
 //!   errors too.
 //! - **The framework's own `-k` and `-m`** (pytest's from `addopts` and
-//!   `PYTEST_ADDOPTS`, in its adapter's context) apply statically to that
-//!   adapter's cases when the command line gives none, so `--co` and
-//!   `deselected` agree with pytest; other adapters' cases are left alone
-//!   unless their contexts name their own. One after `--` wins over both,
+//!   `PYTEST_ADDOPTS`, in its adapter's `FrameworkDefaults`) apply
+//!   statically to that adapter's cases when the command line gives none,
+//!   so `--co` and `deselected` agree with pytest; other adapters' cases
+//!   are left alone unless their frameworks name their own. One after `--` wins over both,
 //!   for every case, since those arguments come last in pytest's. Where
 //!   they can't be read (an `@file`, an unknown short option that might hold
 //!   the letter), every adapter's cases get the command line's, else their
@@ -74,7 +74,7 @@
 //!   is the last word on every case. The command line's must parse.
 //! - **The framework's own `--deselect`** (pytest's from `addopts`,
 //!   `PYTEST_ADDOPTS` or after `--`, as id prefixes in its adapter's
-//!   context, `deselect`) drops that adapter's cases statically and counts
+//!   `FrameworkDefaults`) drops that adapter's cases statically and counts
 //!   them as deselected, as pytest's summary does; the adapter no longer
 //!   drops them itself, so they are dropped once.
 //! - **Positional paths** are relative to the current directory, with `.`
@@ -174,7 +174,7 @@
 //!   directory. Its `junit_prefix` (pytest's `--junitprefix`) goes before
 //!   the report's classnames either way, and its JUnit settings
 //!   (`junit_suite_name`, `junit_logging`, `junit_log_passing_tests`,
-//!   `junit_duration_report`, `junit_family`, from the first context that
+//!   `junit_duration_report`, `junit_family`, from the first adapter that
 //!   gives each) shape the report, which is aye's own layout without them.
 //!   The path is checked before anything runs (exit 4); if the report
 //!   still can't be written at the end, the process exits 1 although
