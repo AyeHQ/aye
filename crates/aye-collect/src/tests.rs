@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use aye_adapter::{Claim, Ranged, Setting, ast};
 use aye_events::{Certainty, DiagnosticCode, ProjectPath};
-use aye_protocol::{RefineError, RefineRequest, Refined};
+use aye_protocol::{AdapterContext, RefineError, RefineRequest, Refined};
 
 use super::*;
 
@@ -1133,7 +1133,7 @@ fn refined_cases_replace_the_static_ones() {
                 ProjectPath::new("b_check.py").unwrap(),
                 ProjectPath::new("c_check.py").unwrap(),
             ],
-            context: serde_json::json!({"rootdir": "/fake"}),
+            context: AdapterContext::from(serde_json::json!({"rootdir": "/fake"})).into(),
             digests_only: false,
         }]
     );

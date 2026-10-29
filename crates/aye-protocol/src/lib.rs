@@ -1,10 +1,12 @@
 //! The worker protocol: what the runner and a worker say to each other. The
 //! runner sends [`Request`]s (the handshake, with the modules to install and
-//! the executors to build; a refinement; a batch with its [`Policy`]; the
-//! shutdown), and the worker answers with [`WorkerLine`]s, each a control
-//! [`Reply`] or an event [`Record`]. Beside the messages: the protocol's
-//! version ([`PROTOCOL_VERSION`]), the names of the services a worker may
-//! provide ([`services`]), an adapter's runtime face ([`Executor`], with the
+//! the executors to build; a refinement; a batch with its [`Policy`] and its
+//! [`BatchContext`]: the adapter's [`AdapterContext`] and the keys the binary
+//! and the runner add, [`context_keys`]; the shutdown), and the worker
+//! answers with [`WorkerLine`]s, each a control [`Reply`] or an event
+//! [`Record`]. Beside the messages: the protocol's version
+//! ([`PROTOCOL_VERSION`]), the names of the services a worker may provide
+//! ([`services`]), an adapter's runtime face ([`Executor`], with the
 //! [`EmbeddedModule`]s it installs), and the [`Refiner`] trait, which the
 //! runner implements and collection calls. `docs/protocol.md` describes the
 //! protocol on the wire.
@@ -51,7 +53,10 @@ use std::collections::BTreeMap;
 use aye_events::{AdapterName, BatchIndex, Case, Diagnostic, ProjectPath, Record, TestId};
 use serde::{Deserialize, Serialize};
 
+mod context;
+
 pub use aye_events::FrameworkStatus;
+pub use context::{AdapterContext, BatchContext, context_keys};
 
 /// Version of the runner ↔ worker protocol. Checked at the handshake.
 /// 2: [`Executor::lists_session`], [`RefineRequest::digests_only`],
@@ -116,8 +121,11 @@ pub trait Refiner {
 pub struct RefineRequest {
     pub adapter: AdapterName,
     pub files: Vec<ProjectPath>,
+    /// The adapter's context. A lane's listing before its first batch
+    /// ([`Self::digests_only`]) gets the keys the binary adds to its
+    /// batches too, so that it lists the session those batches run in.
     #[serde(default)]
-    pub context: serde_json::Value,
+    pub context: BatchContext,
     /// List the files for the batches to come, and answer with their
     /// [`Refined::digests`] only, no case: what a lane sends an executor
     /// that [lists the session](Executor::lists_session) before its first
@@ -215,7 +223,7 @@ pub struct Batch {
     pub ids: Vec<TestId>,
     pub policy: Policy,
     #[serde(default)]
-    pub context: serde_json::Value,
+    pub context: BatchContext,
     /// The worker's last batch for its adapter (protocol 3): an executor
     /// that [lists the session](Executor::lists_session) ends it with this
     /// batch, as a pytest-xdist worker ends its session with its last

@@ -17,8 +17,8 @@ use aye_events::{
     StopReason, TestId, TestResult, WorkerIndex,
 };
 use aye_protocol::{
-    Batch, Executor, ListingDigest, Policy, RefineError, RefineRequest, Refined, Refiner, Reply,
-    Request, WorkerLine,
+    AdapterContext, Batch, BatchContext, Executor, ListingDigest, Policy, RefineError,
+    RefineRequest, Refined, Refiner, Reply, Request, WorkerLine,
 };
 use aye_static::EnvVars;
 
@@ -31,10 +31,6 @@ const POLL: Duration = Duration::from_millis(50);
 /// batch, tearing down, before it is killed: pytest-xdist gives its workers
 /// as long to stop.
 const INTERRUPT_GRACE: Duration = Duration::from_secs(10);
-
-/// The context key under which a batch re-queued after a crash names the
-/// tests that ran before it (see [`Shared::crashed`]).
-const RAN_IDS: &str = "ran_ids";
 
 /// By file, a digest of its tests' ids in order ([`Refined::digests`]).
 type Digests = BTreeMap<ProjectPath, ListingDigest>;
@@ -73,8 +69,15 @@ pub struct Plan {
     /// For every batch. `capture: false` also echoes workers' output live,
     /// where [`RunnerOptions::echo`] says; `maxfail` 0 is no limit.
     pub policy: Policy,
-    /// Sent with each batch, per adapter (the recognizer's `context()`).
-    pub contexts: HashMap<AdapterName, serde_json::Value>,
+    /// Sent with each batch, per adapter (the recognizer's `context()`),
+    /// with the keys below added ([`Plan::context`]).
+    pub contexts: BTreeMap<AdapterName, AdapterContext>,
+    /// Added to every batch's context: [`BatchContext::requested_ids`].
+    pub requested_ids: Vec<TestId>,
+    /// Added to every batch's context: [`BatchContext::rerun_args`].
+    pub rerun_args: Vec<String>,
+    /// Added to every batch's context: [`BatchContext::selected_paths`].
+    pub selected_paths: Vec<String>,
     /// Historical durations, for balancing.
     pub durations: HashMap<TestId, Duration>,
     /// Tests to run first (`--ff`: last run's failures): the batches holding
@@ -95,10 +98,29 @@ impl Default for Plan {
                 capture: true,
                 ..Policy::default()
             },
-            contexts: HashMap::new(),
+            contexts: BTreeMap::new(),
+            requested_ids: Vec::new(),
+            rerun_args: Vec::new(),
+            selected_paths: Vec::new(),
             durations: HashMap::new(),
             first: HashSet::new(),
             session_files: BTreeMap::new(),
+        }
+    }
+}
+
+impl Plan {
+    /// The context of `adapter`'s batches: its recognizer's, with the keys
+    /// the binary adds (the runner adds [`BatchContext::ran_ids`] to a
+    /// batch it re-queues), as a lane's listing before its first batch
+    /// gets it too.
+    pub fn context(&self, adapter: &AdapterName) -> BatchContext {
+        BatchContext {
+            adapter: self.contexts.get(adapter).cloned().unwrap_or_default(),
+            requested_ids: self.requested_ids.clone(),
+            rerun_args: self.rerun_args.clone(),
+            selected_paths: self.selected_paths.clone(),
+            ran_ids: Vec::new(),
         }
     }
 }
@@ -487,7 +509,7 @@ impl Runner {
             killing: AtomicBool::new(false),
             spec,
             policy: &policy,
-            contexts: &plan.contexts,
+            plan,
             sessions: &plan.session_files,
             listings: Listings::new(reference.as_ref()),
             reference,
@@ -1135,7 +1157,7 @@ struct Shared<'a> {
     spec: WorkerSpec,
     /// The plan's, with `maxfail` 0 made `None`.
     policy: &'a Policy,
-    contexts: &'a HashMap<AdapterName, serde_json::Value>,
+    plan: &'a Plan,
     /// The plan's session files, by adapter.
     sessions: &'a BTreeMap<AdapterName, Vec<ProjectPath>>,
     listings: Listings,
@@ -1755,7 +1777,7 @@ impl Shared<'_> {
         let request = RefineRequest {
             adapter: adapter.clone(),
             files,
-            context: self.contexts.get(adapter).cloned().unwrap_or_default(),
+            context: self.plan.context(adapter),
             digests_only: true,
         };
         match refine_on(&mut worker, request, &|| self.stopping()) {
@@ -1831,20 +1853,8 @@ impl Shared<'_> {
     ) -> End {
         let mut policy = self.policy.clone();
         policy.maxfail = maxfail;
-        let mut context = self
-            .contexts
-            .get(&batch.adapter)
-            .cloned()
-            .unwrap_or_default();
-        if !batch.ran.is_empty() && context.is_null() {
-            context = serde_json::Value::Object(serde_json::Map::new());
-        }
-        if !batch.ran.is_empty()
-            && let Some(object) = context.as_object_mut()
-        {
-            let ran: Vec<&str> = batch.ran.iter().map(TestId::as_str).collect();
-            object.insert(RAN_IDS.to_string(), ran.into());
-        }
+        let mut context = self.plan.context(&batch.adapter);
+        context.ran_ids.clone_from(&batch.ran);
         let request = Request::Run(Batch {
             id: batch.id,
             adapter: batch.adapter.clone(),
@@ -1922,7 +1932,7 @@ impl Shared<'_> {
     /// An id that stands for several tests (one without its parameters, or
     /// whose parameters the framework makes under other ids now: pytest's
     /// stand-ins) may have started some of them: it is re-queued whole,
-    /// with the ids of the tests that ran ([`RAN_IDS`] in its context), so
+    /// with the ids of the tests that ran ([`BatchContext::ran_ids`]), so
     /// that the adapter runs only the rest, and none twice.
     fn crashed(
         &self,

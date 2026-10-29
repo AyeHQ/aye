@@ -18,7 +18,10 @@ use aye_events::{
     AdapterName, AffinityKey, BatchIndex, Case, DiagnosticCode, Event, FrameworkStatus, Outcome,
     ProjectPath, Record, Stamper, StopReason, TestId, TestResult, WorkerIndex,
 };
-use aye_protocol::{EmbeddedModule, Executor, Policy, RefineRequest, Refiner, Reply, Request};
+use aye_protocol::{
+    AdapterContext, BatchContext, EmbeddedModule, Executor, Policy, RefineRequest, Refiner, Reply,
+    Request,
+};
 #[cfg(unix)]
 use aye_runner::Worker;
 use aye_runner::{
@@ -440,7 +443,7 @@ fn a_worker_answers_requests_it_cannot_serve_with_failed() {
         .send(&Request::Refine(RefineRequest {
             adapter: "nope".into(),
             files: vec![],
-            context: serde_json::Value::Null,
+            context: BatchContext::default(),
             digests_only: false,
         }))
         .unwrap();
@@ -1205,7 +1208,7 @@ fn refinement_round_trips() {
         .refine(&RefineRequest {
             adapter: "fake".into(),
             files: vec![path("a.py"), path("b.py")],
-            context: serde_json::Value::Null,
+            context: BatchContext::default(),
             digests_only: false,
         })
         .unwrap();
@@ -1218,7 +1221,7 @@ fn refinement_round_trips() {
         .refine(&RefineRequest {
             adapter: "fake".into(),
             files: vec![path("a.py")],
-            context: "explode".into(),
+            context: AdapterContext::from(serde_json::json!("explode")).into(),
             digests_only: false,
         })
         .unwrap_err();
@@ -1229,7 +1232,7 @@ fn refinement_round_trips() {
         .refine(&RefineRequest {
             adapter: "nope".into(),
             files: vec![],
-            context: serde_json::Value::Null,
+            context: BatchContext::default(),
             digests_only: false,
         })
         .unwrap_err();
@@ -1455,7 +1458,7 @@ fn a_thread_left_running_while_refining_does_not_hang_refinement() {
         .refine(&RefineRequest {
             adapter: "fake".into(),
             files: vec![path("a.py")],
-            context: "thread".into(),
+            context: AdapterContext::from(serde_json::json!("thread")).into(),
             digests_only: false,
         })
         .unwrap();
@@ -2093,7 +2096,7 @@ impl Fixture {
             .refine(&RefineRequest {
                 adapter: "listing".into(),
                 files: files.iter().map(|f| path(f)).collect(),
-                context: serde_json::Value::Null,
+                context: BatchContext::default(),
                 digests_only: false,
             })
             .unwrap()

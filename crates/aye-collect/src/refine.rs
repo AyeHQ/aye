@@ -9,7 +9,7 @@ use aye_adapter::Setting;
 use aye_events::{
     AdapterName, ContentDigest, Diagnostic, DiagnosticCode, Fnv128, ProjectPath, Severity,
 };
-use aye_protocol::{RefineRequest, Refined, Refiner};
+use aye_protocol::{AdapterContext, RefineRequest, Refined, Refiner};
 
 use crate::source::Source;
 use crate::standalone::{self, Scope};
@@ -185,7 +185,7 @@ impl Collector<'_> {
                     .iter()
                     .map(|(at, _, _)| tree.entries[*at].rel.clone())
                     .collect(),
-                context,
+                context: AdapterContext::from(context).into(),
                 digests_only: false,
             };
             match refiner.refine(&request) {

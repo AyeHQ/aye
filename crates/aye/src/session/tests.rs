@@ -986,63 +986,6 @@ fn reruns_repeat_ayes_options_that_shape_the_run() {
         ])),
         ["-c", "../cfg/alt.ini"]
     );
-    let context = with_rerun_args(
-        serde_json::json!({ "rootdir": "/repo" }),
-        &["-c".into(), "alt.ini".into()],
-    );
-    assert_eq!(
-        context,
-        serde_json::json!({ "rootdir": "/repo", "rerun_args": ["-c", "alt.ini"] })
-    );
-    let context = serde_json::json!({ "rootdir": "/repo" });
-    assert_eq!(with_rerun_args(context.clone(), &[]), context);
-}
-
-/// A batch's context as the binary sends it, byte for byte, as aye 0.0.1
-/// wrote it: the adapter's object with `requested_ids`, `selected_paths`
-/// and `rerun_args` among its keys (in key order) when each holds
-/// something, and any other context as the adapter gave it.
-#[test]
-fn the_keys_the_binary_adds_are_pinned_byte_for_byte() {
-    let requested = ["tests/t.py::test_x[1]".to_string()];
-    let selected = [PathBuf::from("/repo/tests"), PathBuf::from("/repo/b.py")];
-    let rerun = ["-c".to_string(), "alt.ini".to_string()];
-    let sent = |context: serde_json::Value, keys: bool| {
-        let (requested, selected, rerun): (&[String], &[PathBuf], &[String]) = if keys {
-            (&requested, &selected, &rerun)
-        } else {
-            (&[], &[], &[])
-        };
-        let context = with_requested(context, requested);
-        let context = with_selected_paths(context, selected);
-        serde_json::to_string(&with_rerun_args(context, rerun)).unwrap()
-    };
-    let object = serde_json::json!({"zeta": 1, "rootdir": "/repo", "roots": ["/x"]});
-    assert_eq!(
-        sent(object.clone(), true),
-        r#"{"requested_ids":["tests/t.py::test_x[1]"],"rerun_args":["-c","alt.ini"],"rootdir":"/repo","roots":["/x"],"selected_paths":["/repo/tests","/repo/b.py"],"zeta":1}"#
-    );
-    assert_eq!(
-        sent(object, false),
-        r#"{"rootdir":"/repo","roots":["/x"],"zeta":1}"#
-    );
-    assert_eq!(
-        sent(serde_json::json!({}), true),
-        r#"{"requested_ids":["tests/t.py::test_x[1]"],"rerun_args":["-c","alt.ini"],"selected_paths":["/repo/tests","/repo/b.py"]}"#
-    );
-    assert_eq!(sent(serde_json::json!({}), false), "{}");
-    assert_eq!(sent(serde_json::Value::Null, true), "null");
-    assert_eq!(sent(serde_json::json!("text"), true), r#""text""#);
-    assert_eq!(sent(serde_json::json!([1]), true), "[1]");
-    // The adapter's own key of the same name gives way.
-    assert_eq!(
-        sent(serde_json::json!({"rerun_args": ["old"]}), true),
-        r#"{"requested_ids":["tests/t.py::test_x[1]"],"rerun_args":["-c","alt.ini"],"selected_paths":["/repo/tests","/repo/b.py"]}"#
-    );
-    assert_eq!(
-        sent(serde_json::json!({"rerun_args": ["old"]}), false),
-        r#"{"rerun_args":["old"]}"#
-    );
 }
 
 /// `--native`, the prototype's switch, does nothing now that aye's engine
@@ -1098,24 +1041,9 @@ fn ids_with_parameters_on_the_command_line_go_to_the_adapters() {
     assert_eq!(
         requested,
         [
-            "tests/test_p.py::test_dyn[9]",
-            "tests/test_p.py::TestK::test_m[a-b]"
+            TestId::new("tests/test_p.py::test_dyn[9]"),
+            TestId::new("tests/test_p.py::TestK::test_m[a-b]")
         ]
-    );
-    let context = with_requested(serde_json::json!({ "rootdir": "/repo" }), &requested);
-    assert_eq!(
-        context,
-        serde_json::json!({
-            "rootdir": "/repo",
-            "requested_ids": ["tests/test_p.py::test_dyn[9]", "tests/test_p.py::TestK::test_m[a-b]"],
-        })
-    );
-    // Nothing to add: the context is the adapter's.
-    let context = serde_json::json!({ "rootdir": "/repo" });
-    assert_eq!(with_requested(context.clone(), &[]), context);
-    assert_eq!(
-        with_requested(serde_json::Value::Null, &requested),
-        serde_json::Value::Null
     );
 }
 
@@ -1568,14 +1496,6 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
     assert!(reach.keeps(root, &usage("tests/sub/conftest.py")));
     assert!(reach.keeps(root, &usage("other/conftest.py")));
     assert!(reach.keeps(root, &usage("testing/conftest.py")));
-
-    // The adapters get them as absolute paths, when there are some.
-    let context = with_selected_paths(serde_json::json!({"roots": ["/x"]}), &reach.selected);
-    let tests = root.join("tests").to_string_lossy().into_owned();
-    assert_eq!(context["selected_paths"][0], serde_json::json!(tests));
-    assert_eq!(context["roots"], serde_json::json!(["/x"]));
-    let context = serde_json::json!({"roots": ["/x"]});
-    assert_eq!(with_selected_paths(context.clone(), &[]), context);
 }
 
 /// Recheck regression 3: one conftest that fails at start-up was two usage

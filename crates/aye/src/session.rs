@@ -20,7 +20,7 @@ use aye_events::{
 };
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter, StoredRunId};
-use aye_protocol::{Policy, Refiner};
+use aye_protocol::{AdapterContext, Policy, Refiner};
 use aye_render::{
     ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
     JunitOptions, Reporter, Tally, Tee, Text, TextOptions,
@@ -33,32 +33,12 @@ use crate::args::{Args, Color, Maxfail, Output, Passed, Workers, passed, passed_
 use crate::busy::Busy;
 use crate::registry;
 
-/// Keys of an adapter's context the binary reads or adds.
+/// Keys of an adapter's context the binary reads.
 mod keys {
-    /// Added by the binary: the ids with parameters the command line names
-    /// (`path::test[x]`), relative to the root, so the framework reports
-    /// one it can't find instead of running its test's other parameters in
-    /// its place.
-    pub(super) const REQUESTED_IDS: &str = "requested_ids";
-    /// Added by the binary: aye's own options that shape the run (`-c
-    /// FILE`), as given, which a test's rerun command repeats before its id
-    /// (`aye -c FILE <id>`), so that it reruns from where aye ran as aye ran
-    /// it.
-    pub(super) const RERUN_ARGS: &str = "rerun_args";
     /// Set by an adapter whose framework drops the tests whose ids start
     /// with one of these (pytest's `--deselect`, relative to the root):
     /// selection drops that adapter's cases and counts them as deselected.
     pub(super) const DESELECT: &str = "deselect";
-    /// Added by the binary when a positional argument isn't a path (a
-    /// dotted name, a test key): the paths the user's run starts from,
-    /// absolute, in the order of the arguments, each once: each path
-    /// argument (an id's file), and the files of the cases each other
-    /// argument selects, as `pytest <these>` would be given them. The
-    /// adapter's own context saw only the path arguments (with none, its
-    /// framework's default), so an adapter whose framework starts from the
-    /// paths it is given (pytest's start-up conftests and initial paths)
-    /// starts from these instead.
-    pub(super) const SELECTED_PATHS: &str = "selected_paths";
 }
 
 /// A run's inputs, resolved: everything wrong with the command line or the
@@ -606,20 +586,22 @@ impl Session {
         }
 
         // -- run ----------------------------------------------------------------
-        let requested = requested_ids(&self.positionals);
         let rerun_args = rerun_args(&self.args);
-        let selected_paths = reach.map(|reach| reach.selected).unwrap_or_default();
         let plan = Plan {
             cases,
             policy: self.policy(),
             contexts: self
                 .prepared
                 .iter()
-                .map(|(name, r)| {
-                    let context = with_requested(r.context(), &requested);
-                    let context = with_selected_paths(context, &selected_paths);
-                    (name.clone(), with_rerun_args(context, &rerun_args))
-                })
+                .map(|(name, r)| (name.clone(), AdapterContext::from(r.context())))
+                .collect(),
+            requested_ids: requested_ids(&self.positionals),
+            rerun_args: rerun_args.clone(),
+            selected_paths: reach
+                .map(|reach| reach.selected)
+                .unwrap_or_default()
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
                 .collect(),
             durations,
             first: if self.args.failed_first {
@@ -756,7 +738,7 @@ struct Here<'a> {
     cwd: &'a Path,
     root: &'a Path,
     /// aye's options that shape the run, which a rerun repeats before the
-    /// id (see `keys::RERUN_ARGS`).
+    /// id ([`aye_protocol::BatchContext::rerun_args`]).
     rerun_args: &'a [String],
 }
 
@@ -1004,7 +986,8 @@ struct Reach {
     paths: Vec<PathBuf>,
     /// The paths the user's run starts from: each path argument, and the
     /// files of the collected cases each other argument selects, in the
-    /// order of the arguments, each once (see `keys::SELECTED_PATHS`).
+    /// order of the arguments, each once
+    /// ([`aye_protocol::BatchContext::selected_paths`]).
     selected: Vec<PathBuf>,
     /// The arguments that aren't paths, as given: dotted names and keys.
     words: Vec<String>,
@@ -1434,8 +1417,9 @@ fn maxfail(args: &Args, prepared: &[Prepared]) -> Option<u32> {
 }
 
 /// The ids with parameters the command line names (`path::test[x]`),
-/// relative to the root as collection spells them, each once.
-fn requested_ids(positionals: &[Positional]) -> Vec<String> {
+/// relative to the root as collection spells them, each once
+/// ([`aye_protocol::BatchContext::requested_ids`]).
+fn requested_ids(positionals: &[Positional]) -> Vec<TestId> {
     let mut seen = HashSet::new();
     positionals
         .iter()
@@ -1447,6 +1431,7 @@ fn requested_ids(positionals: &[Positional]) -> Vec<String> {
         })
         .map(|p| p.selector.clone())
         .filter(|id| seen.insert(id.clone()))
+        .map(TestId::new)
         .collect()
 }
 
@@ -1529,54 +1514,18 @@ fn prepare(adapters: &[Box<dyn Adapter>], project: &Project<'_>) -> Result<Vec<P
     Ok(prepared)
 }
 
-/// aye's options that shape the run, as a rerun repeats them (see
-/// `keys::RERUN_ARGS`): `-c FILE`, as given (a rerun runs where aye ran).
-/// `--python` is left out (a rerun finds the interpreter as aye did), and
-/// so are the options that only shape the output or the selection, which a
-/// rerun of one id doesn't need, `--native`, which does nothing, and
-/// `--junitxml`, whose report it would overwrite.
+/// aye's options that shape the run, as a rerun repeats them
+/// ([`aye_protocol::BatchContext::rerun_args`]): `-c FILE`, as given (a
+/// rerun runs where aye ran). `--python` is left out (a rerun finds the
+/// interpreter as aye did), and so are the options that only shape the
+/// output or the selection, which a rerun of one id doesn't need,
+/// `--native`, which does nothing, and `--junitxml`, whose report it would
+/// overwrite.
 fn rerun_args(args: &Args) -> Vec<String> {
     args.config_file
         .as_ref()
         .map(|file| vec!["-c".to_string(), file.to_string_lossy().into_owned()])
         .unwrap_or_default()
-}
-
-/// An adapter's context with aye's options a rerun repeats, when there are
-/// some (see `keys::RERUN_ARGS`).
-fn with_rerun_args(mut context: serde_json::Value, rerun_args: &[String]) -> serde_json::Value {
-    if !rerun_args.is_empty()
-        && let Some(object) = context.as_object_mut()
-    {
-        object.insert(keys::RERUN_ARGS.to_string(), rerun_args.into());
-    }
-    context
-}
-
-/// An adapter's context with the paths the user's run starts from, when
-/// some positional argument isn't a path (see `keys::SELECTED_PATHS`).
-fn with_selected_paths(mut context: serde_json::Value, paths: &[PathBuf]) -> serde_json::Value {
-    if !paths.is_empty()
-        && let Some(object) = context.as_object_mut()
-    {
-        let paths: Vec<String> = paths
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect();
-        object.insert(keys::SELECTED_PATHS.to_string(), paths.into());
-    }
-    context
-}
-
-/// An adapter's context with the ids the command line names, when it names
-/// some (see `keys::REQUESTED_IDS`).
-fn with_requested(mut context: serde_json::Value, requested: &[String]) -> serde_json::Value {
-    if !requested.is_empty()
-        && let Some(object) = context.as_object_mut()
-    {
-        object.insert(keys::REQUESTED_IDS.to_string(), requested.into());
-    }
-    context
 }
 
 /// See [`Session::junit`].
