@@ -1,0 +1,26 @@
+{
+  "referee": "pytest",
+  "collected": [
+    "tests/pkg/test_in_package.py::test_in_package",
+    "tests/test_structure.py::TestChild::test_inherited",
+    "tests/test_structure.py::TestChild::test_own",
+    "tests/test_structure.py::TestOuter::test_outer",
+    "tests/test_structure.py::TestOuter::TestInner::test_inner",
+    "tests/test_structure.py::Checks::test_unittest_failure",
+    "tests/test_structure.py::Checks::test_unittest_method",
+    "tests/test_structure.py::test_defined_twice",
+    "tests/test_structure.py::test_conditional"
+  ],
+  "outcomes": {
+    "tests/pkg/test_in_package.py::test_in_package": "passed",
+    "tests/test_structure.py::Checks::test_unittest_failure": "failed",
+    "tests/test_structure.py::Checks::test_unittest_method": "passed",
+    "tests/test_structure.py::TestChild::test_inherited": "passed",
+    "tests/test_structure.py::TestChild::test_own": "passed",
+    "tests/test_structure.py::TestOuter::TestInner::test_inner": "passed",
+    "tests/test_structure.py::TestOuter::test_outer": "passed",
+    "tests/test_structure.py::test_conditional": "passed",
+    "tests/test_structure.py::test_defined_twice": "passed"
+  },
+  "exit_code": 1
+}

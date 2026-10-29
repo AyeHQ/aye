@@ -1,0 +1,44 @@
+Using the shop
+==============
+
+A text file can be a doctest too: the prose is ignored, every line starting
+with ``>>>`` runs, and the lines under it are the output it must print.
+Names defined by one example are there for the next.
+
+    >>> from decimal import Decimal
+    >>> from shop import AmountOff, Cart, PercentOff, Product
+
+Fill a cart:
+
+    >>> apple = Product("apple", "Apple", Decimal("0.50"))
+    >>> coffee = Product("coffee", "Coffee", Decimal("8.99"))
+    >>> cart = Cart()
+    >>> cart.add(apple, 3)
+    >>> cart.add(coffee)
+    >>> len(cart), cart.subtotal()
+    (4, Decimal('10.49'))
+
+Take 10% off, rounded to the cent:
+
+    >>> cart.apply(PercentOff(10))
+    >>> cart.discount()
+    Decimal('1.05')
+
+A cart takes one coupon, so applying another replaces the first. This one
+needs a subtotal of 25.00:
+
+    >>> cart.apply(AmountOff(Decimal("5.00"), minimum=Decimal("25.00")))
+    >>> cart.discount()
+    Decimal('0.00')
+    >>> cart.add(coffee, 2)
+    >>> cart.discount()
+    Decimal('5.00')
+
+The receipt:
+
+    >>> cart.print_receipt()
+    3 x Apple         1.50
+    3 x Coffee       26.97
+    Subtotal         28.47
+    Discount         -5.00
+    Total            23.47

@@ -1,0 +1,4 @@
+Not collected: no glob names it.
+
+>>> 1 + 1
+3

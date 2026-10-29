@@ -1,0 +1,17 @@
+A guided tour
+=============
+
+The package adds and divides:
+
+    >>> from calc import add, divide
+    >>> add(2, 2)
+    4
+    >>> divide(9, 3)
+    3.0
+
+And counts:
+
+    >>> from calc import Counter
+    >>> counter = Counter()
+    >>> [counter.bump() for _ in range(3)]
+    [1, 2, 3]
