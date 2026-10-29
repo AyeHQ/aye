@@ -28,7 +28,7 @@ Leaf crates (depend on no aye crate):
 Runner crates (engine-agnostic; must never depend on an `aye-engine-*` crate):
 
 - `crates/aye`: the binary (CLI, wiring, `aye config`, `aye show`, the adapter registry and which adapters a project runs)
-- `crates/aye-events`: the wire types (events, outcomes, failures, collected cases), the identities and paths they hold (`TestId`, `TestKey`, `AdapterName`, `ProjectPath`, `DiagnosticPath`, `FramePath`), the diagnostic codes and their classification (`DiagnosticCode`, `ErrorClass`), and the schema version
+- `crates/aye-events`: the wire types (events, outcomes, failures, collected cases), the identities and paths they hold (`TestId`, `TestKey`, `AdapterName`, `LifetimeId`, `Scope`, `AffinityKey`, `ProjectPath`, `DiagnosticPath`, `FramePath`), the diagnostic codes and their classification (`DiagnosticCode`, `ErrorClass`), and the schema version
 - `crates/aye-engine`: the engine contract (traits, the Python-side executor protocol)
 - `crates/aye-config`, `crates/aye-collect`, `crates/aye-select`: the project root and config loading with origins, discovery infrastructure (walk, parse, recognize, refine), selection
 - `crates/aye-provision`: environments through a `Provisioner` (uv as a subprocess first; bring-your-own paths), the version matrix's supplier; design only so far

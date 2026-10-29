@@ -3,9 +3,10 @@
 //! failures, captured output, the collected `Case` with its tags, requirements,
 //! affinity keys and certainty, run metadata, and the schema version; the
 //! identities and paths they hold, each taken apart in one place: the test id
-//! and its parts, its key, an adapter's name, the project-relative path, and
-//! what a diagnostic and a frame point at; and the diagnostic codes, with what
-//! an error means for the exit code, the summary and the run store.
+//! and its parts, its key, an adapter's name, a lifetime's id and the scope it
+//! opens, a case's affinity keys, the project-relative path, and what a
+//! diagnostic and a frame point at; and the diagnostic codes, with what an
+//! error means for the exit code, the summary and the run store.
 //!
 //! A run is its event log: summaries, history rows, run diffs and every
 //! renderer are folds over it. Events are self-contained and bounded, and
