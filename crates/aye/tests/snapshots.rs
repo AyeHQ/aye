@@ -24,6 +24,10 @@ use insta_cmd::assert_cmd_snapshot;
 /// The interpreter, as it names itself (`sys.executable`): the path the
 /// output shows, which the snapshots leave out.
 #[expect(clippy::print_stderr, reason = "a test says why it skips")]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' own settings, not the environment aye reads"
+)]
 fn python() -> Option<PathBuf> {
     let candidate = std::env::var_os("AYE_TEST_PYTHON").map_or_else(
         || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv/bin/python"),

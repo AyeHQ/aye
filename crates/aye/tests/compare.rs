@@ -49,6 +49,10 @@ use serde_json::{Value, json};
 const CLEARED: [&str; 2] = ["PYTEST_ADDOPTS", "AYE_EXAMPLE_FAIL"];
 
 #[expect(clippy::print_stderr, reason = "a test says why it skips")]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' own settings, not the environment aye reads"
+)]
 fn python() -> Option<PathBuf> {
     let candidate = std::env::var_os("AYE_TEST_PYTHON").map_or_else(
         || {
@@ -561,6 +565,10 @@ fn every_example_is_compared() {
 /// else a venv of `python`'s base interpreter in `dir` ([`venv_without_pytest`]),
 /// else `python` itself (aye's `pytest` module shadows the real one all the
 /// same).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' own settings, not the environment aye reads"
+)]
 fn native_python(python: &Path, dir: &Path) -> (PathBuf, &'static str) {
     if let Some(given) = std::env::var_os("AYE_NATIVE_PYTHON") {
         return (PathBuf::from(given), "AYE_NATIVE_PYTHON");
@@ -715,6 +723,10 @@ fn native_run(python: &Path, workers: Option<&str>, project: Project, run: &Run)
 /// failure (see the module's docs).
 #[test]
 #[ignore = "measures aye's engine without pytest, at AYE_NATIVE_WORKERS; run with --ignored"]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' own settings, not the environment aye reads"
+)]
 fn native_suites() {
     let Some(python) = python() else { return };
     let venvs = tempfile::tempdir().unwrap();

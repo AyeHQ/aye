@@ -178,6 +178,10 @@ fn refined(found: &[(String, Recognition)]) -> Vec<String> {
 
 /// The interpreter for differential tests: `AYE_TEST_PYTHON`, or the
 /// workspace's `.venv`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' own settings, not the environment aye reads"
+)]
 fn python() -> Option<PathBuf> {
     let candidate = std::env::var_os("AYE_TEST_PYTHON")
         .map(PathBuf::from)

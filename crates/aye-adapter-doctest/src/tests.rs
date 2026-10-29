@@ -1568,6 +1568,10 @@ fn suites_match_pytest() {
 
 /// The interpreter for live tests: `AYE_TEST_PYTHON`, or the workspace's
 /// `.venv`, when it has pytest.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' own settings, not the environment aye reads"
+)]
 fn python() -> Option<PathBuf> {
     let candidate = std::env::var_os("AYE_TEST_PYTHON")
         .map(PathBuf::from)
@@ -1788,6 +1792,10 @@ fn exact_samples_match_live_pytest() {
 /// pytest (`AYE_TEST_PYTHON`).
 #[test]
 #[ignore = "needs AYE_DOCTEST_CORPUS"]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' own settings, not the environment aye reads"
+)]
 fn corpus_matches_live_pytest() {
     let (Some(python), Some(corpus)) = (python(), std::env::var_os("AYE_DOCTEST_CORPUS")) else {
         eprintln!("skipped: set AYE_DOCTEST_CORPUS (and AYE_TEST_PYTHON)");

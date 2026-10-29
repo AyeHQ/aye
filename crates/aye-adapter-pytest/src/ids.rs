@@ -775,6 +775,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the tests' own settings, not the environment aye reads"
+    )]
     fn digits_match_the_python_running_the_tests() {
         let venv = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv/bin/python");
         let python = std::env::var_os("AYE_TEST_PYTHON").map_or(venv, std::path::PathBuf::from);

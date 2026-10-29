@@ -1,3 +1,14 @@
 doc-valid-idents = ["JUnit", "GitHub", ".."]
 # A test may say why it skips.
 allow-print-in-tests = true
+# The environment is read once, by the binary
+# (`aye_static::ProcessEnv::from_process`), and handed down. The
+# refinement cache's key, which holds the whole environment on purpose, and
+# the tests' own settings (`AYE_TEST_PYTHON`) read it themselves, each with
+# an `#[expect]`.
+disallowed-methods = [
+  { path = "std::env::var", reason = "read the environment the binary handed down: aye_static::ProcessEnv" },
+  { path = "std::env::var_os", reason = "read the environment the binary handed down: aye_static::ProcessEnv" },
+  { path = "std::env::vars", reason = "read the environment the binary handed down: aye_static::ProcessEnv" },
+  { path = "std::env::vars_os", reason = "read the environment the binary handed down: aye_static::ProcessEnv" },
+]

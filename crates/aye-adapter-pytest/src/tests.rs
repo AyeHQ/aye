@@ -167,6 +167,10 @@ fn recognize(source: &str) -> Recognition {
 
 /// The interpreter for differential tests: `AYE_TEST_PYTHON`, or the
 /// workspace's `.venv`, when it has pytest.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' own settings, not the environment aye reads"
+)]
 fn python() -> Option<PathBuf> {
     let candidate = std::env::var_os("AYE_TEST_PYTHON")
         .map(PathBuf::from)
@@ -397,6 +401,10 @@ fn differential(python: &Path, root: &Path) -> Result<Vec<String>, String> {
 /// `AYE_PYTEST_DIFF_DIR=/tmp/suite cargo test -p aye-adapter-pytest -- --ignored --nocapture diff_dir`.
 #[test]
 #[ignore = "manual: needs AYE_PYTEST_DIFF_DIR and a Python with pytest"]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' own settings, not the environment aye reads"
+)]
 fn diff_dir() {
     let dir = PathBuf::from(std::env::var_os("AYE_PYTEST_DIFF_DIR").expect("AYE_PYTEST_DIFF_DIR"));
     let python = python().expect("a Python with pytest");

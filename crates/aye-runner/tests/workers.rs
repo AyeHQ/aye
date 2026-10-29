@@ -289,6 +289,10 @@ const LISTING: Executor = Executor {
     lists_session: true,
 };
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' own settings, not the environment aye reads"
+)]
 fn python() -> Option<PathBuf> {
     if let Some(python) = env::var_os("AYE_TEST_PYTHON").filter(|p| !p.is_empty()) {
         return Some(python.into());
@@ -1242,6 +1246,10 @@ fn refinement_round_trips() {
 /// Echoing goes to the process's own stdout or stderr, so this test runs
 /// itself in a child process and reads what it printed.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' own settings, not the environment aye reads"
+)]
 fn output_is_echoed_only_when_not_capturing() {
     let python = python_or_skip!();
     if env::var_os("AYE_ECHO_CHILD").is_some() {

@@ -62,6 +62,10 @@ impl Environment {
             &aye_fs::absolute(cwd, self.interpreter.as_ref()?),
             &mut hash,
         )?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the refinement cache's key holds the whole environment workers inherit"
+        )]
         let mut variables = self
             .variables
             .clone()
@@ -301,6 +305,10 @@ impl Environment {
                 .iter()
                 .find(|(name, _)| name == EnvVars::PYTHONPATH)
                 .map(|(_, value)| value.clone()),
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the refinement cache's key, with the environment workers inherit"
+            )]
             None => std::env::var_os(EnvVars::PYTHONPATH),
         };
         for dir in pythonpath.iter().flat_map(std::env::split_paths) {
@@ -370,6 +378,10 @@ fn site_packages(prefix: &Path) -> Vec<PathBuf> {
 
 /// The user's own `site-packages`, which interpreters outside a venv also
 /// import from.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the refinement cache's key, with the environment workers inherit"
+)]
 fn user_site_packages() -> Vec<PathBuf> {
     let Some(home) =
         std::env::var_os(EnvVars::HOME).or_else(|| std::env::var_os(EnvVars::USERPROFILE))

@@ -25,7 +25,12 @@ impl ProcessEnv {
         Self { vars: Vec::new() }
     }
 
-    /// This process's environment, as it is now.
+    /// This process's environment, as it is now. The binary reads it once,
+    /// at its start; everything else reads what it hands down.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the one read of the environment, the binary's"
+    )]
     pub fn from_process() -> Self {
         Self::from_vars(std::env::vars_os())
     }
