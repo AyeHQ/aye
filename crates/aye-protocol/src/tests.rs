@@ -21,7 +21,7 @@ fn requests_round_trip() {
                 entry: "aye_engine_pytest:PytestExecutor".into(),
                 lists_session: true,
             }],
-            services: vec![services::CONTEXT.into()],
+            services: vec![ServiceName::Context],
         },
         Request::Refine(RefineRequest {
             adapter: "pytest".into(),
@@ -135,6 +135,57 @@ fn session_listing_fields_are_left_out_when_unused_and_default_to_off() {
     let digests = refined.digests.unwrap();
     assert_eq!(digests.keys().collect::<Vec<_>>(), ["a.py", "b.py"]);
     assert_eq!(digests["a.py"].as_str(), "da39");
+}
+
+/// Every service, the compiler checking that none is missing, is written
+/// as its name, and read back from it.
+#[test]
+fn a_service_is_written_as_its_name() {
+    for service in ServiceName::ALL {
+        match service {
+            ServiceName::Capture
+            | ServiceName::Context
+            | ServiceName::Cleanup
+            | ServiceName::Coverage
+            | ServiceName::Sandbox
+            | ServiceName::Timeout
+            | ServiceName::Resources
+            | ServiceName::Patching
+            | ServiceName::Clock
+            | ServiceName::Randomness
+            | ServiceName::Network
+            | ServiceName::Filesystem
+            | ServiceName::Snapshots
+            | ServiceName::Data => {}
+        }
+        let line = serde_json::to_string(&service).unwrap();
+        assert_eq!(line, format!("\"{service}\""));
+        assert_eq!(serde_json::from_str::<ServiceName>(&line).unwrap(), service);
+    }
+    let names: Vec<&str> = ServiceName::ALL.iter().map(|s| s.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "capture",
+            "context",
+            "cleanup",
+            "coverage",
+            "sandbox",
+            "timeout",
+            "resources",
+            "patching",
+            "clock",
+            "randomness",
+            "network",
+            "filesystem",
+            "snapshots",
+            "data"
+        ]
+    );
+    assert_eq!(
+        ServiceName::DEFAULT,
+        [ServiceName::Context, ServiceName::Cleanup]
+    );
 }
 
 #[test]

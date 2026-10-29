@@ -236,8 +236,7 @@ pub use python::{PythonSource, find_python, venv_python};
 pub use run::{BatchEnd, BatchSummary, Crash, Plan, RunSummary, Runner, RunnerOptions, StopHandle};
 pub use schedule::DEFAULT_WEIGHT;
 pub use worker::{
-    DEFAULT_SERVICES, Echo, Exit, Incoming, Killer, SpawnError, Worker, WorkerSpec, describe,
-    parse_line, spawn,
+    Echo, Exit, Incoming, Killer, SpawnError, Worker, WorkerSpec, describe, parse_line, spawn,
 };
 
 /// The worker, embedded at build time and run with `python -c`.

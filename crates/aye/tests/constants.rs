@@ -15,7 +15,7 @@ use aye_adapter::ast::{DictItem, Expr, ModModule, Stmt};
 use aye_events::{
     CompareKind, ComparisonOp, DiagnosticCode, FrameworkStatus, Outcome, Phase, Scope, Severity,
 };
-use aye_protocol::{EmbeddedModule, PROTOCOL_VERSION, context_keys, services};
+use aye_protocol::{EmbeddedModule, PROTOCOL_VERSION, ServiceName, context_keys};
 use serde_json::{Value, json};
 
 /// Every Python module aye embeds, once each: the engine's, each adapter's,
@@ -274,25 +274,14 @@ fn framework_statuses_are_the_same_on_both_sides() {
     }
 }
 
+/// `aye_engine.Services` names every `ServiceName`, in order, as the wire
+/// writes it.
 #[test]
 fn service_names_are_the_same_on_both_sides() {
-    let rust = [
-        ("CAPTURE", services::CAPTURE),
-        ("CONTEXT", services::CONTEXT),
-        ("CLEANUP", services::CLEANUP),
-        ("COVERAGE", services::COVERAGE),
-        ("SANDBOX", services::SANDBOX),
-        ("TIMEOUT", services::TIMEOUT),
-        ("RESOURCES", services::RESOURCES),
-        ("PATCHING", services::PATCHING),
-        ("CLOCK", services::CLOCK),
-        ("RANDOMNESS", services::RANDOMNESS),
-        ("NETWORK", services::NETWORK),
-        ("FILESYSTEM", services::FILESYSTEM),
-        ("SNAPSHOTS", services::SNAPSHOTS),
-        ("DATA", services::DATA),
-    ]
-    .map(|(name, value)| (name.to_string(), value.to_string()));
+    let rust: Vec<(String, String)> = ServiceName::ALL
+        .into_iter()
+        .map(|service| (service.as_str().to_ascii_uppercase(), wire(&json!(service))))
+        .collect();
     assert_eq!(class_strings(&engine(), "Services"), rust);
 }
 
@@ -326,7 +315,7 @@ fn the_default_services_are_the_ones_the_engine_provides() {
             provided.push(names[key.attr.as_str()].clone());
         }
     }
-    assert_eq!(provided, aye_runner::DEFAULT_SERVICES);
+    assert_eq!(provided, ServiceName::DEFAULT.map(ServiceName::as_str));
 }
 
 #[test]

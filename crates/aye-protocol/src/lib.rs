@@ -5,8 +5,8 @@
 //! and the runner add, [`context_keys`]; the shutdown), and the worker
 //! answers with [`WorkerLine`]s, each a control [`Reply`] or an event
 //! [`Record`]. Beside the messages: a `maxfail` limit ([`MaxFail`]), the
-//! protocol's version ([`PROTOCOL_VERSION`]), the names of the services a
-//! worker may provide ([`services`]), an adapter's runtime face
+//! protocol's version ([`PROTOCOL_VERSION`]), the services a worker may
+//! provide ([`ServiceName`]), an adapter's runtime face
 //! ([`Executor`], with the [`EmbeddedModule`]s it installs), and the
 //! [`Refiner`] trait, which the runner implements and collection calls.
 //! `docs/protocol.md` describes the protocol on the wire.
@@ -28,7 +28,7 @@
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **Services are looked up by name**, with `None` when absent, so new
-//!   services stay additive ([`services`] lists the names). An engine that
+//!   services stay additive ([`ServiceName`] names them). An engine that
 //!   needs a service it doesn't get degrades or reports, never crashes.
 //! - **The executor protocol is JSON lines** over the worker's original
 //!   stdout, versioned by [`PROTOCOL_VERSION`] and checked at the handshake.
@@ -55,9 +55,11 @@ use aye_events::{AdapterName, BatchIndex, Case, Diagnostic, ProjectPath, Record,
 use serde::{Deserialize, Serialize};
 
 mod context;
+mod service;
 
 pub use aye_events::FrameworkStatus;
 pub use context::{AdapterContext, BatchContext, context_keys};
+pub use service::ServiceName;
 
 /// Version of the runner ↔ worker protocol. Checked at the handshake.
 /// 2: [`Executor::lists_session`], [`RefineRequest::digests_only`],
@@ -71,28 +73,6 @@ pub struct EmbeddedModule {
     /// Import name, e.g. `aye_engine`.
     pub name: &'static str,
     pub source: &'static str,
-}
-
-/// Names of the services the runner may provide inside a worker. Engines
-/// look them up by name and must cope with any of them being absent.
-pub mod services {
-    /// Captures stdout, stderr and logging per test.
-    pub const CAPTURE: &str = "capture";
-    /// The test or lifetime currently running.
-    pub const CONTEXT: &str = "context";
-    /// Teardown registration on the current test or lifetime.
-    pub const CLEANUP: &str = "cleanup";
-    pub const COVERAGE: &str = "coverage";
-    pub const SANDBOX: &str = "sandbox";
-    pub const TIMEOUT: &str = "timeout";
-    pub const RESOURCES: &str = "resources";
-    pub const PATCHING: &str = "patching";
-    pub const CLOCK: &str = "clock";
-    pub const RANDOMNESS: &str = "randomness";
-    pub const NETWORK: &str = "network";
-    pub const FILESYSTEM: &str = "filesystem";
-    pub const SNAPSHOTS: &str = "snapshots";
-    pub const DATA: &str = "data";
 }
 
 /// An adapter's runtime face: modules the worker installs, and the executor
@@ -296,8 +276,8 @@ pub enum Request {
         /// Installed into `sys.modules` in order.
         modules: Vec<ModuleSource>,
         executors: Vec<ExecutorSpec>,
-        /// Services to provide, by name.
-        services: Vec<String>,
+        /// Services to provide.
+        services: Vec<ServiceName>,
     },
     Refine(RefineRequest),
     Run(Batch),

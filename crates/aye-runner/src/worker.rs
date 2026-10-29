@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use aye_engine::ENGINE_MODULE;
 use aye_protocol::{
-    Executor, ExecutorSpec, ModuleSource, PROTOCOL_VERSION, Reply, Request, WorkerLine, services,
+    Executor, ExecutorSpec, ModuleSource, PROTOCOL_VERSION, Reply, Request, ServiceName, WorkerLine,
 };
 
 use aye_static::EnvVars;
@@ -64,9 +64,6 @@ const STRAY_LINES: usize = 20;
 /// How faulthandler (and `Py_FatalError`) starts a dump.
 const FATAL: &str = "Fatal Python error: ";
 
-/// The services a worker provides unless told otherwise.
-pub const DEFAULT_SERVICES: [&str; 2] = [services::CONTEXT, services::CLEANUP];
-
 /// Where a worker's output is echoed when it isn't captured (`-s`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Echo {
@@ -90,8 +87,9 @@ pub struct WorkerSpec {
     /// The executors the worker instantiates. Their modules are installed
     /// after aye's engine, in order, each name once.
     pub executors: Vec<Executor>,
-    /// Services to provide, by name.
-    pub services: Vec<String>,
+    /// Services to provide: [`ServiceName::DEFAULT`] unless told
+    /// otherwise.
+    pub services: Vec<ServiceName>,
     /// Environment variables set on top of the inherited environment, after
     /// `PYTHONIOENCODING=utf-8`.
     pub env: Vec<(OsString, OsString)>,
@@ -113,7 +111,7 @@ impl WorkerSpec {
             root: root.into(),
             cwd: cwd.into(),
             executors: Vec::new(),
-            services: DEFAULT_SERVICES.iter().map(ToString::to_string).collect(),
+            services: ServiceName::DEFAULT.to_vec(),
             env: Vec::new(),
             echo: None,
             registry: None,
@@ -969,7 +967,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [false, true]
         );
-        assert_eq!(services, ["context", "cleanup"]);
+        assert_eq!(services, ServiceName::DEFAULT);
     }
 
     #[test]
