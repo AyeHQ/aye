@@ -287,7 +287,7 @@ use aye_engine::{
     Adapter, AdapterError, Claim, EmbeddedModule, Executor, Project, Recognition, Recognizer,
     Setting, SourceFile,
 };
-use aye_events::{Case, Certainty, Span};
+use aye_events::{Case, Certainty, ProjectPath, Span};
 use aye_fs::normalize_absolute;
 
 pub use config::UnittestConfig;
@@ -532,7 +532,7 @@ impl UnittestRecognizer {
             for method in &class.methods {
                 let mut case = Case::new(format!("{class_id}::{}", method.name), NAME);
                 case.span = Some(Span {
-                    path: self.relative(&method.file),
+                    path: ProjectPath::as_written(self.relative(&method.file)),
                     start: method.range.start().to_u32(),
                     end: method.range.end().to_u32(),
                     line: Some(method.line),

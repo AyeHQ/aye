@@ -264,7 +264,7 @@ impl Collector<'_> {
             }
             let rel = ProjectPath::as_written(aye_fs::relative_through_root(&init, root));
             let hash = *memo.entry((init.clone(), recognizer)).or_insert_with(|| {
-                let (source, _) = crate::source::load(&init, rel.as_str());
+                let (source, _) = crate::source::load(&init, &rel);
                 let source = source.filter(|s| !s.is_lossy())?;
                 let file = source.file(&rel, &init)?;
                 standalone::dependence(file.module, &init, scope)

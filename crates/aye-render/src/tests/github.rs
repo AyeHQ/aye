@@ -87,7 +87,7 @@ fn without_a_location_the_test_definition_is_used() {
     }];
     let mut case = aye_events::Case::new("tests/test_x.py::test_y", "pytest");
     case.span = Some(aye_events::Span {
-        path: "tests/test_x.py".into(),
+        path: aye_events::ProjectPath::new("tests/test_x.py").unwrap(),
         start: 0,
         end: 0,
         line: Some(14),

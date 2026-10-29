@@ -232,8 +232,8 @@ fn misspelling(path: &str) -> Option<&'static str> {
 /// snapshots and the source rewriter all point at spans.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
-    /// Relative to the project root, `/` separators.
-    pub path: String,
+    /// The file, relative to the project root.
+    pub path: ProjectPath,
     pub start: u32,
     pub end: u32,
     /// 1-based line of `start`, for display.

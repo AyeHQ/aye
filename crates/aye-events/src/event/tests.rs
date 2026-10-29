@@ -75,7 +75,7 @@ fn every_event() -> Vec<Event> {
             code: "duplicate-definition".into(),
             path: "tests/test_cart.py".into(),
             span: Some(Span {
-                path: "tests/test_cart.py".into(),
+                path: ProjectPath::new("tests/test_cart.py").unwrap(),
                 start: 10,
                 end: 20,
                 line: Some(3),

@@ -359,7 +359,7 @@ impl SourceFile<'_> {
 
     pub fn span(&self, range: TextRange) -> Span {
         Span {
-            path: self.rel.as_str().to_string(),
+            path: self.rel.to_project_path(),
             start: range.start().to_u32(),
             end: range.end().to_u32(),
             line: Some(self.line(range.start())),

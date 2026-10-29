@@ -41,7 +41,7 @@ fn run_started(collect_only: bool) -> Event {
 fn case(id: &str, line: Option<u32>, certainty: Certainty) -> Event {
     let mut case = Case::new(id, "pytest");
     case.span = line.map(|line| Span {
-        path: case.id.path().as_str().to_owned(),
+        path: case.id.path().to_project_path(),
         start: 0,
         end: 0,
         line: Some(line),
@@ -475,7 +475,7 @@ fn diagnostic(severity: Severity, code: &str, path: &str, line: u32, message: &s
         code: code.into(),
         path: path.into(),
         span: Some(Span {
-            path: path.into(),
+            path: aye_events::ProjectPath::as_written(path),
             start: 0,
             end: 0,
             line: Some(line),

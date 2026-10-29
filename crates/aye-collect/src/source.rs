@@ -47,14 +47,14 @@ impl Source {
 /// Read and parse a file. Only `.py` files are parsed; any other file a
 /// recognizer claims comes with its text and an empty module. `None` when the
 /// file can't be read; the diagnostic says why, or why it doesn't parse.
-pub(crate) fn load(abs: &Path, rel: &str) -> (Option<Source>, Option<Diagnostic>) {
+pub(crate) fn load(abs: &Path, rel: &ProjectPath) -> (Option<Source>, Option<Diagnostic>) {
     let bytes = match std::fs::read(abs) {
         Ok(bytes) => bytes,
         Err(err) => {
             let diagnostic = Diagnostic {
                 severity: Severity::Error,
                 code: codes::UNREADABLE.to_string(),
-                path: rel.to_string(),
+                path: rel.as_str().to_owned(),
                 span: None,
                 message: format!("cannot read: {err}"),
             };
@@ -95,7 +95,7 @@ fn empty_module() -> ast::ModModule {
         .into_syntax()
 }
 
-fn syntax_error(rel: &str, text: &str, lines: &LineIndex, err: &ParseError) -> Diagnostic {
+fn syntax_error(rel: &ProjectPath, text: &str, lines: &LineIndex, err: &ParseError) -> Diagnostic {
     let len = TextSize::try_from(text.len()).unwrap_or(TextSize::new(u32::MAX));
     let start = err.location.start().min(len);
     let end = err.location.end().min(len);
@@ -104,9 +104,9 @@ fn syntax_error(rel: &str, text: &str, lines: &LineIndex, err: &ParseError) -> D
     Diagnostic {
         severity: Severity::Error,
         code: codes::SYNTAX_ERROR.to_string(),
-        path: rel.to_string(),
+        path: rel.as_str().to_owned(),
         span: Some(Span {
-            path: rel.to_string(),
+            path: rel.clone(),
             start: start.to_u32(),
             end: end.to_u32(),
             line: Some(line),

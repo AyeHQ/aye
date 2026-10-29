@@ -1103,7 +1103,7 @@ impl DoctestRecognizer {
             }
             let name = file.rel.file_name();
             let span = Span {
-                path: file.rel.to_string(),
+                path: file.rel.to_project_path(),
                 start: 0,
                 end: 0,
                 line: Some(1),

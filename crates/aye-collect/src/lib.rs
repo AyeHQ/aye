@@ -447,7 +447,7 @@ impl<'a> Collector<'a> {
         let support_files = tree.support_files();
         let loaded = parallel::map(&support_files, |&at| {
             let entry = &tree.entries[at];
-            source::load(&entry.abs, entry.rel.as_str())
+            source::load(&entry.abs, &entry.rel)
         });
         let mut support = HashMap::new();
         for (at, (source, diagnostic)) in support_files.into_iter().zip(loaded) {
@@ -632,7 +632,7 @@ impl<'a> Collector<'a> {
         let (owned, diagnostic) = if entry.support != 0 {
             (None, None)
         } else {
-            source::load(&entry.abs, entry.rel.as_str())
+            source::load(&entry.abs, &entry.rel)
         };
         let mut recognized = Recognized {
             diagnostic,
