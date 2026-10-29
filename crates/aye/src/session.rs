@@ -132,9 +132,7 @@ impl Session {
             .filter(|path| is_path_like(&cwd, path))
             .map(|path| normalize(&cwd.join(path)))
             .collect();
-        let root = normalize(&aye_config::find_root(&aye_config::common_ancestor(
-            &cwd, &given,
-        )));
+        let root = normalize(&aye_config::project_root(&cwd, &given));
         let positionals: Vec<Positional> = args
             .tests
             .iter()
