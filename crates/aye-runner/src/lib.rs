@@ -138,9 +138,9 @@
 //!   first ([`Plan::first`], `--ff`) run first within their batch, in plan
 //!   order, across files, and the batches holding them are handed out first.
 //! - **The log.** The runner stamps `run`, `environment`, the run-wide `seq`
-//!   and `t_ms` with the [`Stamper`] the binary also uses for its own
-//!   records, keeps each worker record's `batch`, and brackets every worker
-//!   and batch with started and finished records.
+//!   and `t_ms` with the [`Stamper`](aye_events::Stamper) the binary also
+//!   uses for its own records, keeps each worker record's `batch`, and
+//!   brackets every worker and batch with started and finished records.
 //! - **`maxfail` is counted across workers.** Each batch is sent with what
 //!   is left of the budget. When it runs out, nothing more is handed out,
 //!   and busy workers end their batches as pytest's `-x` ends a session,
@@ -234,8 +234,7 @@ mod worker;
 
 pub use python::{PythonSource, find_python, venv_python};
 pub use run::{
-    BatchEnd, BatchSummary, Crash, Plan, RunSummary, Runner, RunnerOptions, Stamper, StopHandle,
-    StopReason,
+    BatchEnd, BatchSummary, Crash, Plan, RunSummary, Runner, RunnerOptions, StopHandle, StopReason,
 };
 pub use schedule::DEFAULT_WEIGHT;
 pub use worker::{

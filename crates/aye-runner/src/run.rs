@@ -17,9 +17,9 @@ use aye_engine::{
     WorkerLine,
 };
 use aye_events::{
-    AdapterName, BatchIndex, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath,
-    EnvironmentId, Event, Failure, LifetimeId, Outcome, ProjectPath, Record, RunId, Severity,
-    TestId, TestResult, WorkerIndex,
+    AdapterName, BatchIndex, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, Event,
+    Failure, LifetimeId, Outcome, ProjectPath, Record, Severity, Stamper, TestId, TestResult,
+    WorkerIndex,
 };
 use aye_static::EnvVars;
 
@@ -251,73 +251,6 @@ impl StopHandle {
 
     pub fn is_stopped(&self) -> bool {
         self.stopped.load(Ordering::SeqCst)
-    }
-}
-
-/// Stamps the run's part of every record's envelope: the run id, the
-/// environment, the run-wide `seq` and `t_ms` since the run started. The
-/// binary stamps its own records (`run_started`, collection) with the same
-/// stamper it hands to [`Runner::run`], so `seq` is one sequence.
-#[derive(Debug)]
-pub struct Stamper {
-    run: RunId,
-    environment: Option<EnvironmentId>,
-    started: Instant,
-    next: u64,
-}
-
-impl Default for Stamper {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Stamper {
-    /// A new run, with a fresh id, starting now.
-    pub fn new() -> Self {
-        Self::with_run(RunId::random())
-    }
-
-    pub fn with_run(run: impl Into<RunId>) -> Self {
-        Self {
-            run: run.into(),
-            environment: None,
-            started: Instant::now(),
-            next: 0,
-        }
-    }
-
-    #[must_use]
-    pub fn environment(mut self, environment: impl Into<EnvironmentId>) -> Self {
-        self.environment = Some(environment.into());
-        self
-    }
-
-    pub fn run_id(&self) -> &RunId {
-        &self.run
-    }
-
-    pub fn started(&self) -> Instant {
-        self.started
-    }
-
-    /// The `seq` the next record gets.
-    pub fn next_seq(&self) -> u64 {
-        self.next
-    }
-
-    /// Set `run`, `environment` (when known), `seq` and `t_ms`; keep
-    /// `worker` and `batch`.
-    pub fn stamp(&mut self, mut record: Record) -> Record {
-        let envelope = &mut record.envelope;
-        envelope.run = Some(self.run.clone());
-        if self.environment.is_some() {
-            envelope.environment.clone_from(&self.environment);
-        }
-        envelope.seq = Some(self.next);
-        envelope.t_ms = Some((self.started.elapsed().as_secs_f64() * 1_000_000.0).round() / 1000.0);
-        self.next += 1;
-        record
     }
 }
 
@@ -2286,34 +2219,6 @@ fn shorten(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn stamps_run_seq_and_time_and_keeps_worker_and_batch() {
-        let mut stamper = Stamper::with_run("r1").environment("py313");
-        let mut record = Record::new(Event::CollectionStarted);
-        record.envelope.worker = Some(WorkerIndex::from_u32(2));
-        record.envelope.batch = Some(BatchIndex::from_u32(5));
-        record.envelope.seq = Some(99);
-        record.envelope.t_ms = Some(123_456.0);
-        let first = stamper.stamp(record);
-        let second = stamper.stamp(Record::new(Event::CollectionStarted));
-        assert_eq!(first.envelope.run, Some("r1".into()));
-        assert_eq!(first.envelope.environment, Some("py313".into()));
-        assert_eq!(
-            (first.envelope.worker, first.envelope.batch),
-            (
-                Some(WorkerIndex::from_u32(2)),
-                Some(BatchIndex::from_u32(5))
-            )
-        );
-        assert_eq!(
-            (first.envelope.seq, second.envelope.seq),
-            (Some(0), Some(1))
-        );
-        assert!(first.envelope.t_ms.unwrap() < 1000.0);
-        assert!(second.envelope.t_ms >= first.envelope.t_ms);
-        assert_eq!(stamper.next_seq(), 2);
-    }
 
     #[test]
     fn track_knows_what_started() {

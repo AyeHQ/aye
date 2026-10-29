@@ -1,13 +1,16 @@
 //! A run's identities: its id, the environment it ran in, the lanes its
-//! workers run on and the batches they are handed.
+//! workers run on and the batches they are handed; and the stamper that
+//! writes the run's part of each record's envelope.
 
 use std::borrow::Borrow;
 use std::fmt;
 use std::hash::{BuildHasher, Hasher};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use aye_index::newtype_index;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::event::Record;
 
 /// A run's id: 16 random hex digits ([`RunId::random`]), on every record's
 /// envelope (`run`), in the history as the run that last finished a test,
@@ -187,9 +190,78 @@ macro_rules! wire_index {
 wire_index!(WorkerIndex);
 wire_index!(BatchIndex);
 
+/// Stamps the run's part of every record's envelope: the run id, the
+/// environment, the run-wide `seq` and `t_ms` since the run started. The
+/// binary stamps its own records (`run_started`, collection) with the same
+/// stamper it hands to the runner, which stamps the records it merges from
+/// its workers, so `seq` is one sequence.
+#[derive(Debug)]
+pub struct Stamper {
+    run: RunId,
+    environment: Option<EnvironmentId>,
+    started: Instant,
+    next: u64,
+}
+
+impl Default for Stamper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Stamper {
+    /// A new run, with a fresh id, starting now.
+    pub fn new() -> Self {
+        Self::with_run(RunId::random())
+    }
+
+    pub fn with_run(run: impl Into<RunId>) -> Self {
+        Self {
+            run: run.into(),
+            environment: None,
+            started: Instant::now(),
+            next: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn environment(mut self, environment: impl Into<EnvironmentId>) -> Self {
+        self.environment = Some(environment.into());
+        self
+    }
+
+    pub fn run_id(&self) -> &RunId {
+        &self.run
+    }
+
+    pub fn started(&self) -> Instant {
+        self.started
+    }
+
+    /// The `seq` the next record gets.
+    pub fn next_seq(&self) -> u64 {
+        self.next
+    }
+
+    /// Set `run`, `environment` (when known), `seq` and `t_ms`; keep
+    /// `worker` and `batch`.
+    pub fn stamp(&mut self, mut record: Record) -> Record {
+        let envelope = &mut record.envelope;
+        envelope.run = Some(self.run.clone());
+        if self.environment.is_some() {
+            envelope.environment.clone_from(&self.environment);
+        }
+        envelope.seq = Some(self.next);
+        envelope.t_ms = Some((self.started.elapsed().as_secs_f64() * 1_000_000.0).round() / 1000.0);
+        self.next += 1;
+        record
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Event;
 
     #[test]
     fn run_ids_are_sixteen_random_hex_digits() {
@@ -210,6 +282,34 @@ mod tests {
         let environment: EnvironmentId = serde_json::from_str("\"py313\"").unwrap();
         assert_eq!(environment.as_str(), "py313");
         assert_eq!(serde_json::to_string(&environment).unwrap(), "\"py313\"");
+    }
+
+    #[test]
+    fn stamps_run_seq_and_time_and_keeps_worker_and_batch() {
+        let mut stamper = Stamper::with_run("r1").environment("py313");
+        let mut record = Record::new(Event::CollectionStarted);
+        record.envelope.worker = Some(WorkerIndex::from_u32(2));
+        record.envelope.batch = Some(BatchIndex::from_u32(5));
+        record.envelope.seq = Some(99);
+        record.envelope.t_ms = Some(123_456.0);
+        let first = stamper.stamp(record);
+        let second = stamper.stamp(Record::new(Event::CollectionStarted));
+        assert_eq!(first.envelope.run, Some("r1".into()));
+        assert_eq!(first.envelope.environment, Some("py313".into()));
+        assert_eq!(
+            (first.envelope.worker, first.envelope.batch),
+            (
+                Some(WorkerIndex::from_u32(2)),
+                Some(BatchIndex::from_u32(5))
+            )
+        );
+        assert_eq!(
+            (first.envelope.seq, second.envelope.seq),
+            (Some(0), Some(1))
+        );
+        assert!(first.envelope.t_ms.unwrap() < 1000.0);
+        assert!(second.envelope.t_ms >= first.envelope.t_ms);
+        assert_eq!(stamper.next_seq(), 2);
     }
 
     /// An index prints and serializes as the number it was when it was a

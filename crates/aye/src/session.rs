@@ -15,7 +15,7 @@ use aye_config::AyeConfig;
 use aye_engine::{Adapter, Policy, Project, Refiner};
 use aye_events::{
     AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event,
-    ExitCode, ProjectPath, Record, RunId, SCHEMA_VERSION, Severity, TestId,
+    ExitCode, ProjectPath, Record, RunId, SCHEMA_VERSION, Severity, Stamper, TestId,
 };
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter};
@@ -23,7 +23,7 @@ use aye_render::{
     ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
     JunitOptions, Reporter, Tally, Tee, Text, TextOptions,
 };
-use aye_runner::{Echo, Plan, Runner, RunnerOptions, Stamper};
+use aye_runner::{Echo, Plan, Runner, RunnerOptions};
 use aye_select::Selection;
 use aye_static::EnvVars;
 

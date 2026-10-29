@@ -17,13 +17,13 @@ use std::time::{Duration, Instant};
 use aye_engine::{EmbeddedModule, Executor, Policy, RefineRequest, Refiner, Reply, Request};
 use aye_events::{
     AdapterName, AffinityKey, BatchIndex, Case, DiagnosticCode, Event, Outcome, ProjectPath,
-    Record, TestId, TestResult, WorkerIndex,
+    Record, Stamper, TestId, TestResult, WorkerIndex,
 };
 #[cfg(unix)]
 use aye_runner::Worker;
 use aye_runner::{
-    BatchEnd, Echo, Incoming, Plan, RunSummary, Runner, RunnerOptions, SpawnError, Stamper,
-    StopReason, WorkerSpec, spawn,
+    BatchEnd, Echo, Incoming, Plan, RunSummary, Runner, RunnerOptions, SpawnError, StopReason,
+    WorkerSpec, spawn,
 };
 
 /// `test_fail` fails, `test_sleep_<ms>` sleeps, `test_crash` kills the
