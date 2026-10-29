@@ -592,7 +592,7 @@ fn last_failed_counts_deselected_as_pytests_summary_does() {
 #[test]
 fn an_adapters_own_expressions_apply_to_its_cases() {
     let mut doctest = exact("tests/test_cart.py::tests.test_cart.slow");
-    doctest.adapter = "doctest".to_string();
+    doctest.adapter = "doctest".into();
     let mut cases = project();
     cases.push(doctest);
     let own = Selection::default()
@@ -640,7 +640,7 @@ fn an_adapters_own_expressions_apply_to_its_cases() {
 #[test]
 fn deselect_prefixes_drop_and_count_their_adapters_cases() {
     let mut doctest = exact("tests/test_cart.py::tests.test_cart.add");
-    doctest.adapter = "doctest".to_string();
+    doctest.adapter = "doctest".into();
     let mut cases = project();
     cases.push(doctest);
     let selected = Selection::default()

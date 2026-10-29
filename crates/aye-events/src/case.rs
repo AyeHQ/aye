@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::TestId;
+use crate::id::{AdapterName, TestId};
 use crate::path::Span;
 
 /// How sure collection is that a case exists exactly as described.
@@ -24,7 +24,7 @@ pub enum Certainty {
 pub struct Case {
     pub id: TestId,
     /// The adapter that collected it (`pytest`).
-    pub adapter: String,
+    pub adapter: AdapterName,
     /// Where the test is defined.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub span: Option<Span>,
@@ -56,7 +56,7 @@ pub struct Case {
 }
 
 impl Case {
-    pub fn new(id: impl Into<String>, adapter: impl Into<String>) -> Self {
+    pub fn new(id: impl Into<String>, adapter: impl Into<AdapterName>) -> Self {
         Self {
             id: TestId::new(id),
             adapter: adapter.into(),

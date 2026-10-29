@@ -51,7 +51,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
-use aye_events::{BatchId, Case, TestId, WorkerId};
+use aye_events::{AdapterName, BatchId, Case, TestId, WorkerId};
 
 use crate::worker::lock;
 
@@ -64,7 +64,7 @@ const BATCHES_PER_WORKER: u32 = 4;
 /// A batch before it is handed out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Planned {
-    pub adapter: String,
+    pub adapter: AdapterName,
     pub ids: Vec<TestId>,
     pub weight: Duration,
     /// Holds a case that must not run alongside other serial cases.
@@ -77,7 +77,7 @@ pub(crate) struct Planned {
 
 #[derive(Debug)]
 struct Group<'a> {
-    adapter: &'a str,
+    adapter: &'a AdapterName,
     cases: Vec<(usize, &'a TestId)>,
     weight: Duration,
     serial: bool,
@@ -101,23 +101,23 @@ pub(crate) fn plan(
     durations: &HashMap<TestId, Duration>,
     first: &HashSet<TestId>,
     workers: u32,
-    ordered: &HashSet<&str>,
+    ordered: &HashSet<&AdapterName>,
 ) -> Vec<Planned> {
     let weigh = Weights::new(durations);
     // A file's free cases go with its first lifetime group, if it has one,
     // so that they keep their place among its other cases.
-    let mut lifetimes: HashMap<(&str, &str), &str> = HashMap::new();
+    let mut lifetimes: HashMap<(&AdapterName, &str), &str> = HashMap::new();
     for case in cases {
         if let Some(key) = case.affinity.first() {
             lifetimes
-                .entry((case.adapter.as_str(), case.id.path().as_str()))
+                .entry((&case.adapter, case.id.path().as_str()))
                 .or_insert(key);
         }
     }
-    let mut index: HashMap<(&str, Key<'_>), usize> = HashMap::new();
+    let mut index: HashMap<(&AdapterName, Key<'_>), usize> = HashMap::new();
     let mut groups: Vec<Group<'_>> = Vec::new();
     for (position, case) in cases.iter().enumerate() {
-        let adapter = case.adapter.as_str();
+        let adapter = &case.adapter;
         let key = match case.affinity.first() {
             Some(key) => Key::Affinity(key),
             None => lifetimes
@@ -169,7 +169,7 @@ pub(crate) fn plan(
         });
         let mut batches = in_plan_order(in_order, target);
         // The batch still being filled, per adapter and seriality.
-        let mut open: HashMap<(&str, bool), usize> = HashMap::new();
+        let mut open: HashMap<(&AdapterName, bool), usize> = HashMap::new();
         for group in groups {
             if group.weight >= target {
                 batches.push(vec![group]);
@@ -208,7 +208,7 @@ pub(crate) fn plan(
             ids = at_front;
         }
         Planned {
-            adapter: batch[0].adapter.to_string(),
+            adapter: batch[0].adapter.clone(),
             weight: weight(&batch),
             serial: batch.iter().any(|g| g.serial),
             first: batch[0].cases[0].0,
@@ -229,7 +229,7 @@ pub(crate) fn plan(
         });
         // The ordered adapters' batches take their places in plan order.
         let slots: Vec<usize> = (0..batches.len())
-            .filter(|&at| ordered.contains(batches[at].adapter.as_str()))
+            .filter(|&at| ordered.contains(&batches[at].adapter))
             .collect();
         let mut in_order: Vec<Planned> = slots.iter().map(|&at| batches[at].clone()).collect();
         in_order.sort_by_key(|b| (!b.priority, b.first));
@@ -338,7 +338,7 @@ impl<'a> Weights<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Assigned {
     pub id: BatchId,
-    pub adapter: String,
+    pub adapter: AdapterName,
     pub ids: Vec<TestId>,
     pub serial: bool,
     /// Already re-queued once after a crash.
@@ -362,7 +362,7 @@ pub(crate) struct Assigned {
 struct Pending {
     /// Kept when a batch is put back unstarted, so ids stay dense.
     id: Option<BatchId>,
-    adapter: String,
+    adapter: AdapterName,
     ids: Vec<TestId>,
     serial: bool,
     retry: bool,
@@ -443,7 +443,7 @@ impl Queue {
     /// or the queue was halted. Those holding tests to run first go first;
     /// among the rest, the first of the adapter `prefer` (the asking
     /// worker's), else the first.
-    pub(crate) fn take(&self, lane: WorkerId, prefer: Option<&str>) -> Option<Assigned> {
+    pub(crate) fn take(&self, lane: WorkerId, prefer: Option<&AdapterName>) -> Option<Assigned> {
         let mut state = lock(&self.state);
         loop {
             if state.halted {
@@ -456,7 +456,7 @@ impl Queue {
                 .iter()
                 .enumerate()
                 .filter(|(_, p)| p.eligible(lane) && !(p.serial && blocked))
-                .min_by_key(|(at, p)| (!p.priority, Some(p.adapter.as_str()) != prefer, *at))
+                .min_by_key(|(at, p)| (!p.priority, Some(&p.adapter) != prefer, *at))
                 .map(|(at, _)| at);
             if let Some(at) = chosen {
                 let pending = state.pending.remove(at).expect("position is in range");
@@ -499,12 +499,12 @@ impl Queue {
     /// A batch of `adapter` with no ids that only ends its worker's session
     /// ([`aye_engine::Batch::ends_session`]): for a worker whose last batch
     /// didn't, as its lane finishes or leaves the adapter.
-    pub(crate) fn closing(&self, adapter: &str) -> Assigned {
+    pub(crate) fn closing(&self, adapter: &AdapterName) -> Assigned {
         let mut state = lock(&self.state);
         state.next_id += 1;
         Assigned {
             id: state.next_id - 1,
-            adapter: adapter.to_string(),
+            adapter: adapter.clone(),
             ids: Vec::new(),
             serial: false,
             retry: false,
@@ -667,7 +667,7 @@ mod tests {
     }
 
     /// No adapter whose batches keep plan order.
-    fn none() -> HashSet<&'static str> {
+    fn none() -> HashSet<&'static AdapterName> {
         HashSet::new()
     }
 
@@ -935,8 +935,10 @@ mod tests {
         assert_eq!(ids(&batches[0]), plan_order);
     }
 
-    fn ordered() -> HashSet<&'static str> {
-        ["pytest"].into_iter().collect()
+    /// pytest's batches keep plan order.
+    fn ordered() -> HashSet<&'static AdapterName> {
+        static ORDERED: AdapterName = PYTEST;
+        HashSet::from([&ORDERED])
     }
 
     #[test]
@@ -1045,7 +1047,7 @@ mod tests {
     }
 
     /// Batches of one test each: (adapter, id, serial, priority).
-    fn queue_of(batches: &[(&str, &str, bool, bool)]) -> Queue {
+    fn queue_of(batches: &[(&'static str, &str, bool, bool)]) -> Queue {
         Queue::new(
             batches
                 .iter()
@@ -1061,8 +1063,14 @@ mod tests {
         )
     }
 
-    fn taken(q: &Queue, prefer: Option<&str>) -> String {
-        q.take(0, prefer).unwrap().ids[0].as_str().to_owned()
+    const PYTEST: AdapterName = AdapterName::new_static("pytest");
+    const DOCTEST: AdapterName = AdapterName::new_static("doctest");
+
+    fn taken(q: &Queue, prefer: Option<&'static str>) -> String {
+        let prefer = prefer.map(AdapterName::from);
+        q.take(0, prefer.as_ref()).unwrap().ids[0]
+            .as_str()
+            .to_owned()
     }
 
     #[test]
@@ -1078,7 +1086,7 @@ mod tests {
         // None of its own left: the next in line, whatever its adapter.
         assert_eq!(taken(&q, Some("doctest")), "p1");
         assert_eq!(taken(&q, None), "p2");
-        assert_eq!(q.take(0, Some("pytest")), None);
+        assert_eq!(q.take(0, Some(&PYTEST)), None);
     }
 
     #[test]
@@ -1088,15 +1096,15 @@ mod tests {
             ("doctest", "d1", false, false),
             ("pytest", "p2", false, false),
         ]);
-        let p1 = q.take(0, Some("pytest")).unwrap();
+        let p1 = q.take(0, Some(&PYTEST)).unwrap();
         assert!(!p1.ends_session, "p2 is left");
-        let p2 = q.take(0, Some("pytest")).unwrap();
+        let p2 = q.take(0, Some(&PYTEST)).unwrap();
         assert!(p2.ends_session);
         // A crashed batch that comes back goes to another worker.
         q.retry(&p2, vec![TestId::new("p2")], Vec::new());
-        let d1 = q.take(0, Some("doctest")).unwrap();
+        let d1 = q.take(0, Some(&DOCTEST)).unwrap();
         assert!(d1.ends_session);
-        assert!(q.take(0, Some("pytest")).unwrap().ends_session);
+        assert!(q.take(0, Some(&PYTEST)).unwrap().ends_session);
         assert_eq!(q.take(0, None), None);
 
         // The first lane's never does while other lanes may pin batches to
@@ -1117,7 +1125,7 @@ mod tests {
         assert!(q.take(0, None).unwrap().ends_session);
 
         // A batch that only ends a session: no ids, an id of its own.
-        let closing = q.closing("pytest");
+        let closing = q.closing(&PYTEST);
         assert!(closing.ends_session && closing.ids.is_empty());
         assert_eq!((closing.id, closing.adapter.as_str()), (2, "pytest"));
     }

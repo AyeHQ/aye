@@ -75,6 +75,11 @@ fn project<'a>(root: &'a Path, args: &'a [PathBuf], framework_args: &'a [String]
     }
 }
 
+/// The adapters a run uses, by name.
+fn adapters(names: &[&'static str]) -> Vec<AdapterName> {
+    names.iter().copied().map(AdapterName::from).collect()
+}
+
 fn recognizer(root: &Path) -> DoctestRecognizer {
     DoctestRecognizer::with_env(&project(root, &[], &[]), None, None).unwrap()
 }
@@ -931,9 +936,9 @@ fn beside_pytest_test_txt_files_need_no_pytest_configuration() {
     write(root, "pyproject.toml", "[project]\nname = 'x'\n");
     write(root, "docs/test_guide.txt", "Guide.\n\n>>> 1 + 1\n2\n");
     write(root, "docs/test_prose.txt", "Only prose.\n");
-    let among = |adapters: &[&str], args: &[String]| {
+    let among = |names: &[&'static str], args: &[String]| {
         Doctest
-            .prepare_among(&project(root, &[], args), adapters)
+            .prepare_among(&project(root, &[], args), &adapters(names))
             .unwrap()
     };
     assert!(among(&["doctest"], &[]).is_none());
@@ -1312,7 +1317,7 @@ fn modules_without_a_visible_doctest_are_refined() {
     write(dir.path(), "tests/conftest.py", "import os\n");
     let beside = DoctestRecognizer::with_env_among(
         &project(dir.path(), &[], &[]),
-        &["pytest", "doctest"],
+        &adapters(&["pytest", "doctest"]),
         None,
         None,
     )
@@ -1948,9 +1953,9 @@ fn a_named_text_file_is_a_doctest_with_nothing_enabled() {
     write(root, "guide.rst", ">>> 1 + 1\n3\n");
     assert!(Doctest.prepare(&project(root, &[], &[])).unwrap().is_none());
     let args = [PathBuf::from("guide.rst")];
-    for adapters in [&["doctest"][..], &["doctest", "unittest"]] {
+    for names in [&["doctest"][..], &["doctest", "unittest"]] {
         let recognizer = Doctest
-            .prepare_among(&project(root, &args, &[]), adapters)
+            .prepare_among(&project(root, &args, &[]), &adapters(names))
             .unwrap()
             .expect("a recognizer for the named file");
         assert_eq!(recognizer.claim("guide.rst", true), Claim::Tests);

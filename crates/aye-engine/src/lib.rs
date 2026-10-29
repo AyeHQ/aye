@@ -174,7 +174,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use aye_events::{
-    BatchId, Case, Diagnostic, LineNumber, ProjectPath, ProjectPathRef, Record, Span, TestId,
+    AdapterName, BatchId, Case, Diagnostic, LineNumber, ProjectPath, ProjectPathRef, Record, Span,
+    TestId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -276,7 +277,7 @@ pub enum AdapterError {
 /// One framework, mapped onto aye's engine.
 pub trait Adapter: Send + Sync {
     /// Short, stable name: `pytest`.
-    fn name(&self) -> &'static str;
+    fn name(&self) -> AdapterName;
 
     /// Read the framework's own configuration and return a recognizer for
     /// this project, or `None` when the framework isn't used here.
@@ -290,7 +291,7 @@ pub trait Adapter: Send + Sync {
     fn prepare_among(
         &self,
         project: &Project<'_>,
-        adapters: &[&str],
+        adapters: &[AdapterName],
     ) -> Result<Option<Box<dyn Recognizer>>, AdapterError> {
         let _ = adapters;
         self.prepare(project)
@@ -302,9 +303,9 @@ pub trait Adapter: Send + Sync {
 
 /// An adapter's runtime face: modules the worker installs, and the executor
 /// class it instantiates.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Executor {
-    pub adapter: &'static str,
+    pub adapter: AdapterName,
     /// Installed in order, after [`ENGINE_MODULE`].
     pub modules: &'static [EmbeddedModule],
     /// `module:Class` of the `aye_engine.Executor` subclass.
@@ -434,7 +435,7 @@ pub trait Refiner {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefineRequest {
-    pub adapter: String,
+    pub adapter: AdapterName,
     pub files: Vec<ProjectPath>,
     #[serde(default)]
     pub context: serde_json::Value,
@@ -517,7 +518,7 @@ impl Default for Policy {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Batch {
     pub id: BatchId,
-    pub adapter: String,
+    pub adapter: AdapterName,
     pub ids: Vec<TestId>,
     pub policy: Policy,
     #[serde(default)]
@@ -553,7 +554,7 @@ impl From<EmbeddedModule> for ModuleSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutorSpec {
-    pub adapter: String,
+    pub adapter: AdapterName,
     /// `module:Class`.
     pub entry: String,
     /// [`Executor::lists_session`]: the worker gives every refinement's

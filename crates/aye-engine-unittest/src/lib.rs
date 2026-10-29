@@ -287,7 +287,7 @@ use aye_engine::{
     Adapter, AdapterError, Claim, EmbeddedModule, Executor, Project, Recognition, Recognizer,
     Setting, SourceFile,
 };
-use aye_events::{Case, Certainty, ProjectPath, Span};
+use aye_events::{AdapterName, Case, Certainty, ProjectPath, Span};
 use aye_fs::normalize_absolute;
 
 pub use config::UnittestConfig;
@@ -303,7 +303,7 @@ pub const MODULE: EmbeddedModule = EmbeddedModule {
 };
 
 /// The adapter's name, in cases, batches and the registry.
-pub const NAME: &str = "unittest";
+pub const NAME: AdapterName = AdapterName::new_static("unittest");
 
 /// Why a test module with no test aye can see is refined.
 const NO_STATIC_TESTS: &str = "no test is visible statically; discovery imports the module to tell";
@@ -313,7 +313,7 @@ const NO_STATIC_TESTS: &str = "no test is visible statically; discovery imports 
 pub struct Unittest;
 
 impl Adapter for Unittest {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> AdapterName {
         NAME
     }
 

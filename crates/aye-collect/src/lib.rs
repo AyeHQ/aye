@@ -182,7 +182,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_engine::{Project, Recognition, Recognizer, Refiner, SourceFile};
 use aye_events::{
-    Case, Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPathRef, Severity, TestId,
+    AdapterName, Case, Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPathRef, Severity, TestId,
 };
 
 mod environment;
@@ -199,7 +199,7 @@ use standalone::Scope;
 use tree::{Mask, Tree, bits};
 
 /// A prepared recognizer and its adapter's name.
-pub type Prepared = (&'static str, Box<dyn Recognizer>);
+pub type Prepared = (AdapterName, Box<dyn Recognizer>);
 
 #[derive(Debug, Clone, Default)]
 pub struct Options {
@@ -653,7 +653,7 @@ impl<'a> Collector<'a> {
                 let why = if source.is_lossy() {
                     Some("it is not valid UTF-8".to_string())
                 } else {
-                    let scope = self.scope(self.recognizers[*i].0, seen);
+                    let scope = self.scope(self.recognizers[*i].0.as_str(), seen);
                     standalone::dependence(file.module, &entry.abs, &scope)
                 };
                 recognized.dependence.push((*i, why));
@@ -757,7 +757,10 @@ impl<'a> Collector<'a> {
                     !claims_any_name(&mut probes, &self.recognizers[*i], *i, rel.as_str())
                 })
             {
-                let names: Vec<&str> = groups.iter().map(|(i, _)| self.recognizers[*i].0).collect();
+                let names: Vec<&str> = groups
+                    .iter()
+                    .map(|(i, _)| self.recognizers[*i].0.as_str())
+                    .collect();
                 notes.push(Diagnostic {
                     severity: Severity::Info,
                     code: DiagnosticCode::NoTests,

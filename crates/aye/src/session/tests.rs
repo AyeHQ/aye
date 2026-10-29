@@ -546,7 +546,7 @@ fn prepared(contexts: &[serde_json::Value]) -> Vec<Prepared> {
         .zip(["pytest", "doctest", "unittest"])
         .map(|(context, name)| {
             let recognizer: Box<dyn aye_engine::Recognizer> = Box::new(Context(context.clone()));
-            (name, recognizer)
+            (name.into(), recognizer)
         })
         .collect()
 }
@@ -1291,11 +1291,11 @@ fn a_file_two_adapters_load_in_one_module_is_one_collection_error() {
         record.envelope.batch = Some(batch);
         record
     };
-    let started = |id: u32, adapter: &str| {
+    let started = |id: u32, adapter: &'static str| {
         batch(
             id,
             Event::BatchStarted {
-                adapter: adapter.to_string(),
+                adapter: adapter.into(),
                 cases: 1,
             },
         )
@@ -1370,18 +1370,18 @@ fn a_collection_error_from_refinement_counts_as_the_pytest_adapters() {
         message: format!("cannot import {path}"),
     };
     let mut once = OneModuleErrors::default();
-    once.refined("pytest", &error("test_imp.py"));
+    once.refined(&aye_engine_pytest::NAME, &error("test_imp.py"));
     // A conftest's, or anything but an error, is another matter.
-    once.refined("pytest", &error("conftest.py"));
+    once.refined(&aye_engine_pytest::NAME, &error("conftest.py"));
     once.refined(
-        "pytest",
+        &aye_engine_pytest::NAME,
         &Diagnostic {
             severity: Severity::Warning,
             ..error("test_warn.py")
         },
     );
     let mut started = Record::new(Event::BatchStarted {
-        adapter: "unittest".to_string(),
+        adapter: "unittest".into(),
         cases: 1,
     });
     started.envelope.batch = Some(3);
@@ -1589,7 +1589,7 @@ fn a_conftest_two_adapters_fail_to_load_is_one_error() {
         once.see_record(&mut batch(
             id,
             Event::BatchStarted {
-                adapter: adapter.to_string(),
+                adapter: adapter.into(),
                 cases: 1,
             },
         ));

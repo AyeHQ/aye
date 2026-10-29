@@ -192,7 +192,7 @@ impl Refiner for FakeRefiner {
             .iter()
             .flat_map(|file| {
                 ["dynamic[1]", "dynamic[2]"].map(|name| {
-                    let mut case = Case::new(format!("{file}::{name}"), &request.adapter);
+                    let mut case = Case::new(format!("{file}::{name}"), request.adapter.clone());
                     case.certainty = Certainty::Refined;
                     case
                 })
@@ -230,7 +230,7 @@ fn run(
 }
 
 fn fake() -> Vec<Prepared> {
-    vec![("fake", Box::new(Fake::new()))]
+    vec![("fake".into(), Box::new(Fake::new()))]
 }
 
 /// A fake interpreter in a venv: `<dir>/venv/bin/python`, its
@@ -358,7 +358,7 @@ fn explicit_files_are_claimed_as_explicit() {
     write(root, "tests/one_check.py", "def test_one(): pass\n");
     let recognizer = Fake::new();
     let claims = recognizer.claims.clone();
-    let recognizers: Vec<Prepared> = vec![("fake", Box::new(recognizer))];
+    let recognizers: Vec<Prepared> = vec![("fake".into(), Box::new(recognizer))];
 
     let targets = [PathBuf::from("plain.py"), root.join("tests/./../tests")];
     let collection = run(root, &recognizers, &targets, Options::default(), None);
@@ -492,8 +492,11 @@ fn roots_are_walked_only_for_the_recognizers_that_list_them() {
     write(root, "other/o_check.py", "def test_o(): pass\n");
     write(root, "other/notes.txt", "first\nsecond\n");
     let recognizers: Vec<Prepared> = vec![
-        ("fake", Box::new(Fake::rooted(vec![root.join("tests")]))),
-        ("lines", Box::new(Lines)),
+        (
+            "fake".into(),
+            Box::new(Fake::rooted(vec![root.join("tests")])),
+        ),
+        ("lines".into(), Box::new(Lines)),
     ];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(
@@ -511,7 +514,7 @@ fn non_python_files_reach_recognizers_with_an_empty_module() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     write(root, "doc.txt", "def (:\nalpha\n");
-    let recognizers: Vec<Prepared> = vec![("lines", Box::new(Lines))];
+    let recognizers: Vec<Prepared> = vec![("lines".into(), Box::new(Lines))];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(ids(&collection), ["doc.txt::def (:", "doc.txt::alpha"]);
     assert_eq!(collection.diagnostics, [] as [aye_events::Diagnostic; 0]);
@@ -662,11 +665,11 @@ fn a_file_yields_tests_only_for_the_recognizers_whose_walk_reached_it() {
     // in the root's file would win the id.
     let recognizers: Vec<Prepared> = vec![
         (
-            "tests_only",
+            "tests_only".into(),
             Box::new(named("tests_only", vec![root.join("tests")])),
         ),
         (
-            "everywhere",
+            "everywhere".into(),
             Box::new(named("everywhere", vec![root.to_path_buf()])),
         ),
     ];
@@ -798,8 +801,8 @@ fn the_higher_priority_adapter_wins_a_duplicate_id() {
         ..Fake::new()
     };
     let recognizers: Vec<Prepared> = vec![
-        ("first", Box::new(named("first"))),
-        ("second", Box::new(named("second"))),
+        ("first".into(), Box::new(named("first"))),
+        ("second".into(), Box::new(named("second"))),
     ];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(ids(&collection), ["a_check.py::test_a"]);
@@ -991,7 +994,10 @@ fn files_claimed_whatever_their_names_may_hold_no_tests() {
         any_name: true,
         ..Fake::new()
     };
-    let recognizers: Vec<Prepared> = vec![("every", Box::new(every)), ("lines", Box::new(Lines))];
+    let recognizers: Vec<Prepared> = vec![
+        ("every".into(), Box::new(every)),
+        ("lines".into(), Box::new(Lines)),
+    ];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(collection.cases, [] as [aye_events::Case; 0]);
     // `empty_check.py` is claimed by name too, by the same recognizer: one
@@ -1001,13 +1007,13 @@ fn files_claimed_whatever_their_names_may_hold_no_tests() {
 
     let recognizers: Vec<Prepared> = vec![
         (
-            "every",
+            "every".into(),
             Box::new(Fake {
                 any_name: true,
                 ..Fake::new()
             }),
         ),
-        ("named", Box::new(Fake::new())),
+        ("named".into(), Box::new(Fake::new())),
     ];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(
@@ -1041,7 +1047,7 @@ fn a_packages_init_comes_first_in_the_walk() {
         any_name: true,
         ..Fake::new()
     };
-    let recognizers: Vec<Prepared> = vec![("every", Box::new(every))];
+    let recognizers: Vec<Prepared> = vec![("every".into(), Box::new(every))];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(
         ids(&collection),
@@ -1121,7 +1127,7 @@ fn refined_cases_replace_the_static_ones() {
     assert_eq!(
         *refiner.requests.lock().unwrap(),
         [RefineRequest {
-            adapter: "fake".to_string(),
+            adapter: "fake".into(),
             files: vec![
                 ProjectPath::new("b_check.py").unwrap(),
                 ProjectPath::new("c_check.py").unwrap(),
@@ -1161,8 +1167,8 @@ fn refinement_only_replaces_the_adapter_that_asked() {
     let root = dir.path();
     write(root, "d_check.py", "def dynamic(): pass\n");
     let recognizers: Vec<Prepared> = vec![
-        ("fake", Box::new(Fake::new())),
-        ("static", Box::new(Static(Fake::new()))),
+        ("fake".into(), Box::new(Fake::new())),
+        ("static".into(), Box::new(Static(Fake::new()))),
     ];
     let refiner = FakeRefiner::default();
     let collection = run(root, &recognizers, &[], Options::default(), Some(&refiner));
@@ -1282,7 +1288,7 @@ fn stray_refined_cases_in_a_requested_package_keep_their_place() {
     write(root, "pkg/m_check.py", "def dynamic(): pass\n");
     write(root, "pkg/sub/__init__.py", "def dynamic(): pass\n");
     write(root, "z_check.py", "def test_z(): pass\n");
-    let packages: Vec<Prepared> = vec![("packages", Box::new(Packages))];
+    let packages: Vec<Prepared> = vec![("packages".into(), Box::new(Packages))];
     let collection = run(root, &packages, &[], Options::default(), Some(&Discovering));
     assert_eq!(
         ids(&collection),
@@ -1501,7 +1507,7 @@ fn refinement_is_cached_by_content() {
     assert_eq!(collect(&refiner, &fake(), "0.0.2").len(), 1);
     let mut other = Fake::new();
     other.setting = "2".to_string();
-    let recognizers: Vec<Prepared> = vec![("fake", Box::new(other))];
+    let recognizers: Vec<Prepared> = vec![("fake".into(), Box::new(other))];
     assert_eq!(collect(&refiner, &recognizers, "0.0.1").len(), 1);
 }
 
@@ -2400,7 +2406,7 @@ fn a_plugin_in_the_context_or_arguments_turns_the_cache_off() {
     let with_context = |context: serde_json::Value| -> Vec<Prepared> {
         let mut fake = Fake::new();
         fake.context = context;
-        vec![("fake", Box::new(fake))]
+        vec![("fake".into(), Box::new(fake))]
     };
     let refiner = FakeRefiner::default();
     for context in [
@@ -2472,7 +2478,7 @@ fn files_the_context_names_are_keyed_by_content() {
     write(root, "pytest.ini", "[pytest]\n");
     let mut fake = Fake::new();
     fake.context = serde_json::json!({"inifile": root.join("pytest.ini").to_string_lossy()});
-    let recognizers: Vec<Prepared> = vec![("fake", Box::new(fake))];
+    let recognizers: Vec<Prepared> = vec![("fake".into(), Box::new(fake))];
     let refiner = FakeRefiner::default();
     let calls = || {
         run_cached(

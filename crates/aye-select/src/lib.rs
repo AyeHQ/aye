@@ -98,7 +98,7 @@ mod selector;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use aye_events::{Case, Certainty, TestId};
+use aye_events::{AdapterName, Case, Certainty, TestId};
 
 pub use expression::{Expression, Kwarg, ParseError, Truth, Value};
 pub use selector::Selector;
@@ -129,13 +129,13 @@ pub struct Selection {
     /// The ids that failed last time, when running last-failed (`--lf`).
     pub last_failed: Option<HashSet<TestId>>,
     /// Id prefixes each adapter drops (pytest's `--deselect`), by adapter.
-    pub deselect: BTreeMap<String, Vec<String>>,
+    pub deselect: BTreeMap<AdapterName, Vec<String>>,
     /// Each adapter's own `-k` (or one the caller chose for its cases),
     /// for its cases when `keyword` is unset.
-    pub own_keyword: BTreeMap<String, Expression>,
+    pub own_keyword: BTreeMap<AdapterName, Expression>,
     /// Each adapter's own `-m` (or one the caller chose for its cases), for
     /// its cases when `tags` is unset.
-    pub own_tags: BTreeMap<String, Expression>,
+    pub own_tags: BTreeMap<AdapterName, Expression>,
 }
 
 /// The outcome of [`Selection::apply`].
@@ -200,18 +200,26 @@ impl Selection {
 
     /// Set `adapter`'s own keyword expression (pytest's `-k` in its
     /// `addopts`), for its cases when [`Selection::keyword`] is unset.
-    pub fn with_own_keyword(mut self, adapter: &str, expr: &str) -> Result<Self, SelectError> {
+    pub fn with_own_keyword(
+        mut self,
+        adapter: impl Into<AdapterName>,
+        expr: &str,
+    ) -> Result<Self, SelectError> {
         if let Some(parsed) = parse_keyword(expr)? {
-            self.own_keyword.insert(adapter.to_string(), parsed);
+            self.own_keyword.insert(adapter.into(), parsed);
         }
         Ok(self)
     }
 
     /// Set `adapter`'s own tag expression (pytest's `-m` in its `addopts`),
     /// for its cases when [`Selection::tags`] is unset.
-    pub fn with_own_tags(mut self, adapter: &str, expr: &str) -> Result<Self, SelectError> {
+    pub fn with_own_tags(
+        mut self,
+        adapter: impl Into<AdapterName>,
+        expr: &str,
+    ) -> Result<Self, SelectError> {
         if let Some(parsed) = parse_tags(expr)? {
-            self.own_tags.insert(adapter.to_string(), parsed);
+            self.own_tags.insert(adapter.into(), parsed);
         }
         Ok(self)
     }
@@ -220,7 +228,7 @@ impl Selection {
     /// (pytest's `--deselect`, from its options), counting them as
     /// deselected.
     #[must_use]
-    pub fn with_deselect<I>(mut self, adapter: &str, prefixes: I) -> Self
+    pub fn with_deselect<I>(mut self, adapter: impl Into<AdapterName>, prefixes: I) -> Self
     where
         I: IntoIterator,
         I::Item: Into<String>,
@@ -232,7 +240,7 @@ impl Selection {
             .collect();
         if !prefixes.is_empty() {
             self.deselect
-                .entry(adapter.to_string())
+                .entry(adapter.into())
                 .or_default()
                 .extend(prefixes);
         }
@@ -380,7 +388,7 @@ impl Selection {
         if !truth.is_false() && self.deselects(case.case) {
             truth = Truth::False;
         }
-        let adapter = case.case.adapter.as_str();
+        let adapter = &case.case.adapter;
         if let Some(expr) = self
             .keyword
             .as_ref()

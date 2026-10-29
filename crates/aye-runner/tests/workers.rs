@@ -15,7 +15,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use aye_engine::{EmbeddedModule, Executor, Policy, RefineRequest, Refiner, Reply, Request};
-use aye_events::{Case, DiagnosticCode, Event, Outcome, ProjectPath, Record, TestId, TestResult};
+use aye_events::{
+    AdapterName, Case, DiagnosticCode, Event, Outcome, ProjectPath, Record, TestId, TestResult,
+};
 #[cfg(unix)]
 use aye_runner::Worker;
 use aye_runner::{
@@ -263,21 +265,21 @@ const FAKE_MODULE: EmbeddedModule = EmbeddedModule {
 };
 
 const FAKE: Executor = Executor {
-    adapter: "fake",
+    adapter: AdapterName::new_static("fake"),
     modules: &[FAKE_MODULE],
     entry: "fake_executor:FakeExecutor",
     lists_session: false,
 };
 
 const OTHER: Executor = Executor {
-    adapter: "other",
+    adapter: AdapterName::new_static("other"),
     modules: &[FAKE_MODULE],
     entry: "fake_executor:OtherExecutor",
     lists_session: false,
 };
 
 const LISTING: Executor = Executor {
-    adapter: "listing",
+    adapter: AdapterName::new_static("listing"),
     modules: &[FAKE_MODULE],
     entry: "fake_executor:ListingExecutor",
     lists_session: true,
@@ -2079,9 +2081,9 @@ fn listing(id: &str) -> Case {
     Case::new(id, "listing")
 }
 
-fn session(files: &[&str]) -> std::collections::BTreeMap<String, Vec<ProjectPath>> {
+fn session(files: &[&str]) -> std::collections::BTreeMap<AdapterName, Vec<ProjectPath>> {
     [(
-        "listing".to_string(),
+        LISTING.adapter.clone(),
         files.iter().map(|f| path(f)).collect(),
     )]
     .into_iter()

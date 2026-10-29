@@ -18,8 +18,9 @@ use aye_engine::{
     WorkerLine,
 };
 use aye_events::{
-    BatchId, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, EnvironmentId, Event,
-    Failure, LifetimeId, Outcome, ProjectPath, Record, Severity, TestId, TestResult, WorkerId,
+    AdapterName, BatchId, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, EnvironmentId,
+    Event, Failure, LifetimeId, Outcome, ProjectPath, Record, Severity, TestId, TestResult,
+    WorkerId,
 };
 use aye_static::EnvVars;
 
@@ -81,7 +82,7 @@ pub struct Plan {
     /// where [`RunnerOptions::echo`] says; `maxfail` 0 is no limit.
     pub policy: Policy,
     /// Sent with each batch, per adapter (the recognizer's `context()`).
-    pub contexts: HashMap<String, serde_json::Value>,
+    pub contexts: HashMap<AdapterName, serde_json::Value>,
     /// Historical durations, for balancing.
     pub durations: HashMap<TestId, Duration>,
     /// Tests to run first (`--ff`: last run's failures): the batches holding
@@ -90,7 +91,7 @@ pub struct Plan {
     /// By adapter, every file collection claimed for its tests (selected or
     /// not), in collection order: what each worker of an adapter whose
     /// executor lists the session lists before its first batch.
-    pub session_files: BTreeMap<String, Vec<ProjectPath>>,
+    pub session_files: BTreeMap<AdapterName, Vec<ProjectPath>>,
 }
 
 impl Default for Plan {
@@ -188,7 +189,7 @@ impl fmt::Display for StopReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchSummary {
     pub id: BatchId,
-    pub adapter: String,
+    pub adapter: AdapterName,
     pub worker: WorkerId,
     pub cases: u32,
     /// The framework's own status, from `batch_done`.
@@ -349,7 +350,7 @@ pub struct Runner {
 /// A worker kept from refinement, with what it listed.
 #[derive(Debug)]
 struct Warm {
-    adapter: String,
+    adapter: AdapterName,
     worker: Worker,
     /// The lanes its environment was made for (see [`lane_env`]).
     lanes: u32,
@@ -361,7 +362,7 @@ struct Warm {
 /// that the run's lanes start ready rather than listing then.
 #[derive(Debug)]
 struct Prelisting {
-    adapter: String,
+    adapter: AdapterName,
     lane: WorkerId,
     /// The lanes its environment was made for (see [`lane_env`]).
     lanes: u32,
@@ -484,14 +485,14 @@ impl Runner {
         }
 
         let mut cases = Vec::with_capacity(plan.cases.len());
-        let mut orphans: Vec<(&str, &str, u32)> = Vec::new();
+        let mut orphans: Vec<(&AdapterName, &str, u32)> = Vec::new();
         for case in &plan.cases {
             if self.executor(&case.adapter).is_some() {
                 cases.push(case.clone());
                 continue;
             }
             log.summary.not_run.push(case.id.clone());
-            if let Some(orphan) = orphans.iter_mut().find(|o| o.0 == case.adapter) {
+            if let Some(orphan) = orphans.iter_mut().find(|o| *o.0 == case.adapter) {
                 orphan.2 += 1;
             } else {
                 orphans.push((&case.adapter, case.id.path().as_str(), 1));
@@ -521,12 +522,12 @@ impl Runner {
 
         // Batches of executors that list the session keep plan order on
         // each lane, as each pytest-xdist worker runs its tests in order.
-        let ordered: HashSet<&str> = self
+        let ordered: HashSet<&AdapterName> = self
             .options
             .executors
             .iter()
             .filter(|e| e.lists_session)
-            .map(|e| e.adapter)
+            .map(|e| &e.adapter)
             .collect();
         let batches = schedule::plan(
             &cases,
@@ -543,13 +544,13 @@ impl Runner {
             .workers
             .max(1)
             .min(u32::try_from(batches.len()).unwrap_or(u32::MAX));
-        let adapters: HashSet<&str> = batches.iter().map(|b| b.adapter.as_str()).collect();
+        let adapters: HashSet<&AdapterName> = batches.iter().map(|b| &b.adapter).collect();
         let executors = self
             .options
             .executors
             .iter()
-            .filter(|e| adapters.contains(e.adapter))
-            .copied()
+            .filter(|e| adapters.contains(&e.adapter))
+            .cloned()
             .collect();
         let mut spec = self.spec(executors);
         spec.echo = (!policy.capture).then_some(self.options.echo);
@@ -557,7 +558,7 @@ impl Runner {
         // The worker kept from refinement is the first lane's, if the run
         // needs its adapter and gives that lane the environment it has.
         let warm = match lock(&self.warm).take() {
-            Some(warm) if adapters.contains(warm.adapter.as_str()) && warm.lanes == lanes => {
+            Some(warm) if adapters.contains(&warm.adapter) && warm.lanes == lanes => {
                 warm.worker.set_echo(spec.echo);
                 Some(warm)
             }
@@ -574,7 +575,7 @@ impl Runner {
                 Some(warm) => Some(warm.adapter.clone()),
                 None => batches
                     .iter()
-                    .map(|batch| batch.adapter.as_str())
+                    .map(|batch| &batch.adapter)
                     .find(|adapter| {
                         self.executor(adapter).is_some_and(|e| e.lists_session)
                             && plan
@@ -582,11 +583,11 @@ impl Runner {
                                 .get(*adapter)
                                 .is_some_and(|f| !f.is_empty())
                     })
-                    .map(str::to_string),
+                    .cloned(),
             })
             .flatten();
-        let early = reference.as_deref().map_or(0, |reference| {
-            let of = batches.iter().filter(|b| b.adapter == reference).count();
+        let early = reference.as_ref().map_or(0, |reference| {
+            let of = batches.iter().filter(|b| b.adapter == *reference).count();
             lanes.min(u32::try_from(of).unwrap_or(u32::MAX))
         });
         // The workers started for the other lanes during refinement, if the
@@ -595,7 +596,7 @@ impl Runner {
         let (prelisted, unused): (Vec<Prelisting>, Vec<Prelisting>) =
             std::mem::take(&mut *lock(&self.prelisting))
                 .into_iter()
-                .partition(|p| adapters.contains(p.adapter.as_str()) && p.lanes == lanes);
+                .partition(|p| adapters.contains(&p.adapter) && p.lanes == lanes);
         let queue = Queue::new(batches);
         if reference.is_some() {
             queue.expect_pins(lanes);
@@ -610,7 +611,7 @@ impl Runner {
             policy: &policy,
             contexts: &plan.contexts,
             sessions: &plan.session_files,
-            listings: Listings::new(reference.as_deref()),
+            listings: Listings::new(reference.as_ref()),
             reference,
             early,
             warm: Mutex::new(warm),
@@ -658,12 +659,12 @@ impl Runner {
         log.summary
     }
 
-    fn executor(&self, adapter: &str) -> Option<Executor> {
+    fn executor(&self, adapter: &AdapterName) -> Option<Executor> {
         self.options
             .executors
             .iter()
-            .find(|e| e.adapter == adapter)
-            .copied()
+            .find(|e| e.adapter == *adapter)
+            .cloned()
     }
 
     fn spec(&self, executors: Vec<Executor>) -> WorkerSpec {
@@ -679,7 +680,7 @@ impl Runner {
     /// refines them: started in the background, with its lane's
     /// environment, or the one started for an earlier refinement of the
     /// adapter. Those started for another adapter or other lanes shut down.
-    fn prelist(&self, executor: Executor, request: &RefineRequest, lanes: u32) {
+    fn prelist(&self, executor: &Executor, request: &RefineRequest, lanes: u32) {
         let mut prelisting = lock(&self.prelisting);
         let (mut kept, other): (Vec<Prelisting>, Vec<Prelisting>) =
             std::mem::take(&mut *prelisting)
@@ -705,7 +706,7 @@ impl Runner {
                 });
                 (listed, earlier.pending + 1)
             } else {
-                let mut spec = self.spec(vec![executor]);
+                let mut spec = self.spec(vec![executor.clone()]);
                 spec.env.extend(lane_env(lane, lanes));
                 let listed = thread::spawn(move || {
                     let mut worker = spawn(&spec).map_err(|e| e.to_string())?;
@@ -755,7 +756,7 @@ impl Refiner for Runner {
         }
         let lanes = self.options.workers.max(1);
         if !self.options.collect_only {
-            self.prelist(executor, request, lanes);
+            self.prelist(&executor, request, lanes);
         }
         let mut warm = lock(&self.warm);
         let mut kept = match warm.take() {
@@ -880,7 +881,7 @@ fn lane_env(lane: WorkerId, lanes: u32) -> Vec<(OsString, OsString)> {
 /// The lanes' listings of the session: the first lane's, by adapter, which
 /// the others compare theirs with, and the files already warned about.
 struct Listings {
-    reference: Mutex<HashMap<String, Reference>>,
+    reference: Mutex<HashMap<AdapterName, Reference>>,
     published: Condvar,
     warned: Mutex<HashSet<ProjectPath>>,
 }
@@ -895,11 +896,11 @@ enum Reference {
 }
 
 impl Listings {
-    fn new(reference: Option<&str>) -> Self {
+    fn new(reference: Option<&AdapterName>) -> Self {
         Self {
             reference: Mutex::new(
                 reference
-                    .map(|adapter| (adapter.to_string(), Reference::Pending))
+                    .map(|adapter| (adapter.clone(), Reference::Pending))
                     .into_iter()
                     .collect(),
             ),
@@ -908,7 +909,7 @@ impl Listings {
         }
     }
 
-    fn publish(&self, adapter: &str, digests: Option<Digests>) {
+    fn publish(&self, adapter: &AdapterName, digests: Option<Digests>) {
         let mut reference = lock(&self.reference);
         if let Some(slot) = reference.get_mut(adapter) {
             *slot = digests.map_or(Reference::Missing, Reference::Ready);
@@ -918,7 +919,7 @@ impl Listings {
 
     /// The first lane's listing of `adapter`'s session, once it is known;
     /// `None` without one, or once `stopping`.
-    fn reference(&self, adapter: &str, stopping: &dyn Fn() -> bool) -> Option<Digests> {
+    fn reference(&self, adapter: &AdapterName, stopping: &dyn Fn() -> bool) -> Option<Digests> {
         let mut reference = lock(&self.reference);
         loop {
             match reference.get(adapter)? {
@@ -953,7 +954,7 @@ enum Message {
     BatchStarted {
         worker: WorkerId,
         batch: BatchId,
-        adapter: String,
+        adapter: AdapterName,
         cases: u32,
         /// The batch's share of `maxfail`.
         maxfail: Option<u32>,
@@ -1014,7 +1015,7 @@ struct Log<'a> {
 /// A batch the log has seen start.
 #[derive(Debug, Default)]
 struct Running {
-    adapter: String,
+    adapter: AdapterName,
     cases: u32,
     /// Its share of `maxfail`, and the bad outcomes it reported.
     maxfail: Option<u32>,
@@ -1256,13 +1257,13 @@ struct Shared<'a> {
     spec: WorkerSpec,
     /// The plan's, with `maxfail` 0 made `None`.
     policy: &'a Policy,
-    contexts: &'a HashMap<String, serde_json::Value>,
+    contexts: &'a HashMap<AdapterName, serde_json::Value>,
     /// The plan's session files, by adapter.
-    sessions: &'a BTreeMap<String, Vec<ProjectPath>>,
+    sessions: &'a BTreeMap<AdapterName, Vec<ProjectPath>>,
     listings: Listings,
     /// The adapter whose session the first lane lists first, for the others
     /// to compare theirs with (several lanes only).
-    reference: Option<String>,
+    reference: Option<AdapterName>,
     /// How many lanes start with a worker of that adapter, before they take
     /// a batch: one per batch of it, at most every lane.
     early: u32,
@@ -1449,14 +1450,14 @@ impl Shared<'_> {
         let _done = LaneDone(&self.queue, lane);
         let mut worker: Option<Worker> = None;
         // The adapter of the lane's last batch: its worker's.
-        let mut adapter: Option<String> = None;
+        let mut adapter: Option<AdapterName> = None;
         // The worker's session ended with its last batch: it runs no other.
         let mut ended = false;
         // With one lane: whether the worker was announced, and the worker
         // that listed the session, waiting while another adapter's runs.
         let one = self.lanes <= 1;
         let mut announced = true;
-        let mut parked: Option<(Worker, String, bool)> = None;
+        let mut parked: Option<(Worker, AdapterName, bool)> = None;
         // The files whose tests this lane's worker lists otherwise than the
         // first lane's: their ids run on the first lane.
         let mut pinned: HashSet<ProjectPath> = HashSet::new();
@@ -1491,14 +1492,14 @@ impl Shared<'_> {
         while !self.exhausted()
             && let Some(batch) = self
                 .queue
-                .take(lane, if one { None } else { adapter.as_deref() })
+                .take(lane, if one { None } else { adapter.as_ref() })
         {
-            if adapter.as_deref() != Some(batch.adapter.as_str()) || ended {
+            if adapter.as_ref() != Some(&batch.adapter) || ended {
                 let park = one
                     && !ended
                     && parked.is_none()
                     && worker.is_some()
-                    && adapter.as_deref().is_some_and(|of| self.lists_session(of));
+                    && adapter.as_ref().is_some_and(|of| self.lists_session(of));
                 if park {
                     let of = adapter.take().expect("the worker's adapter");
                     parked = Some((worker.take().expect("checked above"), of, announced));
@@ -1675,11 +1676,11 @@ impl Shared<'_> {
     }
 
     /// Whether `adapter`'s executor lists the session.
-    fn lists_session(&self, adapter: &str) -> bool {
+    fn lists_session(&self, adapter: &AdapterName) -> bool {
         self.spec
             .executors
             .iter()
-            .any(|e| e.adapter == adapter && e.lists_session)
+            .any(|e| e.adapter == *adapter && e.lists_session)
     }
 
     /// End the session of the lane's `worker`, of `adapter`, whose last
@@ -1693,7 +1694,7 @@ impl Shared<'_> {
         &self,
         lane: WorkerId,
         worker: &mut Option<Worker>,
-        adapter: &str,
+        adapter: &AdapterName,
         send: &dyn Fn(Message),
     ) {
         if self.stop.is_stopped() || !self.lists_session(adapter) {
@@ -1717,11 +1718,15 @@ impl Shared<'_> {
     /// has listed the session if its executor lists the session: with its
     /// listing's digests then. The one started for the lane during
     /// refinement, if it is of that adapter ([`Shared::prelisted`]).
-    fn start(&self, lane: WorkerId, adapter: &str) -> Result<(Worker, Option<Digests>), String> {
+    fn start(
+        &self,
+        lane: WorkerId,
+        adapter: &AdapterName,
+    ) -> Result<(Worker, Option<Digests>), String> {
         let prelisted = {
             let mut prelisted = lock(&self.prelisted);
             match prelisted.remove(&lane) {
-                Some(p) if p.adapter == adapter => Some(p),
+                Some(p) if p.adapter == *adapter => Some(p),
                 Some(other) => {
                     prelisted.insert(lane, other);
                     None
@@ -1734,7 +1739,7 @@ impl Shared<'_> {
         }
         let mut spec = self.spec.clone();
         spec.executors
-            .retain(|executor| executor.adapter == adapter);
+            .retain(|executor| executor.adapter == *adapter);
         spec.env.extend(lane_env(lane, self.lanes));
         let mut worker = Worker::launch(&spec).map_err(|e| e.to_string())?;
         if !self.busy(lane, worker.killer()) {
@@ -1801,7 +1806,7 @@ impl Shared<'_> {
     fn early_start(
         &self,
         lane: WorkerId,
-    ) -> Result<Option<(Worker, String, Option<Digests>)>, String> {
+    ) -> Result<Option<(Worker, AdapterName, Option<Digests>)>, String> {
         if lane != 0 {
             return match &self.reference {
                 Some(adapter) if lane < self.early => self
@@ -1850,14 +1855,14 @@ impl Shared<'_> {
     fn list(
         &self,
         mut worker: Worker,
-        adapter: &str,
+        adapter: &AdapterName,
         mut listed: Digests,
     ) -> Result<(Worker, Option<Digests>), String> {
         let lists = self
             .spec
             .executors
             .iter()
-            .any(|e| e.adapter == adapter && e.lists_session);
+            .any(|e| e.adapter == *adapter && e.lists_session);
         let Some(session) = self.sessions.get(adapter).filter(|_| lists) else {
             return Ok((worker, None));
         };
@@ -1870,7 +1875,7 @@ impl Shared<'_> {
             return Ok((worker, Some(listed)));
         }
         let request = RefineRequest {
-            adapter: adapter.to_string(),
+            adapter: adapter.clone(),
             files,
             context: self.contexts.get(adapter).cloned().unwrap_or_default(),
             digests_only: true,
@@ -1898,7 +1903,7 @@ impl Shared<'_> {
     fn compare(
         &self,
         lane: WorkerId,
-        adapter: &str,
+        adapter: &AdapterName,
         digests: Option<&Digests>,
         send: &dyn Fn(Message),
     ) -> HashSet<ProjectPath> {

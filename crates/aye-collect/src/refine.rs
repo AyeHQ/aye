@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use aye_engine::{RefineRequest, Refined, Refiner, Setting};
-use aye_events::{Diagnostic, DiagnosticCode, ProjectPath, Severity};
+use aye_events::{AdapterName, Diagnostic, DiagnosticCode, ProjectPath, Severity};
 
 use crate::source::Source;
 use crate::standalone::{self, Scope};
@@ -69,7 +69,7 @@ impl Collector<'_> {
                 continue;
             }
             let context = recognizer.context();
-            let scope = self.scope(adapter, seen);
+            let scope = self.scope(adapter.as_str(), seen);
             let environment = *environment.get_or_insert_with(|| {
                 self.caching()
                     .then(|| self.environment.digest(self.project.cwd))
@@ -176,7 +176,7 @@ impl Collector<'_> {
                 continue;
             };
             let request = RefineRequest {
-                adapter: (*adapter).to_string(),
+                adapter: adapter.clone(),
                 files: misses
                     .iter()
                     .map(|(at, _, _)| tree.entries[*at].rel.clone())
@@ -322,7 +322,7 @@ impl Cache {
     fn new(
         cache_dir: &Path,
         parts: &[&[u8]],
-        adapter: &str,
+        adapter: &AdapterName,
         context: &serde_json::Value,
         settings: &[Setting],
     ) -> Self {
@@ -330,7 +330,7 @@ impl Cache {
         for part in parts {
             hash.part(part);
         }
-        hash.part(adapter.as_bytes());
+        hash.part(adapter.as_str().as_bytes());
         hash.part(context.to_string().as_bytes());
         // The content of the files the context names: pytest's inifile holds
         // options aye doesn't read itself.
@@ -351,7 +351,7 @@ impl Cache {
         }
         Self {
             top: cache_dir.to_path_buf(),
-            dir: cache_dir.join(aye_fs::REFINE_CACHE).join(adapter),
+            dir: cache_dir.join(aye_fs::REFINE_CACHE).join(adapter.as_str()),
             base: hash.finish(),
         }
     }

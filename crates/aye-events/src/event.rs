@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::case::Case;
 use crate::diagnostic::Diagnostic;
 use crate::failure::Failure;
-use crate::id::{BatchId, EnvironmentId, LifetimeId, TestId, WorkerId};
+use crate::id::{AdapterName, BatchId, EnvironmentId, LifetimeId, TestId, WorkerId};
 use crate::outcome::{ExitCode, Outcome};
 use crate::result::{Counts, TestResult};
 use crate::serde_ext::{is_zero, millis};
@@ -115,7 +115,7 @@ pub enum Event {
     },
     /// The batch and worker are in the envelope.
     BatchStarted {
-        adapter: String,
+        adapter: AdapterName,
         cases: u32,
     },
     /// A lifetime's setup begins. Its [`Event::LifetimeFinished`] may never

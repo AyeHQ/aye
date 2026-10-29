@@ -51,8 +51,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aye_config::AyeConfig;
 use aye_events::{
-    Case, Certainty, Counts, Diagnostic, Event, ExitCode, LifetimeId, Outcome, ProjectPath, Record,
-    Severity, TestId, TestResult,
+    AdapterName, Case, Certainty, Counts, Diagnostic, Event, ExitCode, LifetimeId, Outcome,
+    ProjectPath, Record, Severity, TestId, TestResult,
 };
 use aye_history::{Change, RunMeta, RunStore};
 use aye_render::{
@@ -820,7 +820,9 @@ impl<'a> Log<'a> {
             .get(id)
             .copied()
             .or_else(|| self.cases.get(&TestId::new(id.without_params())).copied());
-        let mut case = found.cloned().unwrap_or_else(|| Case::new(id.as_str(), ""));
+        let mut case = found
+            .cloned()
+            .unwrap_or_else(|| Case::new(id.as_str(), AdapterName::default()));
         case.id = id.clone();
         if case.certainty == Certainty::Partial {
             case.certainty = Certainty::Refined;

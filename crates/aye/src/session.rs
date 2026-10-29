@@ -14,8 +14,8 @@ use aye_collect::{Collector, Environment, Options, Prepared};
 use aye_config::AyeConfig;
 use aye_engine::{Adapter, Policy, Project, Refiner};
 use aye_events::{
-    Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event, ExitCode,
-    ProjectPath, Record, SCHEMA_VERSION, Severity, TestId,
+    AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event,
+    ExitCode, ProjectPath, Record, SCHEMA_VERSION, Severity, TestId,
 };
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter};
@@ -253,7 +253,7 @@ impl Session {
 
     /// The names of the adapters the run uses, in priority order, and why
     /// those.
-    pub(crate) fn adapters(&self) -> (Vec<&'static str>, registry::Why) {
+    pub(crate) fn adapters(&self) -> (Vec<AdapterName>, registry::Why) {
         (
             self.adapters.iter().map(|a| a.name()).collect(),
             self.adapters_why,
@@ -502,7 +502,7 @@ impl Session {
             }
             conftests.see(None, &mut diagnostic);
             if pytest_runs {
-                once.refined(aye_engine_pytest::NAME, &diagnostic);
+                once.refined(&aye_engine_pytest::NAME, &diagnostic);
             }
             collection_errors |= diagnostic.severity == Severity::Error;
             out.emit(Event::Diagnostic(diagnostic));
@@ -617,7 +617,7 @@ impl Session {
                 .map(|(name, r)| {
                     let context = with_requested(r.context(), &requested);
                     let context = with_selected_paths(context, &selected_paths);
-                    ((*name).to_string(), with_rerun_args(context, &rerun_args))
+                    (name.clone(), with_rerun_args(context, &rerun_args))
                 })
                 .collect(),
             durations,
@@ -836,10 +836,10 @@ impl Here<'_> {
 #[derive(Debug, Default)]
 struct OneModuleErrors {
     /// Each batch's adapter, from its `batch_started`.
-    adapters: HashMap<aye_events::BatchId, String>,
+    adapters: HashMap<aye_events::BatchId, AdapterName>,
     /// By file, how many collection errors each adapter reported for it,
     /// in the order the adapters first did.
-    reported: HashMap<String, Vec<(String, usize)>>,
+    reported: HashMap<String, Vec<(AdapterName, usize)>>,
 }
 
 impl OneModuleErrors {
@@ -849,7 +849,7 @@ impl OneModuleErrors {
     /// adapter's errors, which pytest counts apart, then count as its too,
     /// so another adapter's batch error beyond them still becomes an info).
     /// A conftest's is [`OneConftestError`]'s.
-    fn refined(&mut self, adapter: &str, diagnostic: &Diagnostic) {
+    fn refined(&mut self, adapter: &AdapterName, diagnostic: &Diagnostic) {
         if diagnostic.severity != Severity::Error
             || diagnostic.code != DiagnosticCode::CollectionError
             || diagnostic.path.is_nowhere()
@@ -863,7 +863,7 @@ impl OneModuleErrors {
             .or_default();
         match counts.iter_mut().find(|(by, _)| by == adapter) {
             Some((_, count)) => *count += 1,
-            None => counts.push((adapter.to_string(), 1)),
+            None => counts.push((adapter.clone(), 1)),
         }
     }
 
@@ -932,10 +932,10 @@ impl OneModuleErrors {
 #[derive(Debug, Default)]
 struct OneConftestError {
     /// Each batch's adapter, from its `batch_started`.
-    adapters: HashMap<aye_events::BatchId, String>,
+    adapters: HashMap<aye_events::BatchId, AdapterName>,
     /// By code and path, who reported the error first (an adapter, or
     /// `None` for refinement), and its message.
-    first: HashMap<(DiagnosticCode, String), (Option<String>, String)>,
+    first: HashMap<(DiagnosticCode, String), (Option<AdapterName>, String)>,
 }
 
 impl OneConftestError {
@@ -951,7 +951,7 @@ impl OneConftestError {
             Event::Diagnostic(diagnostic) => {
                 let adapter = batch.and_then(|batch| self.adapters.get(&batch)).cloned();
                 if adapter.is_some() {
-                    self.see(adapter.as_deref(), diagnostic);
+                    self.see(adapter.as_ref(), diagnostic);
                 }
             }
             _ => {}
@@ -959,7 +959,7 @@ impl OneConftestError {
     }
 
     /// A diagnostic `adapter` reported, or refinement (`None`).
-    fn see(&mut self, adapter: Option<&str>, diagnostic: &mut Diagnostic) {
+    fn see(&mut self, adapter: Option<&AdapterName>, diagnostic: &mut Diagnostic) {
         let kind = match diagnostic.code {
             DiagnosticCode::UsageError => "usage error",
             DiagnosticCode::CollectionError => "collection error",
@@ -972,11 +972,11 @@ impl OneConftestError {
         }
         let key = (diagnostic.code.clone(), diagnostic.path.to_string());
         let Some((first, message)) = self.first.get(&key) else {
-            let first = (adapter.map(str::to_string), diagnostic.message.clone());
+            let first = (adapter.cloned(), diagnostic.message.clone());
             self.first.insert(key, first);
             return;
         };
-        if first.is_some() && first.as_deref() == adapter {
+        if first.is_some() && first.as_ref() == adapter {
             return;
         }
         let by = adapter.map_or_else(
@@ -1499,16 +1499,16 @@ fn run_exit_code(
 fn session_files(
     cases: &[Case],
     within: Option<(&[PathBuf], &Path)>,
-) -> BTreeMap<String, Vec<ProjectPath>> {
-    let mut files: BTreeMap<String, Vec<ProjectPath>> = BTreeMap::new();
-    let mut seen: HashSet<(&str, &str)> = HashSet::new();
+) -> BTreeMap<AdapterName, Vec<ProjectPath>> {
+    let mut files: BTreeMap<AdapterName, Vec<ProjectPath>> = BTreeMap::new();
+    let mut seen: HashSet<(&AdapterName, &str)> = HashSet::new();
     for case in cases {
         let path = case.id.path();
         let reached = within.is_none_or(|(paths, root)| {
             let file = normalize_absolute(&root.join(path.as_str()));
             paths.iter().any(|start| file.starts_with(start))
         });
-        if reached && seen.insert((case.adapter.as_str(), path.as_str())) {
+        if reached && seen.insert((&case.adapter, path.as_str())) {
             files
                 .entry(case.adapter.clone())
                 .or_default()
@@ -1520,7 +1520,7 @@ fn session_files(
 
 /// Prepare each adapter for the project, knowing the others.
 fn prepare(adapters: &[Box<dyn Adapter>], project: &Project<'_>) -> Result<Vec<Prepared>> {
-    let names: Vec<&str> = adapters.iter().map(|adapter| adapter.name()).collect();
+    let names: Vec<AdapterName> = adapters.iter().map(|adapter| adapter.name()).collect();
     let mut prepared: Vec<Prepared> = Vec::new();
     for adapter in adapters {
         if let Some(recognizer) = adapter
@@ -1674,7 +1674,7 @@ fn selection<'s>(
             for (name, expr) in unread(given, prepared, "keyword") {
                 selection = selection
                     .clone()
-                    .with_own_keyword(name, &expr)
+                    .with_own_keyword(name.clone(), &expr)
                     .unwrap_or(selection);
             }
         }
@@ -1682,7 +1682,7 @@ fn selection<'s>(
             for (name, expr) in context_strings(prepared, "keyword") {
                 selection = selection
                     .clone()
-                    .with_own_keyword(name, &expr)
+                    .with_own_keyword(name.clone(), &expr)
                     .unwrap_or(selection);
             }
         }
@@ -1696,7 +1696,7 @@ fn selection<'s>(
             for (name, expr) in unread(given, prepared, "tags") {
                 selection = selection
                     .clone()
-                    .with_own_tags(name, &expr)
+                    .with_own_tags(name.clone(), &expr)
                     .unwrap_or(selection);
             }
         }
@@ -1704,7 +1704,7 @@ fn selection<'s>(
             for (name, expr) in context_strings(prepared, "tags") {
                 selection = selection
                     .clone()
-                    .with_own_tags(name, &expr)
+                    .with_own_tags(name.clone(), &expr)
                     .unwrap_or(selection);
             }
         }
@@ -1716,7 +1716,7 @@ fn selection<'s>(
             .and_then(serde_json::Value::as_array)
         {
             selection = selection.with_deselect(
-                name,
+                name.clone(),
                 prefixes
                     .iter()
                     .filter_map(serde_json::Value::as_str)
@@ -1729,7 +1729,7 @@ fn selection<'s>(
 
 /// The adapters' contexts' strings under `key`, by adapter, for those that
 /// give one.
-fn context_strings(prepared: &[Prepared], key: &str) -> Vec<(&'static str, String)> {
+fn context_strings<'p>(prepared: &'p [Prepared], key: &str) -> Vec<(&'p AdapterName, String)> {
     prepared
         .iter()
         .filter_map(|(name, recognizer)| {
@@ -1737,7 +1737,7 @@ fn context_strings(prepared: &[Prepared], key: &str) -> Vec<(&'static str, Strin
                 .context()
                 .get(key)
                 .and_then(serde_json::Value::as_str)
-                .map(|value| (*name, value.to_string()))
+                .map(|value| (name, value.to_string()))
         })
         .collect()
 }
@@ -1749,11 +1749,15 @@ fn context_strings(prepared: &[Prepared], key: &str) -> Vec<(&'static str, Strin
 /// pytest front-end lists every test, and nothing re-reads those
 /// arguments' `-k` or `-m` in a batch), so static selection is the last
 /// word on every case.
-fn unread(given: Option<&str>, prepared: &[Prepared], key: &str) -> Vec<(&'static str, String)> {
+fn unread<'p>(
+    given: Option<&str>,
+    prepared: &'p [Prepared],
+    key: &str,
+) -> Vec<(&'p AdapterName, String)> {
     let own = context_strings(prepared, key);
     prepared
         .iter()
-        .map(|(name, _)| *name)
+        .map(|(name, _)| name)
         .filter_map(|name| {
             let expr = given.map(str::to_string).or_else(|| {
                 own.iter()

@@ -2684,7 +2684,7 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
         self.keys.push(Vec::new());
         let mut case = Case::new(
             format!("{}::{}", self.nodeid(&item.classes), item.name),
-            "pytest",
+            crate::NAME,
         );
         case.span = Some(self.file.span(item.span));
         // `iter_markers` order: the function's own marks (its decorators,
