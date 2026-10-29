@@ -20,7 +20,9 @@ import tempfile
 import types
 from collections import namedtuple
 
-source = sys.stdin.read()
+# UTF-8 both ways, whatever the locale (cp1252 on Windows): `-I` ignores
+# PYTHONUTF8 and PYTHONIOENCODING.
+source = sys.stdin.buffer.read().decode("utf-8")
 engine = types.ModuleType("aye_engine")
 sys.modules["aye_engine"] = engine
 exec(compile(source, "<aye:aye_engine>", "exec"), engine.__dict__)  # noqa: S102 - aye's own source
@@ -303,6 +305,7 @@ def main():
         lines = []
         executor_records(root, module, lines)
         sink_records(root, module, lines)
+    out.reconfigure(encoding="utf-8", newline="\n")
     for line in lines:
         out.write(encode(line) + "\n")
 
