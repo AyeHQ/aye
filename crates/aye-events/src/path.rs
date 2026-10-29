@@ -3,6 +3,7 @@
 
 use std::borrow::Borrow;
 use std::fmt;
+use std::num::NonZeroU32;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -450,6 +451,41 @@ fn is_external(path: &str) -> bool {
             .any(|part| matches!(part, "site-packages" | "dist-packages"))
 }
 
+/// A 1-based line number.
+///
+/// The wire's lines stay `u32`, so that a worker's line 0 reads rather
+/// than failing its record; their accessors give this type, without the 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LineNumber(NonZeroU32);
+
+impl LineNumber {
+    pub const MAX: Self = Self(NonZeroU32::MAX);
+
+    /// `line`, unless it is 0.
+    pub const fn new(line: u32) -> Option<Self> {
+        match NonZeroU32::new(line) {
+            Some(line) => Some(Self(line)),
+            None => None,
+        }
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+impl From<NonZeroU32> for LineNumber {
+    fn from(line: NonZeroU32) -> Self {
+        Self(line)
+    }
+}
+
+impl fmt::Display for LineNumber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// A file and a byte range in it. Separate from ids: failure locations,
 /// snapshots and the source rewriter all point at spans.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -463,12 +499,32 @@ pub struct Span {
     pub line: Option<u32>,
 }
 
+impl Span {
+    /// Its byte range, when known: refined cases send `0..0`, with only a
+    /// line.
+    pub fn range(&self) -> Option<(u32, u32)> {
+        (self.start != 0 || self.end != 0).then_some((self.start, self.end))
+    }
+
+    /// The line of its start, when given and not 0.
+    pub fn line(&self) -> Option<LineNumber> {
+        self.line.and_then(LineNumber::new)
+    }
+}
+
 /// A file and a 1-based line, where only a line is known (traceback frames).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Location {
     /// Where the exception was raised: the project's, or outside it.
     pub path: FramePath,
     pub line: u32,
+}
+
+impl Location {
+    /// Its line, unless a worker sent 0.
+    pub fn line(&self) -> Option<LineNumber> {
+        LineNumber::new(self.line)
+    }
 }
 
 #[cfg(test)]
@@ -592,6 +648,27 @@ mod tests {
             let path: FramePath = serde_json::from_str(text).unwrap();
             assert_eq!(serde_json::to_string(&path).unwrap(), text);
         }
+    }
+
+    #[test]
+    fn a_span_knows_whether_it_has_a_range_and_a_line() {
+        let span = |start, end, line| Span {
+            path: ProjectPath::new("t.py").unwrap(),
+            start,
+            end,
+            line,
+        };
+        assert_eq!(span(10, 20, Some(3)).range(), Some((10, 20)));
+        assert_eq!(span(0, 4, Some(1)).range(), Some((0, 4)));
+        assert_eq!(span(0, 0, Some(7)).range(), None);
+        assert_eq!(span(0, 0, Some(7)).line().map(LineNumber::get), Some(7));
+        assert_eq!(span(0, 0, Some(0)).line(), None);
+        assert_eq!(span(0, 0, None).line(), None);
+        let location = Location {
+            path: "t.py".into(),
+            line: 0,
+        };
+        assert_eq!(location.line(), None);
     }
 
     #[test]

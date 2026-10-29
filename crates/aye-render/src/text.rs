@@ -144,8 +144,8 @@ use anstream::AutoStream;
 use anstream::stream::{AsLockedWrite, RawStream};
 use anstyle::{AnsiColor, Style};
 use aye_events::{
-    Assertion, Captured, Certainty, Compare, Counts, Diagnostic, Event, ExitCode, Failure, Frame,
-    LifetimeId, Outcome, Phase, Record, Severity, TestId, TestResult,
+    Assertion, Captured, Certainty, Columns, Compare, Counts, Diagnostic, Event, ExitCode, Failure,
+    Frame, LifetimeId, Local, Outcome, Phase, Record, Severity, TestId, TestResult,
 };
 
 use crate::tally::{self, Noted, Tally, Tone};
@@ -1342,7 +1342,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     }
 
     /// A source line, the span `cols` red and underlined.
-    fn marked(&mut self, source: &str, cols: Option<[u32; 2]>) -> io::Result<()> {
+    fn marked(&mut self, source: &str, cols: Option<Columns>) -> io::Result<()> {
         let Some(cols) = cols else {
             return writeln!(self.out, "{source}");
         };
@@ -1611,9 +1611,9 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     }
 
     /// L3: the innermost frame's local variables.
-    fn locals(&mut self, locals: &[(String, String)]) -> io::Result<()> {
+    fn locals(&mut self, locals: &[Local]) -> io::Result<()> {
         let mut label = "locals";
-        for (name, value) in locals {
+        for Local { name, value } in locals {
             self.row(label, &format!("{name} = {value}"))?;
             label = "";
         }
@@ -1972,12 +1972,12 @@ fn indent(key: &str) -> String {
 
 /// Where in `source` the span `cols` is: its start and length in
 /// characters, within the line, at least one long.
-fn span(source: &str, cols: [u32; 2]) -> (usize, usize) {
+fn span(source: &str, cols: Columns) -> (usize, usize) {
     let length = source.chars().count();
-    let start = usize::try_from(cols[0])
+    let start = usize::try_from(cols.start)
         .unwrap_or(0)
         .min(length.saturating_sub(1));
-    let end = usize::try_from(cols[1])
+    let end = usize::try_from(cols.end)
         .unwrap_or(0)
         .clamp(start + 1, length.max(start + 1));
     (start, end - start)

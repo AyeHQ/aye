@@ -135,7 +135,7 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use aye_events::{
-    Captured, Certainty, Compare, Counts, Diagnostic, Event, ExitCode, Failure, LifetimeId,
+    Captured, Certainty, Compare, Counts, Diagnostic, Event, ExitCode, Failure, LifetimeId, Local,
     Outcome, Record, Severity, TestId, TestResult,
 };
 use serde::ser::SerializeMap;
@@ -451,15 +451,15 @@ struct History {
 }
 
 /// The innermost frame's locals, as an object in their order.
-struct Locals<'a>(&'a [(String, String)]);
+struct Locals<'a>(&'a [Local]);
 
 impl Serialize for Locals<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
-        for (name, value) in self.0 {
+        for local in self.0 {
             map.serialize_entry(
-                &shared::head(name, LOCAL_MAX),
-                &shared::head(value, LOCAL_MAX),
+                &shared::head(&local.name, LOCAL_MAX),
+                &shared::head(&local.value, LOCAL_MAX),
             )?;
         }
         map.end()
@@ -851,7 +851,7 @@ impl<W: Write> JsonLines<W> {
             detail.cols = frame
                 .cols
                 .filter(|_| frame.source.is_some())
-                .map(|[start, end]| [start + indent, end + indent]);
+                .map(|cols| [cols.start + indent, cols.end + indent]);
             detail.before = frame
                 .before
                 .iter()

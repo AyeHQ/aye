@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use aye_events::{
-    Assertion, Diagnostic, Difference, Event, Failure, Frame, FramePath, LifetimeId, Outcome,
-    Phase, Previous, Record, Reproduce, Resource, Side, TestId,
+    Assertion, Diagnostic, Difference, Event, Failure, Frame, FramePath, LifetimeId, Local,
+    Outcome, Phase, Previous, Record, Reproduce, Resource, Side, TestId,
 };
 
 /// Characters of a value (an operand, a source, a resource) in [`why`].
@@ -433,7 +433,7 @@ pub(crate) fn pointed(failure: &Failure) -> Option<&Frame> {
 }
 
 /// The local variables a failure's innermost frame had.
-pub(crate) fn locals(failure: &Failure) -> &[(String, String)] {
+pub(crate) fn locals(failure: &Failure) -> &[Local] {
     failure
         .frames
         .iter()

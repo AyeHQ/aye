@@ -35,11 +35,12 @@ mod serde_ext;
 pub use case::{Case, Certainty};
 pub use diagnostic::{Diagnostic, Severity};
 pub use event::{Envelope, Event, Record};
-pub use failure::{Assertion, Compare, Difference, Failure, Frame, Side};
+pub use failure::{Assertion, Columns, Compare, Difference, Failure, Frame, Local, Side};
 pub use id::{BatchId, EnvironmentId, LifetimeId, TestId, TestIdParts, TestKey, WorkerId};
 pub use outcome::{ExitCode, Outcome, Phase};
 pub use path::{
-    DiagnosticPath, FramePath, InvalidProjectPath, Location, ProjectPath, ProjectPathRef, Span,
+    DiagnosticPath, FramePath, InvalidProjectPath, LineNumber, Location, ProjectPath,
+    ProjectPathRef, Span,
 };
 pub use result::{Captured, Counts, Previous, Reproduce, Resource, TestResult};
 

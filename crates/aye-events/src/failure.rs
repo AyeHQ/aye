@@ -118,10 +118,9 @@ pub struct Frame {
     /// The line, without its indentation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
-    /// The failing expression's span in `source`: 0-based character
-    /// offsets, the end excluded.
+    /// The failing expression's span in `source`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cols: Option<[u32; 2]>,
+    pub cols: Option<Columns>,
     /// The lines just before `line`, at most two, oldest first, with their
     /// indentation relative to the least indented of them and `line`. Only
     /// on the innermost project frame.
@@ -134,5 +133,47 @@ pub struct Frame {
     /// The frame's local variables when it failed, as Python shows them,
     /// bounded. Only on the innermost frame.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub locals: Vec<(String, String)>,
+    pub locals: Vec<Local>,
+}
+
+/// A span of characters in a source line: 0-based character offsets, the
+/// end excluded. `[start, end]` on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "[u32; 2]", into = "[u32; 2]")]
+pub struct Columns {
+    pub start: u32,
+    pub end: u32,
+}
+
+impl From<[u32; 2]> for Columns {
+    fn from([start, end]: [u32; 2]) -> Self {
+        Self { start, end }
+    }
+}
+
+impl From<Columns> for [u32; 2] {
+    fn from(columns: Columns) -> Self {
+        [columns.start, columns.end]
+    }
+}
+
+/// A local variable of a frame, its value as Python shows it. `[name,
+/// value]` on the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "(String, String)", into = "(String, String)")]
+pub struct Local {
+    pub name: String,
+    pub value: String,
+}
+
+impl From<(String, String)> for Local {
+    fn from((name, value): (String, String)) -> Self {
+        Self { name, value }
+    }
+}
+
+impl From<Local> for (String, String) {
+    fn from(local: Local) -> Self {
+        (local.name, local.value)
+    }
 }

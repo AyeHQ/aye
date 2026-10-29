@@ -3,9 +3,9 @@
 use std::time::Duration;
 
 use aye_events::{
-    Assertion, Captured, Case, Certainty, Counts, Diagnostic, Envelope, Event, ExitCode, Failure,
-    Frame, Location, Outcome, Phase, Record, Reproduce, SCHEMA_VERSION, Severity, Span, TestId,
-    TestResult,
+    Assertion, Captured, Case, Certainty, Columns, Counts, Diagnostic, Envelope, Event, ExitCode,
+    Failure, Frame, Local, Location, Outcome, Phase, Record, Reproduce, SCHEMA_VERSION, Severity,
+    Span, TestId, TestResult,
 };
 
 const fn ms(n: u64) -> Duration {
@@ -579,12 +579,15 @@ impl Raised<'_> {
             line: self.line,
             function: Some(self.function.into()),
             source: Some(self.source.into()),
-            cols: self.cols,
+            cols: self.cols.map(Columns::from),
             before: self.before.iter().map(|line| (*line).to_owned()).collect(),
             locals: self
                 .locals
                 .iter()
-                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .map(|(name, value)| Local {
+                    name: (*name).to_owned(),
+                    value: (*value).to_owned(),
+                })
                 .collect(),
             ..Default::default()
         }

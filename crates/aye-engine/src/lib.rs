@@ -173,7 +173,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use aye_events::{BatchId, Case, Diagnostic, ProjectPathRef, Record, Span, TestId};
+use aye_events::{BatchId, Case, Diagnostic, LineNumber, ProjectPathRef, Record, Span, TestId};
 use serde::{Deserialize, Serialize};
 
 pub use ruff_python_ast as ast;
@@ -352,9 +352,12 @@ pub struct SourceFile<'a> {
 }
 
 impl SourceFile<'_> {
-    /// 1-based line of an offset.
-    pub fn line(&self, offset: TextSize) -> u32 {
-        u32::try_from(self.lines.line_index(offset).get()).unwrap_or(u32::MAX)
+    /// The line of an offset; [`LineNumber::MAX`] past it.
+    pub fn line(&self, offset: TextSize) -> LineNumber {
+        u32::try_from(self.lines.line_index(offset).get())
+            .ok()
+            .and_then(LineNumber::new)
+            .unwrap_or(LineNumber::MAX)
     }
 
     pub fn span(&self, range: TextRange) -> Span {
@@ -362,7 +365,7 @@ impl SourceFile<'_> {
             path: self.rel.to_project_path(),
             start: range.start().to_u32(),
             end: range.end().to_u32(),
-            line: Some(self.line(range.start())),
+            line: Some(self.line(range.start()).get()),
         }
     }
 
