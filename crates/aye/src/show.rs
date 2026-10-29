@@ -120,9 +120,7 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
         .filter(|path| session::is_path_like(&cwd, path))
         .map(|path| aye_fs::normalize_absolute(&cwd.join(path)))
         .collect();
-    let root = aye_fs::normalize_absolute(&aye_config::find_root(&aye_fs::common_ancestor(
-        &cwd, &given,
-    )));
+    let root = aye_fs::normalize_absolute(&aye_config::project_root(&cwd, &given));
     let config = AyeConfig::load(&root).map_err(|err| Problem::Usage(err.to_string()))?;
     let format = args
         .output
