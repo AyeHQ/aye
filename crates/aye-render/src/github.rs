@@ -120,7 +120,7 @@ impl<W: Write> GithubAnnotations<W> {
             .get(id.as_str())
             .or_else(|| self.lines.get(id.without_params()))
             .copied();
-        (Some(id.path().to_owned()), line)
+        (Some(id.path().as_str().to_owned()), line)
     }
 
     fn test(&mut self, result: &TestResult) {
@@ -149,7 +149,12 @@ impl<W: Write> GithubAnnotations<W> {
             },
             None => result.failure(),
         };
-        self.annotate(result.id.0.clone(), &result.id, failure, result.outcome);
+        self.annotate(
+            result.id.as_str().to_owned(),
+            &result.id,
+            failure,
+            result.outcome,
+        );
     }
 
     /// A bad sub-outcome (a failed subtest or doctest example), annotated
@@ -266,7 +271,7 @@ impl<W: Write> GithubAnnotations<W> {
             if !self.lifetimes.contains_key(lifetime) {
                 annotations.push(Annotation {
                     title: format!("setup of {lifetime}"),
-                    file: Some(first.path().to_owned()),
+                    file: Some(first.path().as_str().to_owned()),
                     line: None,
                     message: format!("setup of {lifetime} failed"),
                     repeats: 0,
@@ -364,7 +369,7 @@ impl<W: Write> Reporter for GithubAnnotations<W> {
         match &record.event {
             Event::CaseCollected(case) => {
                 if let Some(line) = case.span.as_ref().and_then(|span| span.line) {
-                    self.lines.insert(case.id.0.clone(), line);
+                    self.lines.insert(case.id.as_str().to_owned(), line);
                 }
                 Ok(())
             }

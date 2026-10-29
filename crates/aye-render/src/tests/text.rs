@@ -778,7 +778,7 @@ fn subtest_failure_stream() -> Vec<Record> {
         ..Failure::default()
     });
     parent.reproduce = Some(aye_events::Reproduce {
-        command: vec!["aye".into(), id.0.clone()],
+        command: vec!["aye".into(), id.as_str().to_owned()],
         inputs: std::collections::BTreeMap::new(),
     });
     vec![

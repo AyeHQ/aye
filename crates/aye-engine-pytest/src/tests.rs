@@ -164,7 +164,7 @@ fn ids(source: &str) -> Vec<String> {
     recognize(source)
         .cases
         .into_iter()
-        .map(|c| c.id.0)
+        .map(|c| c.id.into_string())
         .collect()
 }
 
@@ -326,7 +326,8 @@ fn differential_metadata(python: &Path, root: &Path, excluded: &[String]) -> Res
             if case.certainty != Certainty::Exact {
                 continue;
             }
-            let Some((_, tags, keywords)) = theirs.iter().find(|(id, ..)| *id == case.id.0) else {
+            let Some((_, tags, keywords)) = theirs.iter().find(|(id, ..)| *id == case.id.as_str())
+            else {
                 let _ = writeln!(report, "{}: not collected by pytest", case.id);
                 continue;
             };
@@ -343,7 +344,9 @@ fn differential_metadata(python: &Path, root: &Path, excluded: &[String]) -> Res
             // does not use `functools.wraps`.
             let extra: Vec<_> = ours
                 .difference(&expected)
-                .filter(|k| !case.id.0.ends_with(']') || !case.id.without_params().ends_with(*k))
+                .filter(|k| {
+                    !case.id.as_str().ends_with(']') || !case.id.without_params().ends_with(*k)
+                })
                 .filter(|k| **k != "__wrapped__")
                 .collect();
             if !missing.is_empty() || !extra.is_empty() {
@@ -381,7 +384,7 @@ fn differential(python: &Path, root: &Path) -> Result<Vec<String>, String> {
     let ours: Vec<String> = found
         .iter()
         .filter(|(rel, _)| !refined.contains(rel))
-        .flat_map(|(_, r)| r.cases.iter().map(|c| c.id.0.clone()))
+        .flat_map(|(_, r)| r.cases.iter().map(|c| c.id.as_str().to_owned()))
         .collect();
     let theirs: Vec<String> = expected
         .into_iter()
@@ -540,14 +543,14 @@ fn case<'r>(recognition: &'r Recognition, id: &str) -> &'r aye_events::Case {
     recognition
         .cases
         .iter()
-        .find(|c| c.id.0 == id)
+        .find(|c| c.id.as_str() == id)
         .unwrap_or_else(|| {
             panic!(
                 "no case {id} in {:?}",
                 recognition
                     .cases
                     .iter()
-                    .map(|c| &c.id.0)
+                    .map(|c| c.id.as_str())
                     .collect::<Vec<_>>()
             )
         })
@@ -2189,7 +2192,7 @@ fn deselect_drops_no_case_and_the_context_names_its_prefixes() {
     let ids: Vec<String> = recognize_at(root, "tests/test_a.py")
         .cases
         .iter()
-        .map(|c| c.id.0.clone())
+        .map(|c| c.id.as_str().to_owned())
         .collect();
     assert_eq!(
         ids,

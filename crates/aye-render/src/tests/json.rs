@@ -476,7 +476,7 @@ fn a_test_failed_only_by_its_subtests_puts_its_output_and_rerun_on_the_first() {
         ..Captured::default()
     };
     parent.reproduce = Some(aye_events::Reproduce {
-        command: vec!["aye".into(), id.0.clone(), "-x".into()],
+        command: vec!["aye".into(), id.as_str().to_owned(), "-x".into()],
         inputs: std::collections::BTreeMap::new(),
     });
     let other = TestId::new("tests/test_t.py::test_t");

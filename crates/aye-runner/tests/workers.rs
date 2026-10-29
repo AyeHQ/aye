@@ -1901,7 +1901,7 @@ fn a_worker_runs_one_adapters_batches_only() {
         for result in results(&records) {
             let reason = result.reason.as_deref().unwrap();
             let (pid, executors) = reason.split_once(' ').unwrap();
-            let adapter = if ["a.py", "c.py", "e.py"].contains(&result.id.path()) {
+            let adapter = if ["a.py", "c.py", "e.py"].contains(&result.id.path().as_str()) {
                 "fake"
             } else {
                 "other"

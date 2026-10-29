@@ -436,7 +436,7 @@ fn durations_by_group_sums_per_group() {
             ("b.py::test_3", Outcome::Passed, 5),
         ],
     );
-    let by_file = history.durations_by_group(|id| id.path().to_owned());
+    let by_file = history.durations_by_group(|id| id.path().to_project_path());
     assert_eq!(by_file.len(), 2);
     assert_eq!(by_file["a.py"], Duration::from_millis(40));
     assert_eq!(by_file["b.py"], Duration::from_millis(5));

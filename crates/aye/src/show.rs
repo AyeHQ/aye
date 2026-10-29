@@ -558,12 +558,15 @@ fn closest<'a>(arg: &str, names: &'a [TestId]) -> Vec<&'a str> {
     let mut seen = HashSet::new();
     let mut scored: Vec<(usize, &str)> = names
         .iter()
-        .map(TestId::without_params)
-        .filter(|name| seen.insert(*name))
-        .map(|name| {
-            let path = name.split_once("::").map_or(name, |(path, _)| path);
-            let file = path.rsplit_once('/').map_or(path, |(_, file)| file);
-            let last = name.rsplit_once("::").map_or(file, |(_, last)| last);
+        .filter(|id| seen.insert(id.without_params()))
+        .map(|id| {
+            let name = id.without_params();
+            let file = id.path().file_name();
+            let last = if id.is_file() {
+                file
+            } else {
+                id.parts().names.rsplit("::").next().unwrap_or(file)
+            };
             let score = lasts
                 .iter()
                 .flat_map(|arg| [distance(arg, last), distance(arg, file)])
@@ -922,7 +925,7 @@ fn stale(meta: &RunMeta, root: &Path, shown: &[&Item<'_>]) -> Vec<(String, Chang
     let mut seen = HashSet::new();
     shown
         .iter()
-        .map(|item| item.name.path())
+        .map(|item| item.name.path().as_str())
         .filter(|path| !path.is_empty() && seen.insert(*path))
         .filter_map(|path| Some((path.to_owned(), meta.change(root, path)?)))
         .collect()

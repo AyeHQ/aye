@@ -110,7 +110,7 @@ pub(crate) fn plan(
     for case in cases {
         if let Some(key) = case.affinity.first() {
             lifetimes
-                .entry((case.adapter.as_str(), case.id.path()))
+                .entry((case.adapter.as_str(), case.id.path().as_str()))
                 .or_insert(key);
         }
     }
@@ -121,8 +121,11 @@ pub(crate) fn plan(
         let key = match case.affinity.first() {
             Some(key) => Key::Affinity(key),
             None => lifetimes
-                .get(&(adapter, case.id.path()))
-                .map_or_else(|| Key::Free(case.id.path()), |key| Key::Affinity(key)),
+                .get(&(adapter, case.id.path().as_str()))
+                .map_or_else(
+                    || Key::Free(case.id.path().as_str()),
+                    |key| Key::Affinity(key),
+                ),
         };
         let at = *index.entry((adapter, key)).or_insert_with(|| {
             groups.push(Group {
@@ -1059,7 +1062,7 @@ mod tests {
     }
 
     fn taken(q: &Queue, prefer: Option<&str>) -> String {
-        q.take(0, prefer).unwrap().ids[0].0.clone()
+        q.take(0, prefer).unwrap().ids[0].as_str().to_owned()
     }
 
     #[test]
@@ -1274,7 +1277,7 @@ mod tests {
         let q = queue(&[("a", false), ("b", false), ("c", false)]);
         let _a = q.take(0, None).unwrap();
         q.halt();
-        let left: Vec<String> = q.drain().into_iter().map(|id| id.0).collect();
+        let left: Vec<String> = q.drain().into_iter().map(TestId::into_string).collect();
         assert_eq!(left, ["b", "c"]);
         assert_eq!(q.drain().len(), 0);
     }

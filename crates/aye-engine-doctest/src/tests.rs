@@ -141,7 +141,7 @@ fn names(source: &str) -> (Vec<String>, bool) {
     let names = recognition
         .cases
         .iter()
-        .map(|c| c.id.0.trim_start_matches("pkg/mod.py::").to_string())
+        .map(|c| c.id.as_str().trim_start_matches("pkg/mod.py::").to_string())
         .collect();
     (names, recognition.refine.is_some())
 }
@@ -156,7 +156,7 @@ fn exact(source: &str) -> Vec<String> {
     recognition
         .cases
         .iter()
-        .map(|c| c.id.0.trim_start_matches("pkg/mod.py::").to_string())
+        .map(|c| c.id.as_str().trim_start_matches("pkg/mod.py::").to_string())
         .collect()
 }
 
@@ -868,7 +868,7 @@ fn carriage_returns_fold_unless_an_escape_may_make_one() {
 fn cases_carry_keywords_affinity_and_a_span() {
     let recognition = recognize("def f():\n    \"\"\"\n    >>> 1\n    1\n    \"\"\"\n");
     let case = &recognition.cases[0];
-    assert_eq!(case.id.0, "pkg/mod.py::pkg.mod.f");
+    assert_eq!(case.id.as_str(), "pkg/mod.py::pkg.mod.f");
     assert_eq!(case.adapter, "doctest");
     assert_eq!(case.keywords, ["pkg", "mod.py", "pkg.mod.f"]);
     assert_eq!(case.affinity, ["import:pkg.mod", "pkg/mod.py"]);
@@ -974,7 +974,7 @@ fn beside_pytest_test_txt_files_need_no_pytest_configuration() {
                 let file = Parsed::read(root, rel);
                 let recognition = recognizer.recognize(&file.file(), &[]);
                 assert!(recognition.refine.is_none());
-                recognition.cases.into_iter().map(|c| c.id.0)
+                recognition.cases.into_iter().map(|c| c.id.into_string())
             })
             .collect();
         assert_eq!(found, theirs.ids);
@@ -1244,7 +1244,7 @@ fn text_files_are_one_case_when_they_have_examples() {
     assert!(recognition.refine.is_none());
     assert_eq!(recognition.cases.len(), 1);
     let case = &recognition.cases[0];
-    assert_eq!(case.id.0, "docs/test_a.txt::test_a.txt");
+    assert_eq!(case.id.as_str(), "docs/test_a.txt::test_a.txt");
     assert_eq!(case.keywords, ["docs", "test_a.txt"]);
     assert_eq!(case.affinity, ["docs/test_a.txt"]);
     assert_eq!(

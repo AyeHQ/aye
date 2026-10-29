@@ -555,7 +555,7 @@ pub(crate) fn recognize<'a>(
     if recognizer.module_wide || !recognizer.partial_names.is_empty() {
         let prefix = format!("{}::", file.rel);
         for case in &mut recognizer.cases {
-            let name = case.id.0.strip_prefix(&prefix).unwrap_or_default();
+            let name = case.id.as_str().strip_prefix(&prefix).unwrap_or_default();
             let name = name.split("::").next().unwrap_or_default();
             let name = name.split('[').next().unwrap_or_default();
             if (recognizer.module_wide || recognizer.partial_names.contains(name))
@@ -1028,7 +1028,10 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
         let (cases, refine, diagnostics) =
             (self.cases.len(), self.refine.len(), self.diagnostics.len());
         self.member_binding(name, bound, site, frames, in_module);
-        let ids: Vec<String> = self.cases[cases..].iter().map(|c| c.id.0.clone()).collect();
+        let ids: Vec<String> = self.cases[cases..]
+            .iter()
+            .map(|c| c.id.as_str().to_owned())
+            .collect();
         let clean = self.refine.len() == refine;
         self.cases.truncate(cases);
         self.keys.truncate(cases);

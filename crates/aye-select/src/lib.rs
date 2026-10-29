@@ -103,7 +103,7 @@ use aye_events::{Case, Certainty, TestId};
 pub use expression::{Expression, Kwarg, ParseError, Truth, Value};
 pub use selector::Selector;
 
-use selector::{Parts, split_params};
+use selector::Parts;
 
 /// A malformed `-k` or `-m` expression: a usage error. The parse error is
 /// part of the message and not a [`std::error::Error::source`], so printing
@@ -632,23 +632,15 @@ impl<'a> Failed<'a> {
             reason = "fills lookups; what reaches output is sorted"
         )]
         for id in ids {
-            let text = id.as_str();
-            files.insert(text.split_once("::").map_or(text, |(path, _)| path));
-            match text.split_once("::") {
-                None => {
-                    let path: Vec<&str> = text.split('/').filter(|c| !c.is_empty()).collect();
-                    if !path.is_empty() {
-                        paths.push(path);
-                    }
+            let path = id.path();
+            files.insert(path.as_str());
+            if id.is_file() {
+                let path: Vec<&str> = path.components().collect();
+                if !path.is_empty() {
+                    paths.push(path);
                 }
-                Some((_, rest)) => {
-                    if let Some(own) = split_params(rest).1 {
-                        params
-                            .entry(&text[..text.len() - own.len() - 2])
-                            .or_default()
-                            .push(id);
-                    }
-                }
+            } else if id.parts().params.is_some() {
+                params.entry(id.without_params()).or_default().push(id);
             }
         }
         Self {
@@ -671,7 +663,7 @@ impl<'a> Failed<'a> {
     fn judge(&self, case: &Case, narrow: &[TestId]) -> Option<Vec<TestId>> {
         let whole = self.ids.contains(&case.id)
             || (!self.paths.is_empty() && {
-                let components: Vec<&str> = case.id.path().split('/').collect();
+                let components: Vec<&str> = case.id.path().as_str().split('/').collect();
                 self.paths.iter().any(|path| components.starts_with(path))
             });
         if !narrow.is_empty() {

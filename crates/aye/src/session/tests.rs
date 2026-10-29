@@ -1002,18 +1002,19 @@ fn reruns_name_the_test_from_where_aye_runs() {
         rerun_args: &[],
     };
     assert_eq!(
-        here.local_id("tests/test_a.py::test_x[1]").as_deref(),
+        here.local_id(&TestId::new("tests/test_a.py::test_x[1]"))
+            .as_deref(),
         Some("test_a.py::test_x[1]")
     );
     // No other file of that name here: the id reruns as it is.
-    assert_eq!(here.local_id("tests/test_b.py::test_x"), None);
+    assert_eq!(here.local_id(&TestId::new("tests/test_b.py::test_x")), None);
     assert_eq!(
         Here {
             cwd: root,
             root,
             rerun_args: &[],
         }
-        .local_id("tests/test_a.py::test_x"),
+        .local_id(&TestId::new("tests/test_a.py::test_x")),
         None
     );
 

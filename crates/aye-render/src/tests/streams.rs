@@ -41,7 +41,7 @@ fn run_started(collect_only: bool) -> Event {
 fn case(id: &str, line: Option<u32>, certainty: Certainty) -> Event {
     let mut case = Case::new(id, "pytest");
     case.span = line.map(|line| Span {
-        path: case.id.path().to_owned(),
+        path: case.id.path().as_str().to_owned(),
         start: 0,
         end: 0,
         line: Some(line),

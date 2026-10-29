@@ -36,7 +36,7 @@ pub use case::{Case, Certainty};
 pub use diagnostic::{Diagnostic, Severity};
 pub use event::{Envelope, Event, Record};
 pub use failure::{Assertion, Compare, Difference, Failure, Frame, Side};
-pub use id::{BatchId, EnvironmentId, LifetimeId, TestId, TestKey, WorkerId};
+pub use id::{BatchId, EnvironmentId, LifetimeId, TestId, TestIdParts, TestKey, WorkerId};
 pub use outcome::{ExitCode, Outcome, Phase};
 pub use path::{InvalidProjectPath, Location, ProjectPath, ProjectPathRef, Span};
 pub use result::{Captured, Counts, Previous, Reproduce, Resource, TestResult};

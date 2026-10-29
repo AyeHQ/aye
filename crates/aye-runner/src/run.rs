@@ -502,7 +502,7 @@ impl Runner {
             if let Some(orphan) = orphans.iter_mut().find(|o| o.0 == case.adapter) {
                 orphan.2 += 1;
             } else {
-                orphans.push((&case.adapter, case.id.path(), 1));
+                orphans.push((&case.adapter, case.id.path().as_str(), 1));
             }
         }
         for (adapter, path, count) in orphans {
@@ -1569,7 +1569,10 @@ impl Shared<'_> {
             let batch = if pinned.is_empty() {
                 batch
             } else {
-                match self.queue.pin(batch, |id| pinned.contains(id.path())) {
+                match self
+                    .queue
+                    .pin(batch, |id| pinned.contains(id.path().as_str()))
+                {
                     Some(kept) => kept,
                     None => continue,
                 }
@@ -2205,11 +2208,9 @@ impl Track {
     }
 
     fn cover(&mut self, id: &TestId) {
-        let text = id.as_str();
-        self.covered.insert(text.to_string());
-        self.covered.insert(id.without_params().to_string());
-        for (at, _) in text.match_indices("::") {
-            self.covered.insert(text[..at].to_string());
+        self.covered.insert(id.as_str().to_string());
+        for ancestor in id.ancestors() {
+            self.covered.insert(ancestor.to_string());
         }
     }
 
@@ -2355,7 +2356,11 @@ mod tests {
         .into_iter()
         .map(TestId::new)
         .collect();
-        let remaining: Vec<String> = track.remaining(&ids).into_iter().map(|id| id.0).collect();
+        let remaining: Vec<String> = track
+            .remaining(&ids)
+            .into_iter()
+            .map(TestId::into_string)
+            .collect();
         assert_eq!(remaining, ["b.py::v", "a.py::C::tt"]);
     }
 
@@ -2496,7 +2501,7 @@ mod tests {
             .into_iter()
             .map(TestId::new)
             .collect();
-        let names = |ids: Vec<TestId>| ids.into_iter().map(|id| id.0).collect::<Vec<_>>();
+        let names = |ids: Vec<TestId>| ids.into_iter().map(TestId::into_string).collect::<Vec<_>>();
         // What none of whose tests started, for `not_run`.
         assert_eq!(names(track.remaining(&ids)), ["b.py::u[old]", "b.py::v"]);
         // What may not have run in full, for the retry.

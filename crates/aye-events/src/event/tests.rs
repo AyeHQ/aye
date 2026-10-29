@@ -45,7 +45,7 @@ fn every_event() -> Vec<Event> {
     result.failures = vec![failure.clone()];
     result.output.stdout = "hello\n".into();
     result.reproduce = Some(Reproduce {
-        command: vec!["aye".into(), id.0.clone()],
+        command: vec!["aye".into(), id.as_str().to_owned()],
         inputs: BTreeMap::from([("seed".into(), "42".into())]),
     });
     result.properties = vec![("example_key".into(), "1".into())];

@@ -705,7 +705,7 @@ impl<'a> Collector<'a> {
         for stray in std::mem::take(&mut refinement.stray) {
             let mut rest = Vec::new();
             for case in stray.refined.cases {
-                match package_anchor(tree, &stray.requested, case.id.path()) {
+                match package_anchor(tree, &stray.requested, case.id.path().as_str()) {
                     Some(at) => anchored
                         .entry(at)
                         .or_default()
@@ -794,7 +794,9 @@ impl<'a> Collector<'a> {
             // By file, in walk order; by recognizer within each.
             let mut by_file: BTreeMap<WalkKey, Vec<(usize, Vec<Case>)>> = BTreeMap::new();
             for (i, case) in cases {
-                let groups = by_file.entry(WalkKey::new(case.id.path())).or_default();
+                let groups = by_file
+                    .entry(WalkKey::new(case.id.path().as_str()))
+                    .or_default();
                 match groups.iter_mut().find(|(by, _)| *by == i) {
                     Some((_, group)) => group.push(case),
                     None => groups.push((i, vec![case])),

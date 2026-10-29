@@ -13,7 +13,9 @@ use anyhow::{Context as _, Result};
 use aye_collect::{Collector, Environment, Options, Prepared};
 use aye_config::AyeConfig;
 use aye_engine::{Adapter, Policy, Project, Refiner};
-use aye_events::{Case, Counts, Diagnostic, Event, ExitCode, Record, SCHEMA_VERSION, Severity};
+use aye_events::{
+    Case, Counts, Diagnostic, Event, ExitCode, Record, SCHEMA_VERSION, Severity, TestId,
+};
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter};
 use aye_render::{
@@ -785,7 +787,7 @@ impl Here<'_> {
         if result.reproduce.is_none() && !result.outcome.is_bad() {
             return;
         }
-        let Some(local) = self.local_id(result.id.as_str()) else {
+        let Some(local) = self.local_id(&result.id) else {
             return;
         };
         match &mut result.reproduce {
@@ -817,23 +819,19 @@ impl Here<'_> {
 
     /// `id` spelled from the current directory, when spelled from the root
     /// it would name another file from here; see [`Self::rerun_from_here`].
-    fn local_id(&self, id: &str) -> Option<String> {
+    fn local_id(&self, id: &TestId) -> Option<String> {
         if self.cwd == self.root {
             return None;
         }
-        let (path, rest) = id
-            .split_once("::")
-            .map_or((id, None), |(p, r)| (p, Some(r)));
+        let path = id.path().as_str();
         let from_cwd = normalize_absolute(&self.cwd.join(path));
         let from_root = normalize_absolute(&self.root.join(path));
         if from_cwd == from_root || !from_cwd.exists() {
             return None;
         }
+        // The names, from their `::` on, follow the file as they are.
         let mut local = relative_below_root(&from_root, self.cwd);
-        if let Some(rest) = rest {
-            local.push_str("::");
-            local.push_str(rest);
-        }
+        local.push_str(&id.as_str()[path.len()..]);
         Some(local)
     }
 }
@@ -1051,7 +1049,7 @@ impl Reach {
                 if one.truth(case).is_false() {
                     continue;
                 }
-                let file = at_root(case.id.path());
+                let file = at_root(case.id.path().as_str());
                 if seen.insert(file.clone()) {
                     selected.push(file);
                 }
@@ -1510,7 +1508,7 @@ fn session_files(
     let mut files: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut seen: HashSet<(&str, &str)> = HashSet::new();
     for case in cases {
-        let path = case.id.path();
+        let path = case.id.path().as_str();
         let reached = within.is_none_or(|(paths, root)| {
             let file = normalize_absolute(&root.join(path));
             paths.iter().any(|start| file.starts_with(start))

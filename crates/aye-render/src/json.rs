@@ -993,7 +993,7 @@ impl<W: Write> JsonLines<W> {
         let Some(first) = own.first() else {
             let mut fail = Fail::new(key, &result.id, result.outcome);
             fail.why = shared::bare_why(&result.output);
-            fail.shown = self.shown(result.id.path(), worker);
+            fail.shown = self.shown(result.id.path().as_str(), worker);
             self.carry(&mut fail.detail, result);
             if self.detailed() {
                 fail.detail.ms = Some(shared::millis(result.duration));
@@ -1006,7 +1006,7 @@ impl<W: Write> JsonLines<W> {
         let mut fail = Fail::new(key.clone(), &result.id, result.outcome);
         fail.phase = shared::notable_phase(first);
         fail.at = at(first);
-        fail.shown = self.shown(result.id.path(), worker);
+        fail.shown = self.shown(result.id.path().as_str(), worker);
         if let Some((same, message)) = self.first_with(first, &key) {
             fail.same_as = Some(same);
             if message != shared::message(first) {
@@ -1034,7 +1034,7 @@ impl<W: Write> JsonLines<W> {
         let key = self.key(id.as_str());
         let mut fail = Fail::new(key.clone(), id, sub.outcome);
         fail.sub = Some(shared::head(&sub.name, ID_MAX));
-        fail.shown = self.shown(id.path(), sub.worker);
+        fail.shown = self.shown(id.path().as_str(), sub.worker);
         if let Some(failure) = &sub.failure {
             fail.phase = shared::notable_phase(failure);
             fail.at = at(failure);

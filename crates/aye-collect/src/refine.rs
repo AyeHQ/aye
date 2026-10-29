@@ -188,7 +188,7 @@ impl Collector<'_> {
                         .collect();
                     let mut stray = Refined::default();
                     for case in reply.cases {
-                        match parts.get_mut(case.id.path()) {
+                        match parts.get_mut(case.id.path().as_str()) {
                             Some(part) => part.cases.push(case),
                             None => stray.cases.push(case),
                         }

@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use aye_events::{Case, Certainty, TestId};
+use aye_events::{Case, Certainty, TestId, TestIdParts};
 
 use crate::Truth;
 use crate::expression::is_python_identifier;
@@ -38,12 +38,12 @@ impl Selector {
     /// Read a positional argument: an id when it contains `::`, a path when
     /// it contains `/`, and otherwise every way the word can be read.
     pub fn parse(text: &str) -> Self {
-        let readings = if let Some((path, rest)) = text.split_once("::") {
-            let (names, params) = split_params(rest);
+        let readings = if text.contains("::") {
+            let parts = TestIdParts::parse(text);
             vec![Reading::Id {
-                path: normalize(path).join("/"),
-                names: names.split("::").map(str::to_string).collect(),
-                params: params.map(str::to_string),
+                path: normalize(parts.path.as_str()).join("/"),
+                names: parts.names.split("::").map(str::to_string).collect(),
+                params: parts.params.map(str::to_string),
             }]
         } else if text.contains('/') {
             vec![Reading::Path(normalize(text))]
@@ -250,15 +250,14 @@ pub(crate) struct Parts<'a> {
 
 impl<'a> Parts<'a> {
     pub(crate) fn new(case: &'a Case) -> Self {
-        let id = case.id.as_str();
-        let (path, rest) = id.split_once("::").unwrap_or((id, ""));
-        let (names, params) = if rest.is_empty() {
-            (Vec::new(), None)
+        let parts = case.id.parts();
+        let (path, params) = (parts.path.as_str(), parts.params);
+        let names = if parts.names.is_empty() && params.is_none() {
+            Vec::new()
         } else {
-            let (names, params) = split_params(rest);
-            (names.split("::").collect(), params)
+            parts.names.split("::").collect()
         };
-        let components: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
+        let components: Vec<&str> = parts.path.components().collect();
         let mut dotted = Vec::new();
         if let Some((file, dirs)) = components.split_last()
             && let Some(module) = file.strip_suffix(".py")
@@ -307,9 +306,10 @@ fn starts_with(have: &[&str], prefix: &[String]) -> bool {
     prefix.len() <= have.len() && prefix.iter().zip(have).all(|(p, h)| p == h)
 }
 
-/// `test_b[x]` → (`test_b`, `x`). Names never contain `[`, so the first one
-/// opens the parameter id, which may itself contain `[`, `::` or `.`.
-pub(crate) fn split_params(names: &str) -> (&str, Option<&str>) {
+/// A dotted name's parameter id, by the rule of [`TestIdParts`]: `test_b[x]`
+/// → (`test_b`, `x`). Names never contain `[`, so the first one opens the
+/// parameter id, which may itself contain `[`, `::` or `.`.
+fn split_params(names: &str) -> (&str, Option<&str>) {
     match names.find('[') {
         Some(at) if names.ends_with(']') => (&names[..at], Some(&names[at + 1..names.len() - 1])),
         _ => (names, None),
@@ -346,7 +346,7 @@ mod tests {
         let case = case(id, certainty);
         let mut narrow = Vec::new();
         let truth = selector.select(&Parts::new(&case), &mut narrow);
-        (truth, narrow.into_iter().map(|id| id.0).collect())
+        (truth, narrow.into_iter().map(TestId::into_string).collect())
     }
 
     fn selects(selector: &str, id: &str) -> Truth {

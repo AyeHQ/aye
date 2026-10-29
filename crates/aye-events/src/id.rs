@@ -1,7 +1,11 @@
 //! Identities: of a test, its key, and the aliases for environments,
 //! lifetimes, workers and batches.
 
+use std::borrow::Borrow;
+
 use serde::{Deserialize, Serialize};
+
+use crate::path::ProjectPathRef;
 
 /// The canonical path id of a test: the file path relative to the project
 /// root with `/` separators, then `::`-separated names, then the parameter
@@ -11,24 +15,35 @@ use serde::{Deserialize, Serialize};
 /// rewriter point at a [`Span`](crate::Span) instead. Parameters stay opaque
 /// inside the id; structured parameters, when an adapter knows them, travel
 /// beside it on the [`Case`](crate::Case).
+///
+/// An id is never rejected: what a worker sends flows as it is. It orders
+/// as its text, which the history's file and its parameter lookups rely on
+/// (`t.py::test_x[…]` sorts between `t.py::test_x[` and `t.py::test_x\`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct TestId(pub String);
+pub struct TestId(Box<str>);
 
 impl TestId {
     pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
+        Self(id.into().into_boxed_str())
     }
 
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
+    pub fn into_string(self) -> String {
+        self.0.into_string()
+    }
+
+    /// The id taken apart: its file, its names and its parameter id.
+    pub fn parts(&self) -> TestIdParts<'_> {
+        TestIdParts::parse(&self.0)
+    }
+
     /// The file part of the id, relative to the project root.
-    pub fn path(&self) -> &str {
-        self.0
-            .split_once("::")
-            .map_or(self.0.as_str(), |(path, _)| path)
+    pub fn path(&self) -> ProjectPathRef<'_> {
+        self.parts().path
     }
 
     /// The id without its parameter id: `t.py::test_x[1]` → `t.py::test_x`.
@@ -36,13 +51,27 @@ impl TestId {
     /// never hold one, and the id must end with its `]`; a file's name may
     /// hold `[` (`t[1].py::test_x[1]` → `t[1].py::test_x`).
     pub fn without_params(&self) -> &str {
-        let Some((path, names)) = self.0.split_once("::") else {
-            return &self.0;
-        };
-        match names.find('[') {
-            Some(at) if names.ends_with(']') => &self.0[..path.len() + "::".len() + at],
-            _ => &self.0,
+        match self.parts().params {
+            Some(params) => &self.0[..self.0.len() - params.len() - "[]".len()],
+            None => &self.0,
         }
+    }
+
+    /// What the id lies below: the id up to each `::` in it (its file, then
+    /// each enclosing name), then, when it has a parameter id, the id
+    /// without it. A test that started covers these as well as itself.
+    pub fn ancestors(&self) -> impl Iterator<Item = &str> {
+        let bare = self.without_params();
+        self.0
+            .match_indices("::")
+            .map(|(at, _)| &self.0[..at])
+            .chain((bare.len() != self.0.len()).then_some(bare))
+    }
+
+    /// Whether the id names a file and no test in it: an id without `::`,
+    /// such as a module skipped while collecting.
+    pub fn is_file(&self) -> bool {
+        !self.0.contains("::")
     }
 
     pub fn key(&self) -> TestKey {
@@ -53,6 +82,56 @@ impl TestId {
 impl std::fmt::Display for TestId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for TestId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<str> for TestId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A test id taken apart, by one rule: the path ends at the first `::`;
+/// names never hold `[`, so the first `[` in the names opens the parameter
+/// id, which may itself hold `[`, `::` or `.`, when the names end with its
+/// `]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TestIdParts<'a> {
+    /// The file, relative to the project root.
+    pub path: ProjectPathRef<'a>,
+    /// The names after the path, `::`-separated, without the parameter id:
+    /// `TestX::test_y`. Empty for a file's id.
+    pub names: &'a str,
+    /// The parameter id, without its brackets: `a-1`.
+    pub params: Option<&'a str>,
+}
+
+impl<'a> TestIdParts<'a> {
+    /// `text` taken apart as an id is: a [`TestId`]'s own, or a selector
+    /// written as one.
+    pub fn parse(text: &'a str) -> Self {
+        let Some((path, rest)) = text.split_once("::") else {
+            return Self {
+                path: ProjectPathRef::as_written(text),
+                names: "",
+                params: None,
+            };
+        };
+        let (names, params) = match rest.find('[') {
+            Some(at) if rest.ends_with(']') => (&rest[..at], Some(&rest[at + 1..rest.len() - 1])),
+            _ => (rest, None),
+        };
+        Self {
+            path: ProjectPathRef::as_written(path),
+            names,
+            params,
+        }
     }
 }
 
@@ -91,6 +170,63 @@ pub type BatchId = u32;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ids_take_apart_into_path_names_and_params() {
+        for (id, path, names, params) in [
+            (
+                "tests/t.py::TestX::test_y[a-1]",
+                "tests/t.py",
+                "TestX::test_y",
+                Some("a-1"),
+            ),
+            ("tests/t.py::test_x", "tests/t.py", "test_x", None),
+            ("tests/t.py", "tests/t.py", "", None),
+            (
+                "tests/t.py::test_x[a[1]]",
+                "tests/t.py",
+                "test_x",
+                Some("a[1]"),
+            ),
+            (
+                "tests/t.py::test_x[a::b.c]",
+                "tests/t.py",
+                "test_x",
+                Some("a::b.c"),
+            ),
+            ("tests/t.py::test_x[a", "tests/t.py", "test_x[a", None),
+            (
+                "tests/t[1].py::test_x[a]",
+                "tests/t[1].py",
+                "test_x",
+                Some("a"),
+            ),
+        ] {
+            let id = TestId::new(id);
+            let parts = id.parts();
+            assert_eq!(parts.path, path, "{id}");
+            assert_eq!(parts.names, names, "{id}");
+            assert_eq!(parts.params, params, "{id}");
+        }
+    }
+
+    #[test]
+    fn an_id_lies_below_its_file_its_names_and_itself_without_params() {
+        let ancestors = |id: &str| {
+            TestId::new(id)
+                .ancestors()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ancestors("t.py::C::test_x[1]"),
+            ["t.py", "t.py::C", "t.py::C::test_x"]
+        );
+        assert_eq!(ancestors("t.py::test_x"), ["t.py"]);
+        assert_eq!(ancestors("t.py"), [] as [&str; 0]);
+        assert!(TestId::new("t.py").is_file());
+        assert!(!TestId::new("t.py::test_x").is_file());
+    }
 
     #[test]
     fn ids_split_into_path_and_params() {

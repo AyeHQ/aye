@@ -425,12 +425,12 @@ impl History {
             return Some(own);
         }
         let name = id.as_str();
-        if !name.contains("::") || id.without_params() != name {
+        if id.is_file() || id.without_params() != name {
             return None;
         }
         // Ids that start with `name[` sort between `name[` and `name\`.
-        let from = TestId(format!("{name}["));
-        let to = TestId(format!("{name}\\"));
+        let from = TestId::new(format!("{name}["));
+        let to = TestId::new(format!("{name}\\"));
         let mut found = false;
         let mut total = 0.0;
         for (_, stats) in self
@@ -445,7 +445,7 @@ impl History {
     }
 
     /// Moving-average durations summed per group, `group` naming the group
-    /// of each test: `durations_by_group(|id| id.path().to_owned())` weighs
+    /// of each test: `durations_by_group(|id| id.path().to_project_path())` weighs
     /// files.
     pub fn durations_by_group<K, F>(&self, mut group: F) -> HashMap<K, Duration>
     where

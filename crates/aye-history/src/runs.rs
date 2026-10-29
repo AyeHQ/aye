@@ -478,7 +478,7 @@ impl Run {
     fn note(&mut self, record: &Record) {
         self.worth = self.worth || shows(record);
         match &record.event {
-            Event::CaseCollected(case) => self.file(case.id.path()),
+            Event::CaseCollected(case) => self.file(case.id.path().as_str()),
             // A file that failed to collect, or was skipped while collecting,
             // which `aye show` shows too.
             Event::Diagnostic(diagnostic)

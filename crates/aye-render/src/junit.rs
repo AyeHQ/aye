@@ -380,7 +380,7 @@ impl Junit {
             "    <testcase classname=\"{}\" name=\"{}\"{} time=\"{:.3}\"",
             attr(&self.classname(&classname)),
             attr(&name),
-            self.location(result.id.path(), line),
+            self.location(result.id.path().as_str(), line),
             time.as_secs_f64()
         );
 
@@ -768,7 +768,7 @@ impl Reporter for Junit {
         match &record.event {
             Event::CaseCollected(case) => {
                 if let Some(line) = case.span.as_ref().and_then(|span| span.line) {
-                    self.lines.insert(case.id.0.clone(), line);
+                    self.lines.insert(case.id.as_str().to_owned(), line);
                 }
             }
             Event::Diagnostic(diagnostic) => self.diagnostic(diagnostic),
