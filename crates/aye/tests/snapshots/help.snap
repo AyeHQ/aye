@@ -1,0 +1,115 @@
+---
+source: crates/aye/tests/snapshots.rs
+info:
+  program: aye
+  args:
+    - "--help"
+  env:
+    COLUMNS: "120"
+    NO_COLOR: "1"
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+---
+success: true
+exit_code: 0
+----- stdout -----
+A fast test runner for Python suites.
+
+Flags mirror pytest's. Anything after `--` goes to the framework unchanged. `aye config` shows the
+resolved configuration and where each value came from. `aye show` shows the last run's results
+again, and any test's details, without running anything (`aye show --help`).
+
+Usage: aye [OPTIONS] [TEST]... [-- <ARGS>...]
+
+Arguments:
+  [TEST]...
+          Files, directories, test ids (`path::Class::test[param]`), dotted names
+          (`pkg.mod.Class.test`) or test keys
+
+  [ARGS]...
+          Arguments for the framework
+
+Options:
+  -k <EXPR>
+          Only run tests matching the keyword expression
+
+  -m <EXPR>
+          Only run tests matching the tag expression (pytest's markers)
+
+  -x, --exitfirst
+          Stop after the first failure (`--maxfail 1`)
+
+      --maxfail <N>
+          Stop after N failures; 0 means no limit
+
+  -v, --verbose...
+          More output, in either format; repeat for more (up to -vvv)
+
+  -q, --quiet...
+          Less output: only the summary
+
+  -s
+          Don't capture output
+
+      --lf
+          Rerun only the tests that failed last time (all, if none did)
+          
+          [alias: --last-failed]
+
+      --ff
+          Run last time's failures first
+          
+          [alias: --failed-first]
+
+  -n, --workers <N|auto>
+          Worker processes, or `auto` for one per CPU
+
+      --collect-only
+          List the selected tests without running them
+          
+          [alias: --co]
+
+      --no-refine
+          Don't import files whose tests can't be known statically
+
+      --continue-on-collection-errors
+          Run the tests even when some files fail to collect
+
+      --strict
+          Treat collection warnings as errors
+
+      --output <FORMAT>
+          Output format; -v and -q set how much it shows
+
+          Possible values:
+          - text: For people: quiet on success, readable failures
+          - json: JSON lines: the summary with -q, bad outcomes, failures in full with -v (for
+            coding agents), every result with -vv, the raw event stream with -vvv
+
+      --junitxml <PATH>
+          Also write a JUnit XML report
+          
+          [alias: --junit-xml]
+
+      --python <PATH>
+          The Python interpreter that runs the tests
+
+  -c, --config-file <FILE>
+          The framework's config file (pytest's `-c`)
+
+      --color <WHEN>
+          When to use colour
+          
+          [default: auto]
+          [possible values: auto, always, never]
+
+      --native
+          Accepted and does nothing: aye's own engine always runs pytest's tests, without pytest
+          (this was the prototype's switch)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+----- stderr -----

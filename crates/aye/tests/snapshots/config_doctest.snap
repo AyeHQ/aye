@@ -1,0 +1,35 @@
+---
+source: crates/aye/tests/snapshots.rs
+info:
+  program: aye
+  args:
+    - config
+    - "--python"
+    - "[PYTHON]"
+  env:
+    COLUMNS: "120"
+    NO_COLOR: "1"
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+---
+success: true
+exit_code: 0
+----- stdout -----
+root     [ROOT]
+python   [PYTHON]  (--python)
+workers  1
+output   text  (default)
+adapters doctest  (from [tool.aye] adapters)
+engine   native
+
+[tool.aye]
+  adapters = doctest    # pyproject.toml [tool.aye]
+
+[doctest]
+  rootdir = [ROOT]    # default
+  inifile =     # default
+  modules = true    # pyproject.toml [tool.aye.doctest]
+  glob = test*.txt    # pyproject.toml [tool.aye.doctest]
+  optionflags = ELLIPSIS    # default
+  encoding = utf-8    # default
+
+----- stderr -----
