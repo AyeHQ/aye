@@ -32,17 +32,17 @@ use crate::registry;
 /// `aye_collect::codes`; the rest come from adapters and the runner.
 mod codes {
     /// An explicit path doesn't exist, or an id matches no test.
-    pub const NOT_FOUND: &str = "not-found";
+    pub(super) const NOT_FOUND: &str = "not-found";
     /// No adapter collects an explicit file (pytest's "found no collectors").
-    pub const UNCLAIMED: &str = "unclaimed";
+    pub(super) const UNCLAIMED: &str = "unclaimed";
     /// The framework rejected its arguments.
-    pub const USAGE_ERROR: &str = "usage-error";
+    pub(super) const USAGE_ERROR: &str = "usage-error";
     /// The framework's own internal error (pytest's `INTERNALERROR`).
-    pub const INTERNAL_ERROR: &str = "internal-error";
+    pub(super) const INTERNAL_ERROR: &str = "internal-error";
     /// The framework failed to collect a file.
-    pub const COLLECTION_ERROR: &str = "collection-error";
+    pub(super) const COLLECTION_ERROR: &str = "collection-error";
     /// The framework skipped a module or a directory while collecting it.
-    pub const SKIPPED: &str = "skipped";
+    pub(super) const SKIPPED: &str = "skipped";
 }
 
 /// Keys of an adapter's context the binary reads or adds.
@@ -51,16 +51,16 @@ mod keys {
     /// (`path::test[x]`), relative to the root, so the framework reports
     /// one it can't find instead of running its test's other parameters in
     /// its place.
-    pub const REQUESTED_IDS: &str = "requested_ids";
+    pub(super) const REQUESTED_IDS: &str = "requested_ids";
     /// Added by the binary: aye's own options that shape the run (`-c
     /// FILE`), as given, which a test's rerun command repeats before its id
     /// (`aye -c FILE <id>`), so that it reruns from where aye ran as aye ran
     /// it.
-    pub const RERUN_ARGS: &str = "rerun_args";
+    pub(super) const RERUN_ARGS: &str = "rerun_args";
     /// Set by an adapter whose framework drops the tests whose ids start
     /// with one of these (pytest's `--deselect`, relative to the root):
     /// selection drops that adapter's cases and counts them as deselected.
-    pub const DESELECT: &str = "deselect";
+    pub(super) const DESELECT: &str = "deselect";
     /// Added by the binary when a positional argument isn't a path (a
     /// dotted name, a test key): the paths the user's run starts from,
     /// absolute, in the order of the arguments, each once: each path
@@ -70,13 +70,13 @@ mod keys {
     /// framework's default), so an adapter whose framework starts from the
     /// paths it is given (pytest's start-up conftests and initial paths)
     /// starts from these instead.
-    pub const SELECTED_PATHS: &str = "selected_paths";
+    pub(super) const SELECTED_PATHS: &str = "selected_paths";
 }
 
 /// A run's inputs, resolved: everything wrong with the command line or the
 /// configuration fails here, before anything is reported. Selectors that
 /// match nothing are found after collection, and reported in the stream.
-pub struct Session {
+pub(crate) struct Session {
     args: Args,
     cwd: PathBuf,
     root: PathBuf,
@@ -117,7 +117,7 @@ impl Positional {
 }
 
 impl Session {
-    pub fn new(args: Args) -> Result<Self> {
+    pub(crate) fn new(args: Args) -> Result<Self> {
         let cwd = std::env::current_dir().context("cannot read the current directory")?;
         // `.` and `..` are resolved lexically, as pytest's `os.path.abspath`
         // does, before the root is searched for.
@@ -241,33 +241,33 @@ impl Session {
         })
     }
 
-    pub fn root(&self) -> &Path {
+    pub(crate) fn root(&self) -> &Path {
         &self.root
     }
 
-    pub fn python(&self) -> &Path {
+    pub(crate) fn python(&self) -> &Path {
         &self.python
     }
 
-    pub const fn python_source(&self) -> aye_runner::PythonSource {
+    pub(crate) const fn python_source(&self) -> aye_runner::PythonSource {
         self.python_source
     }
 
-    pub const fn workers(&self) -> u32 {
+    pub(crate) const fn workers(&self) -> u32 {
         self.workers
     }
 
-    pub const fn config(&self) -> &AyeConfig {
+    pub(crate) const fn config(&self) -> &AyeConfig {
         &self.config
     }
 
-    pub fn prepared(&self) -> &[Prepared] {
+    pub(crate) fn prepared(&self) -> &[Prepared] {
         &self.prepared
     }
 
     /// The names of the adapters the run uses, in priority order, and why
     /// those.
-    pub fn adapters(&self) -> (Vec<&'static str>, registry::Why) {
+    pub(crate) fn adapters(&self) -> (Vec<&'static str>, registry::Why) {
         (
             self.adapters.iter().map(|a| a.name()).collect(),
             self.adapters_why,
@@ -275,7 +275,7 @@ impl Session {
     }
 
     #[allow(clippy::too_many_lines)] // one run, top to bottom
-    pub fn run(mut self) -> ExitCode {
+    pub(crate) fn run(mut self) -> ExitCode {
         let started = Instant::now();
         // A report that can't be written fails before anything runs, not
         // after the whole suite.
@@ -708,7 +708,7 @@ impl Session {
 
     /// The output format, at its verbosity (`-v` and `-q`), and where the
     /// format came from, for `aye config`.
-    pub fn output_shown(&self) -> (String, &'static str) {
+    pub(crate) fn output_shown(&self) -> (String, &'static str) {
         let (format, origin) = output(&self.args, &self.config);
         let verbosity = self.args.verbosity();
         let flags = match verbosity {

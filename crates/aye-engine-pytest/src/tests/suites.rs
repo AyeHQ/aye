@@ -1,7 +1,7 @@
 //! Scratch suites checked against pytest 9.1.1. The expected ids are
 //! `pytest --collect-only -q` output, copied verbatim.
 
-pub struct Suite {
+pub(super) struct Suite {
     pub name: &'static str,
     pub files: &'static [(&'static str, &'static str)],
     /// What pytest 9.1.1 collects, in order.
@@ -10,7 +10,7 @@ pub struct Suite {
     pub refined: &'static [&'static str],
 }
 
-pub const SUITES: &[Suite] = &[
+pub(super) const SUITES: &[Suite] = &[
     // stacked parametrize, inheritance order, duplicate definitions
     Suite {
         name: "basics",

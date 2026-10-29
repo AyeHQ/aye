@@ -101,7 +101,7 @@ impl<A: Adapter> Adapter for WithAyePytest<A> {
 /// to import is then one collection error, however many of these adapters
 /// load it. The doctest adapter's tests are pytest's `DoctestModule`,
 /// another collector, whose error pytest reports as well.
-pub fn collects_in_one_module(adapter: &str) -> bool {
+pub(crate) fn collects_in_one_module(adapter: &str) -> bool {
     adapter == aye_engine_pytest::NAME || adapter == aye_engine_unittest::NAME
 }
 
@@ -109,26 +109,26 @@ pub fn collects_in_one_module(adapter: &str) -> bool {
 /// pytest conftest, which pytest loads once per session however many
 /// adapters load it (the doctest adapter imports the conftests pytest
 /// would): its failure to load is one error.
-pub fn is_conftest(path: &str) -> bool {
+pub(crate) fn is_conftest(path: &str) -> bool {
     path.rsplit('/').next() == Some("conftest.py")
 }
 
 /// The adapters a run uses, in priority order, and why.
-pub struct Chosen {
+pub(crate) struct Chosen {
     pub adapters: Vec<Box<dyn Adapter>>,
     pub why: Why,
 }
 
 impl Chosen {
     #[cfg(test)]
-    pub fn names(&self) -> Vec<&'static str> {
+    pub(crate) fn names(&self) -> Vec<&'static str> {
         self.adapters.iter().map(|a| a.name()).collect()
     }
 }
 
 /// Why a run uses the adapters it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Why {
+pub(crate) enum Why {
     /// `[tool.aye] adapters` lists them.
     Configured,
     /// The default: doctest then pytest.
@@ -155,7 +155,7 @@ impl fmt::Display for Why {
 /// its cases without importing. The tables of adapters that don't run
 /// (`[tool.aye.unittest]`) are checked all the same: a bad value is an
 /// error whichever adapters run.
-pub fn choose(
+pub(crate) fn choose(
     settings: &AyeSettings,
     project: &Project<'_>,
     static_listing: bool,

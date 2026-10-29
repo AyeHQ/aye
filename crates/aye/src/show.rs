@@ -81,7 +81,7 @@ impl From<io::Error> for Problem {
     }
 }
 
-pub fn main(args: &ShowArgs) -> ExitCode {
+pub(crate) fn main(args: &ShowArgs) -> ExitCode {
     match show(args) {
         Ok(()) => ExitCode::Ok,
         Err(Problem::Usage(message)) => {

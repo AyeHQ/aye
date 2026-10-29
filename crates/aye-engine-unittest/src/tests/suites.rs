@@ -2,7 +2,7 @@
 //! 3.13: `exact` lists the ids static recognition is sure of, in its order
 //! (the files not refined), and `refined` the files it sends for refinement.
 
-pub struct Suite {
+pub(super) struct Suite {
     pub name: &'static str,
     pub files: &'static [(&'static str, &'static str)],
     /// The ids unittest loads from the files static recognition predicts,
@@ -12,7 +12,7 @@ pub struct Suite {
     pub refined: &'static [&'static str],
 }
 
-pub const SUITES: &[Suite] = &[
+pub(super) const SUITES: &[Suite] = &[
     // order: classes by bound name, methods by name, code point order
     Suite {
         name: "order",

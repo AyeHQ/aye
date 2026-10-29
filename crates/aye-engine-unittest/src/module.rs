@@ -408,7 +408,7 @@ fn looks_like_tests(name: &str, path: &str) -> bool {
 }
 
 /// Whether `path` (dotted) is in the standard library, `unittest` included.
-pub fn is_stdlib(path: &str) -> bool {
+pub(crate) fn is_stdlib(path: &str) -> bool {
     let top = path.split('.').next().unwrap_or(path);
     top == "unittest" || STDLIB.contains(&top)
 }
@@ -422,7 +422,7 @@ fn is_dunder(name: &str) -> bool {
 /// What a name is bound to when the module has run, as far as the source
 /// tells.
 #[derive(Debug, Clone)]
-pub enum Binding {
+pub(crate) enum Binding {
     /// A class of this module.
     Class(usize),
     Function(FunctionInfo),
@@ -447,7 +447,7 @@ pub enum Binding {
 
 /// What running a module-level function does, as far as its body tells.
 #[derive(Debug, Clone, Default)]
-pub struct FunctionInfo {
+pub(crate) struct FunctionInfo {
     /// It may return a class: it defines one, calls `type`, or returns
     /// something that isn't plainly a value.
     pub may_return_class: bool,
@@ -471,7 +471,7 @@ pub struct FunctionInfo {
 /// code, by dotted path from the module (an imported name's, joined with
 /// the rest of the path).
 #[derive(Debug, Clone)]
-pub enum Touch {
+pub(crate) enum Touch {
     /// An object whose attributes may change: assigned or deleted through,
     /// passed to a call, or a method called on it.
     Object(String),
@@ -486,7 +486,7 @@ pub enum Touch {
 
 /// A class base, resolved where the class statement runs.
 #[derive(Debug, Clone)]
-pub enum Base {
+pub(crate) enum Base {
     Local(usize),
     /// Imported: resolved through [`Modules`].
     Path(String),
@@ -499,7 +499,7 @@ pub enum Base {
 
 /// A class attribute, as `getattr(cls, name)` would find it.
 #[derive(Debug, Clone)]
-pub enum Member {
+pub(crate) enum Member {
     Callable {
         range: TextRange,
         line: u32,
@@ -511,7 +511,7 @@ pub enum Member {
 }
 
 #[derive(Debug, Clone)]
-pub struct ClassSummary {
+pub(crate) struct ClassSummary {
     /// The name in the `class` statement: `__qualname__` at module level.
     pub name: String,
     pub range: TextRange,
@@ -530,7 +530,7 @@ pub struct ClassSummary {
 
 /// One module, read.
 #[derive(Debug)]
-pub struct Summary {
+pub(crate) struct Summary {
     /// The file, absolute.
     pub path: PathBuf,
     /// The namespace when the module has run, sorted by name as `dir()`
@@ -548,7 +548,7 @@ pub struct Summary {
 }
 
 /// Read a module's statements in order.
-pub fn summarize(path: &Path, module: &ast::ModModule, lines: &LineIndex) -> Summary {
+pub(crate) fn summarize(path: &Path, module: &ast::ModModule, lines: &LineIndex) -> Summary {
     let mut builder = Builder {
         lines,
         names: BTreeMap::new(),
@@ -2145,7 +2145,7 @@ fn pattern_captures(pattern: &ast::Pattern, out: &mut Vec<String>) {
 
 /// Where an imported dotted path leads.
 #[derive(Debug, Clone)]
-pub enum Target {
+pub(crate) enum Target {
     Class(Arc<Summary>, usize),
     /// Another binding of a project module.
     Binding(Arc<Summary>, Binding),
@@ -2159,7 +2159,7 @@ pub enum Target {
 
 /// The project's own modules, read on demand: what imports lead to.
 #[derive(Debug)]
-pub struct Modules {
+pub(crate) struct Modules {
     root: PathBuf,
     /// Where absolute imports are looked up: the top-level directory, the
     /// project root and its `src`.
@@ -2195,7 +2195,7 @@ enum Found {
 const MAX_DEPTH: usize = 16;
 
 impl Modules {
-    pub fn new(top: &Path, root: &Path) -> Self {
+    pub(crate) fn new(top: &Path, root: &Path) -> Self {
         let mut search = Vec::new();
         for dir in [top.to_path_buf(), root.to_path_buf(), root.join("src")] {
             if !search.contains(&dir) {
@@ -2212,7 +2212,7 @@ impl Modules {
     }
 
     /// A project file, read and summarized once.
-    pub fn summary(&self, path: &Path) -> Option<Arc<Summary>> {
+    pub(crate) fn summary(&self, path: &Path) -> Option<Arc<Summary>> {
         if let Some(found) = self.cache.lock().expect("lock").get(path) {
             return found.clone();
         }
@@ -2251,7 +2251,7 @@ impl Modules {
     }
 
     /// Where `path` (as imported in `from`) leads.
-    pub fn target(&self, path: &str, from: &Path, depth: usize) -> Target {
+    pub(crate) fn target(&self, path: &str, from: &Path, depth: usize) -> Target {
         if depth > MAX_DEPTH {
             return Target::Unknown(format!("{path} is imported through too many modules"));
         }
@@ -2444,7 +2444,7 @@ impl Modules {
     /// theirs) changes one of those classes or its bases (`base.Base.test_x
     /// = f`, `setattr`, a classmethod called on it, the class passed to a
     /// call), or something aye can't follow. `None` when nothing may.
-    pub fn effects(&self, summary: &Arc<Summary>, loaded: &[Loaded]) -> Option<String> {
+    pub(crate) fn effects(&self, summary: &Arc<Summary>, loaded: &[Loaded]) -> Option<String> {
         if loaded.is_empty() {
             return None;
         }
@@ -2533,7 +2533,7 @@ impl Modules {
 
 /// A test of a class: its name and where its method is defined.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Method {
+pub(crate) struct Method {
     pub name: String,
     pub file: PathBuf,
     pub range: TextRange,
@@ -2542,7 +2542,7 @@ pub struct Method {
 
 /// One class's tests, as the loader takes them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Loaded {
+pub(crate) struct Loaded {
     /// The class's `__qualname__`.
     pub class: String,
     /// The name the loader found it under in the module's namespace (an
@@ -2576,7 +2576,7 @@ impl Modules {
     /// The tests `loadTestsFromModule` takes from `summary` (the module's
     /// own file), in its order: by name in the namespace, then by method
     /// name; or why only an import can tell.
-    pub fn loaded(&self, summary: &Arc<Summary>) -> Result<Vec<Loaded>, String> {
+    pub(crate) fn loaded(&self, summary: &Arc<Summary>) -> Result<Vec<Loaded>, String> {
         if let Some(reason) = &summary.dynamic {
             return Err(reason.clone());
         }
@@ -2728,7 +2728,7 @@ impl Modules {
     }
 
     /// [`Modules::class_tests`] of a class of `summary`, for a static guess.
-    pub fn class_tests_for_guess(
+    pub(crate) fn class_tests_for_guess(
         &self,
         summary: &Arc<Summary>,
         index: usize,

@@ -53,7 +53,7 @@ pub(crate) struct Tree<'r> {
 const TICK: u64 = 256;
 
 impl<'r> Tree<'r> {
-    pub fn new(root: &'r Path, recognizers: &'r [Prepared]) -> Self {
+    pub(crate) fn new(root: &'r Path, recognizers: &'r [Prepared]) -> Self {
         Self {
             root,
             recognizers,
@@ -74,7 +74,12 @@ impl<'r> Tree<'r> {
     /// that entered its directory. Every so many entries it calls `tick`,
     /// which reports progress and says whether to go on: `false` ends the
     /// walk there, and `walk` returns `false` too.
-    pub fn walk(&mut self, top: &Path, mask: Mask, tick: &mut dyn FnMut(&Self) -> bool) -> bool {
+    pub(crate) fn walk(
+        &mut self,
+        top: &Path,
+        mask: Mask,
+        tick: &mut dyn FnMut(&Self) -> bool,
+    ) -> bool {
         let mut masks = vec![mask];
         let mut walker = WalkDir::new(top)
             .follow_links(true)
@@ -138,7 +143,7 @@ impl<'r> Tree<'r> {
     /// Show the file `abs` to the recognizers in `mask`. A file seen again
     /// keeps its first place; a file named explicitly after being walked is
     /// asked about again with `explicit` set.
-    pub fn visit(&mut self, abs: PathBuf, mask: Mask, explicit: bool) -> usize {
+    pub(crate) fn visit(&mut self, abs: PathBuf, mask: Mask, explicit: bool) -> usize {
         let at = self.insert(abs);
         let recognizers = self.recognizers;
         let entry = &mut self.entries[at];
@@ -179,14 +184,14 @@ impl<'r> Tree<'r> {
     }
 
     /// Walked files some recognizer claims for tests, in discovery order.
-    pub fn tests(&self) -> Vec<usize> {
+    pub(crate) fn tests(&self) -> Vec<usize> {
         (0..self.entries.len())
             .filter(|&at| self.entries[at].walked && self.entries[at].tests != 0)
             .collect()
     }
 
     /// Files some recognizer claims as support, in discovery order.
-    pub fn support_files(&self) -> Vec<usize> {
+    pub(crate) fn support_files(&self) -> Vec<usize> {
         (0..self.entries.len())
             .filter(|&at| self.entries[at].support != 0)
             .collect()
@@ -198,7 +203,7 @@ impl<'r> Tree<'r> {
     /// is in its own list (in its place by name), as the framework loads it
     /// as support before collecting it. Directories above the walked roots
     /// are listed here, and their files asked about with `explicit` unset.
-    pub fn support(&mut self, at: usize, recognizer: usize) -> Vec<usize> {
+    pub(crate) fn support(&mut self, at: usize, recognizer: usize) -> Vec<usize> {
         let Some(dir) = self.entries[at].abs.parent() else {
             return Vec::new();
         };

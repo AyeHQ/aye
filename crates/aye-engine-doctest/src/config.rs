@@ -24,7 +24,7 @@ const CONFIG_NAMES: [&str; 7] = [
 ];
 
 /// pytest's default `norecursedirs`.
-pub const DEFAULT_NORECURSEDIRS: [&str; 9] = [
+pub(crate) const DEFAULT_NORECURSEDIRS: [&str; 9] = [
     "*.egg",
     ".*",
     "_darcs",
@@ -38,7 +38,7 @@ pub const DEFAULT_NORECURSEDIRS: [&str; 9] = [
 
 /// The option flags pytest's `doctest_optionflags` accepts
 /// (`_get_flag_lookup`); any other name fails pytest's collection.
-pub const PYTEST_OPTIONFLAGS: [&str; 9] = [
+pub(crate) const PYTEST_OPTIONFLAGS: [&str; 9] = [
     "DONT_ACCEPT_TRUE_FOR_1",
     "DONT_ACCEPT_BLANKLINE",
     "NORMALIZE_WHITESPACE",

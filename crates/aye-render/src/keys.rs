@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap};
 use aye_events::{Event, Record, TestKey};
 
 /// The fewest hex digits in a key.
-pub const MIN: usize = 5;
+pub(crate) const MIN: usize = 5;
 /// The fewest hex digits `aye show` matches a key's start on.
 const MIN_PREFIX: usize = 4;
 

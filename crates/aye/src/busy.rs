@@ -12,7 +12,7 @@ use std::time::Duration;
 const AFTER: Duration = Duration::from_millis(500);
 const LINE: &str = "collecting…";
 
-pub struct Busy {
+pub(crate) struct Busy {
     done: Arc<(Mutex<bool>, Condvar)>,
     thread: Option<JoinHandle<()>>,
 }
@@ -20,7 +20,7 @@ pub struct Busy {
 impl Busy {
     /// Start; nothing is ever written unless `live` (text output on a
     /// terminal).
-    pub fn start(live: bool) -> Self {
+    pub(crate) fn start(live: bool) -> Self {
         let done = Arc::new((Mutex::new(false), Condvar::new()));
         let thread = live.then(|| {
             let done = Arc::clone(&done);

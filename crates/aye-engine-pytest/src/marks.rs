@@ -8,7 +8,7 @@ use crate::scope::{Binding, Elem, Lookup, Resolved};
 
 /// A mark, with the call that gave it arguments and where to evaluate them.
 #[derive(Clone)]
-pub struct Mark<'s, 'a> {
+pub(crate) struct Mark<'s, 'a> {
     pub name: String,
     pub call: Option<(&'a ExprCall, Lookup<'s, 'a>)>,
 }
@@ -21,7 +21,7 @@ impl std::fmt::Debug for Mark<'_, '_> {
 
 /// What a decorator does, as far as collection is concerned.
 #[derive(Debug, Clone)]
-pub enum Decorator<'s, 'a> {
+pub(crate) enum Decorator<'s, 'a> {
     Mark(Mark<'s, 'a>),
     /// `@pytest.fixture`: a fixture, not a test.
     Fixture(Option<&'a ExprCall>),
@@ -142,7 +142,10 @@ fn resolve_mark<'s, 'a>(lookup: Lookup<'s, 'a>, expr: &'a Expr, depth: u8) -> Ma
 
 /// The mark an expression evaluates to: `Ok(None)` when it is something
 /// else, `Err` when it cannot be told.
-pub fn mark<'s, 'a>(lookup: Lookup<'s, 'a>, expr: &'a Expr) -> Result<Option<Mark<'s, 'a>>, ()> {
+pub(crate) fn mark<'s, 'a>(
+    lookup: Lookup<'s, 'a>,
+    expr: &'a Expr,
+) -> Result<Option<Mark<'s, 'a>>, ()> {
     match resolve_mark(lookup, expr, 0) {
         MarkRes::Mark(mark) => Ok(Some(mark)),
         MarkRes::NotMark => Ok(None),
@@ -151,7 +154,7 @@ pub fn mark<'s, 'a>(lookup: Lookup<'s, 'a>, expr: &'a Expr) -> Result<Option<Mar
 }
 
 /// Classify a decorator.
-pub fn decorator<'s, 'a>(lookup: Lookup<'s, 'a>, expr: &'a Expr) -> Decorator<'s, 'a> {
+pub(crate) fn decorator<'s, 'a>(lookup: Lookup<'s, 'a>, expr: &'a Expr) -> Decorator<'s, 'a> {
     match resolve_mark(lookup, expr, 0) {
         MarkRes::Mark(mark) => return Decorator::Mark(mark),
         MarkRes::Unknown => return Decorator::Unknown,
@@ -360,7 +363,7 @@ impl<'a> aye_engine::ast::visitor::Visitor<'a> for ArgUses<'_> {
 
 /// Marks read from a `pytestmark` value or a `marks=` argument.
 #[derive(Debug, Default, Clone)]
-pub struct MarkList<'s, 'a> {
+pub(crate) struct MarkList<'s, 'a> {
     pub marks: Vec<Mark<'s, 'a>>,
     /// Some entry could not be read.
     pub unknown: bool,
@@ -384,7 +387,7 @@ fn maybe_mark<'a>(lookup: Lookup<'_, 'a>, expr: &'a Expr) -> bool {
 
 /// `pytestmark = …`: a mark or a list of marks. A tuple, or anything that
 /// is not a mark, is a collection error in pytest.
-pub fn pytestmark<'s, 'a>(
+pub(crate) fn pytestmark<'s, 'a>(
     lookup: Lookup<'s, 'a>,
     expr: &'a Expr,
 ) -> Result<MarkList<'s, 'a>, String> {
@@ -422,7 +425,7 @@ pub fn pytestmark<'s, 'a>(
 }
 
 /// Follow names bound to constants.
-pub fn deref<'s, 'a>(lookup: Lookup<'s, 'a>, expr: &'a Expr) -> (&'a Expr, Lookup<'s, 'a>) {
+pub(crate) fn deref<'s, 'a>(lookup: Lookup<'s, 'a>, expr: &'a Expr) -> (&'a Expr, Lookup<'s, 'a>) {
     let (mut expr, mut lookup) = (expr, lookup);
     for _ in 0..8 {
         let Expr::Name(name) = expr else {
@@ -441,7 +444,7 @@ pub fn deref<'s, 'a>(lookup: Lookup<'s, 'a>, expr: &'a Expr) -> (&'a Expr, Looku
 
 /// What the empty parameter set becomes (`empty_parameter_set_mark`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EmptyMark {
+pub(crate) enum EmptyMark {
     Skip,
     Xfail,
     FailAtCollect,
@@ -449,7 +452,7 @@ pub enum EmptyMark {
 }
 
 impl EmptyMark {
-    pub fn parse(value: &str) -> Self {
+    pub(crate) fn parse(value: &str) -> Self {
         match value {
             "" | "skip" => Self::Skip,
             "xfail" => Self::Xfail,
@@ -461,7 +464,7 @@ impl EmptyMark {
 
 /// The timeout a parameter set's marks set.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SetTimeout {
+pub(crate) enum SetTimeout {
     /// No `timeout` mark.
     Unmarked,
     Seconds(f64),
@@ -477,7 +480,7 @@ impl SetTimeout {
 
 /// A `parametrize` mark, read.
 #[derive(Debug, Clone)]
-pub struct Parametrize {
+pub(crate) struct Parametrize {
     pub argnames: Vec<String>,
     pub sets: Vec<ParamSet>,
     pub ids: Option<Vec<Option<IdItem>>>,
@@ -493,7 +496,7 @@ pub struct Parametrize {
 
 /// A fixture's or a parametrization's scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Scoped {
+pub(crate) enum Scoped {
     Function,
     Class,
     Module,
@@ -505,7 +508,7 @@ pub enum Scoped {
 
 impl Scoped {
     /// The scope an expression names.
-    pub fn of<'a>(lookup: Lookup<'_, 'a>, expr: &'a Expr) -> Self {
+    pub(crate) fn of<'a>(lookup: Lookup<'_, 'a>, expr: &'a Expr) -> Self {
         match lookup.string(expr).as_deref() {
             Some("function") => Self::Function,
             Some("class") => Self::Class,
@@ -519,7 +522,7 @@ impl Scoped {
 
 impl Parametrize {
     /// Argument names parametrized directly (not through fixtures).
-    pub fn direct(&self) -> impl Iterator<Item = &String> {
+    pub(crate) fn direct(&self) -> impl Iterator<Item = &String> {
         self.argnames.iter().filter(|n| !self.indirect.contains(n))
     }
 }
@@ -558,7 +561,7 @@ fn bind_args<'a>(call: &'a ExprCall, params: &[&str]) -> Result<Args<'a>, String
 
 /// Read a `parametrize` mark. `Err` holds why pytest's ids for it can only
 /// be known at runtime (or why pytest would refuse it).
-pub fn parametrize(mark: &Mark<'_, '_>, empty: &EmptyMark) -> Result<Parametrize, String> {
+pub(crate) fn parametrize(mark: &Mark<'_, '_>, empty: &EmptyMark) -> Result<Parametrize, String> {
     let Some((call, lookup)) = mark.call else {
         return Err("parametrize without arguments".into());
     };
@@ -926,7 +929,7 @@ fn made_by_builtin<'a>(lookup: Lookup<'_, 'a>, call: &'a ExprCall) -> bool {
 
 /// `marks=`: a mark, or a collection of marks. A set of marks raises
 /// `TypeError` (marks aren't hashable), so it is never read.
-pub fn mark_collection<'s, 'a>(lookup: Lookup<'s, 'a>, expr: &'a Expr) -> MarkList<'s, 'a> {
+pub(crate) fn mark_collection<'s, 'a>(lookup: Lookup<'s, 'a>, expr: &'a Expr) -> MarkList<'s, 'a> {
     let (expr, lookup) = deref(lookup, expr);
     let elts = match expr {
         Expr::List(list) => &list.elts[..],
@@ -961,7 +964,7 @@ pub fn mark_collection<'s, 'a>(lookup: Lookup<'s, 'a>, expr: &'a Expr) -> MarkLi
 }
 
 /// `@pytest.mark.timeout(N)` / `timeout=N`: seconds, when literal.
-pub fn timeout(mark: &Mark<'_, '_>) -> Option<f64> {
+pub(crate) fn timeout(mark: &Mark<'_, '_>) -> Option<f64> {
     let (call, lookup) = mark.call?;
     let expr = call.arguments.args.first().or_else(|| {
         call.arguments
@@ -979,7 +982,7 @@ pub fn timeout(mark: &Mark<'_, '_>) -> Option<f64> {
 
 /// `@pytest.mark.usefixtures("a", "b")`: the names, and whether some could
 /// not be read.
-pub fn usefixtures(mark: &Mark<'_, '_>) -> (Vec<String>, bool) {
+pub(crate) fn usefixtures(mark: &Mark<'_, '_>) -> (Vec<String>, bool) {
     let Some((call, lookup)) = mark.call else {
         return (Vec::new(), false);
     };

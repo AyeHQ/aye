@@ -23,7 +23,7 @@ const CONFIG_NAMES: [&str; 7] = [
 ];
 
 /// pytest's default `norecursedirs`.
-pub const DEFAULT_NORECURSEDIRS: [&str; 9] = [
+pub(crate) const DEFAULT_NORECURSEDIRS: [&str; 9] = [
     "*.egg",
     ".*",
     "_darcs",
@@ -630,7 +630,7 @@ fn take_exitfirst(arg: &str) -> (bool, Option<String>) {
 
 /// What `-x` or `--maxfail N` asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MaxFail {
+pub(crate) enum MaxFail {
     /// `--maxfail 0`: no limit.
     Unlimited,
     /// Stop after this many failures.
@@ -639,7 +639,7 @@ pub enum MaxFail {
 
 impl MaxFail {
     /// The limit, if any.
-    pub fn limit(self) -> Option<u32> {
+    pub(crate) fn limit(self) -> Option<u32> {
         match self {
             Self::Unlimited => None,
             Self::After(n) => Some(n),
@@ -651,7 +651,7 @@ impl MaxFail {
 /// of them asks for, as argparse lets the last one win (`None` when none
 /// appears). A `--maxfail` value pytest would reject is left in place, for
 /// the front-end to report, as pytest does.
-pub fn split_maxfail(args: &[String]) -> (Vec<String>, Option<MaxFail>) {
+pub(crate) fn split_maxfail(args: &[String]) -> (Vec<String>, Option<MaxFail>) {
     fn limit(value: &str) -> Option<MaxFail> {
         let n: i64 = value.trim().parse().ok()?;
         // pytest stops once the failures reach the limit, checked after
@@ -729,7 +729,7 @@ fn is_value(arg: &str) -> bool {
 /// What the JUnit options in an argument list ask for: the last value of
 /// each, `Some("")` for an empty one (which turns the report off).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Junit {
+pub(crate) struct Junit {
     pub xml: Option<String>,
     pub prefix: Option<String>,
 }
@@ -738,7 +738,7 @@ pub struct Junit {
 /// `--junitprefix`/`--junit-prefix STR`, each also with `=`), and the last
 /// value of each, as argparse lets the last one win. An option missing its
 /// value is left in place, for the front-end to reject, as pytest does.
-pub fn split_junit(args: &[String]) -> (Vec<String>, Junit) {
+pub(crate) fn split_junit(args: &[String]) -> (Vec<String>, Junit) {
     let mut kept = Vec::new();
     let mut found = Junit::default();
     let mut iter = args.iter().peekable();
@@ -972,7 +972,7 @@ const DOCTEST_VALUED: [&str; 2] = ["--doctest-glob", "--doctest-report"];
 /// runs doctests and reads them itself. A valued option missing its value
 /// is left in place, for the front-end to reject, as pytest does. pytest's parser takes no abbreviations, so
 /// only the full names count.
-pub fn split_doctest(args: &[String]) -> (Vec<String>, Vec<String>) {
+pub(crate) fn split_doctest(args: &[String]) -> (Vec<String>, Vec<String>) {
     let mut kept = Vec::new();
     let mut lifted = Vec::new();
     let mut iter = args.iter().peekable();

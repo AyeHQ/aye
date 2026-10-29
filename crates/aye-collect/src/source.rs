@@ -19,17 +19,17 @@ pub(crate) struct Source {
 }
 
 impl Source {
-    pub fn bytes(&self) -> &[u8] {
+    pub(crate) fn bytes(&self) -> &[u8] {
         self.raw.as_deref().unwrap_or(self.text.as_bytes())
     }
 
     /// The file is not UTF-8, so `text` only approximates it.
-    pub fn is_lossy(&self) -> bool {
+    pub(crate) fn is_lossy(&self) -> bool {
         self.raw.is_some()
     }
 
     /// The file as recognizers see it, when it parsed.
-    pub fn file<'a>(&'a self, rel: &'a str, abs: &'a Path) -> Option<SourceFile<'a>> {
+    pub(crate) fn file<'a>(&'a self, rel: &'a str, abs: &'a Path) -> Option<SourceFile<'a>> {
         Some(SourceFile {
             rel,
             abs,

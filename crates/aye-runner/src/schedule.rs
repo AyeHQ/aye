@@ -63,7 +63,7 @@ const BATCHES_PER_WORKER: u32 = 4;
 
 /// A batch before it is handed out.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Planned {
+pub(crate) struct Planned {
     pub adapter: String,
     pub ids: Vec<TestId>,
     pub weight: Duration,
@@ -96,7 +96,7 @@ enum Key<'a> {
 /// Split `cases` into batches, in the order they should be handed out.
 /// `first` holds the tests to run first; the batches of the adapters in
 /// `ordered` keep plan order (see the module's docs).
-pub fn plan(
+pub(crate) fn plan(
     cases: &[Case],
     durations: &HashMap<TestId, Duration>,
     first: &HashSet<TestId>,
@@ -332,7 +332,7 @@ impl<'a> Weights<'a> {
 
 /// A batch as handed to a worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Assigned {
+pub(crate) struct Assigned {
     pub id: BatchId,
     pub adapter: String,
     pub ids: Vec<TestId>,
@@ -389,7 +389,7 @@ impl Pending {
 /// The batches still to run. Workers pull from it; a serial batch is not
 /// handed out while another one runs.
 #[derive(Debug)]
-pub struct Queue {
+pub(crate) struct Queue {
     state: std::sync::Mutex<State>,
     changed: std::sync::Condvar,
 }
@@ -410,7 +410,7 @@ struct State {
 }
 
 impl Queue {
-    pub fn new(planned: Vec<Planned>) -> Self {
+    pub(crate) fn new(planned: Vec<Planned>) -> Self {
         let pending = planned
             .into_iter()
             .map(|p| Pending {
@@ -439,7 +439,7 @@ impl Queue {
     /// or the queue was halted. Those holding tests to run first go first;
     /// among the rest, the first of the adapter `prefer` (the asking
     /// worker's), else the first.
-    pub fn take(&self, lane: WorkerId, prefer: Option<&str>) -> Option<Assigned> {
+    pub(crate) fn take(&self, lane: WorkerId, prefer: Option<&str>) -> Option<Assigned> {
         let mut state = lock(&self.state);
         loop {
             if state.halted {
@@ -495,7 +495,7 @@ impl Queue {
     /// A batch of `adapter` with no ids that only ends its worker's session
     /// ([`aye_engine::Batch::ends_session`]): for a worker whose last batch
     /// didn't, as its lane finishes or leaves the adapter.
-    pub fn closing(&self, adapter: &str) -> Assigned {
+    pub(crate) fn closing(&self, adapter: &str) -> Assigned {
         let mut state = lock(&self.state);
         state.next_id += 1;
         Assigned {
@@ -512,7 +512,7 @@ impl Queue {
     }
 
     /// Return a batch that never started, to the front.
-    pub fn put_back(&self, batch: Assigned) {
+    pub(crate) fn put_back(&self, batch: Assigned) {
         let mut state = lock(&self.state);
         state.serial_running &= !batch.serial;
         let id = Some(batch.id);
@@ -523,13 +523,13 @@ impl Queue {
     /// Every lane but the first among `lanes` may pin batches to it: the
     /// first lane waits for work until each has said it won't
     /// ([`Queue::may_pin`]) or is done ([`Queue::lane_done`]).
-    pub fn expect_pins(&self, lanes: u32) {
+    pub(crate) fn expect_pins(&self, lanes: u32) {
         lock(&self.state).pinning = (1..lanes).collect();
     }
 
     /// Whether `lane` (not the first) may pin batches from now on: its new
     /// worker lists some files otherwise than the first lane, or none.
-    pub fn may_pin(&self, lane: WorkerId, may: bool) {
+    pub(crate) fn may_pin(&self, lane: WorkerId, may: bool) {
         if lane == 0 {
             return;
         }
@@ -544,7 +544,7 @@ impl Queue {
 
     /// A lane is done taking batches: if it isn't the first, it pins no
     /// more; if it is, nothing can be pinned to it any more.
-    pub fn lane_done(&self, lane: WorkerId) {
+    pub(crate) fn lane_done(&self, lane: WorkerId) {
         let mut state = lock(&self.state);
         if lane == 0 {
             state.first_done = true;
@@ -559,7 +559,11 @@ impl Queue {
     /// `batch`, `None` when nothing is left (the whole batch goes back).
     /// Once the first lane is done, nothing is pinned: the batch comes back
     /// whole, for the asking lane to run.
-    pub fn pin(&self, mut batch: Assigned, pinned: impl Fn(&TestId) -> bool) -> Option<Assigned> {
+    pub(crate) fn pin(
+        &self,
+        mut batch: Assigned,
+        pinned: impl Fn(&TestId) -> bool,
+    ) -> Option<Assigned> {
         let mut state = lock(&self.state);
         if state.first_done {
             return Some(batch);
@@ -598,7 +602,7 @@ impl Queue {
     /// Re-queue the ids of a crashed batch that never started, to the front,
     /// as a new batch that will not be retried again, with the tests that
     /// ran (`ran`), which must not run again.
-    pub fn retry(&self, batch: &Assigned, ids: Vec<TestId>, ran: Vec<TestId>) {
+    pub(crate) fn retry(&self, batch: &Assigned, ids: Vec<TestId>, ran: Vec<TestId>) {
         let mut state = lock(&self.state);
         state.pending.push_front(Pending {
             id: None,
@@ -614,7 +618,7 @@ impl Queue {
     }
 
     /// A batch is over, however it ended.
-    pub fn finished(&self, batch: &Assigned) {
+    pub(crate) fn finished(&self, batch: &Assigned) {
         if batch.serial {
             lock(&self.state).serial_running = false;
             self.changed.notify_all();
@@ -622,17 +626,17 @@ impl Queue {
     }
 
     /// Hand nothing more out.
-    pub fn halt(&self) {
+    pub(crate) fn halt(&self) {
         lock(&self.state).halted = true;
         self.changed.notify_all();
     }
 
-    pub fn is_halted(&self) -> bool {
+    pub(crate) fn is_halted(&self) -> bool {
         lock(&self.state).halted
     }
 
     /// Take every batch still pending: the ids that were never handed out.
-    pub fn drain(&self) -> Vec<TestId> {
+    pub(crate) fn drain(&self) -> Vec<TestId> {
         let mut state = lock(&self.state);
         state.pending.drain(..).flat_map(|p| p.ids).collect()
     }

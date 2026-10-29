@@ -21,7 +21,7 @@ use crate::support::{
 
 /// The configuration recognition depends on.
 #[derive(Debug, Clone)]
-pub struct Settings {
+pub(crate) struct Settings {
     pub python_classes: Vec<String>,
     pub python_functions: Vec<String>,
     pub ids: IdOptions,
@@ -37,7 +37,7 @@ pub struct Settings {
 
 /// What the support files in scope do.
 #[derive(Debug, Clone, Default)]
-pub struct Scope {
+pub(crate) struct Scope {
     /// Hooks of the conftests in scope (and the plugins they load).
     pub hooks: BTreeSet<String>,
     /// [`GLOBAL_HOOKS`](crate::support::GLOBAL_HOOKS) implemented by any
@@ -98,7 +98,7 @@ impl Scope {
 }
 
 /// What the module's imports refer to, beyond its own source.
-pub trait Imports {
+pub(crate) trait Imports {
     /// Whether the class `path` names (a dotted path through the module's
     /// imports) may be a unittest case, which a subclass inherits tests
     /// from whatever its name.
@@ -122,7 +122,7 @@ pub trait Imports {
 
 /// Fixtures a test module imports.
 #[derive(Debug, Clone, Default)]
-pub struct ModuleImports {
+pub(crate) struct ModuleImports {
     /// Read from project files.
     pub fixtures: Vec<FixtureDef>,
     /// Imported from modules that are not project files: each may be a
@@ -482,7 +482,7 @@ fn changes_collection(path: &str) -> bool {
 /// name, or a support file in scope reaches module namespaces, imports a
 /// module of its name, or implements a hook that gets the module before
 /// pytest collects it. `rel` is the module's path.
-pub fn reached(module: &Namespace<'_>, scope: &Scope, rel: &str) -> Vec<String> {
+pub(crate) fn reached(module: &Namespace<'_>, scope: &Scope, rel: &str) -> Vec<String> {
     let mut out = Vec::new();
     if names_module(module.imported_modules(), rel) {
         out.push("the module imports itself, which may change its names".to_string());
@@ -506,7 +506,7 @@ pub fn reached(module: &Namespace<'_>, scope: &Scope, rel: &str) -> Vec<String> 
 
 /// Whether one of `modules` (dotted names, as imported) may be the module
 /// at `rel`: its last part is the file's stem.
-pub fn names_module(modules: &[String], rel: &str) -> bool {
+pub(crate) fn names_module(modules: &[String], rel: &str) -> bool {
     let stem = std::path::Path::new(rel)
         .file_stem()
         .map(|s| s.to_string_lossy())
@@ -516,7 +516,7 @@ pub fn names_module(modules: &[String], rel: &str) -> bool {
 
 /// Recognize one test module. `module` is its namespace
 /// ([`Namespace::build`] over its body).
-pub fn recognize<'a>(
+pub(crate) fn recognize<'a>(
     settings: &Settings,
     scope: &Scope,
     imports: &dyn Imports,
