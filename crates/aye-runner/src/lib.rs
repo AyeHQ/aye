@@ -9,8 +9,8 @@
 //! Owns: how tests run, where, and in what order. Does not own: what a test is
 //! or how one executes inside the framework; it calls the engine for that.
 //!
-//! Depends on: aye-engine, aye-events, aye-static. Must not depend on any
-//! `aye-engine-*`.
+//! Depends on: aye-engine, aye-events, aye-protocol, aye-static. Must not
+//! depend on any `aye-engine-*`.
 //!
 //! Environments come from `aye-provision` (uv as a subprocess, or paths the
 //! user supplies); the runner requests them per matrix row and per backend,
@@ -92,7 +92,7 @@
 //!   JSON can't hold become text, and lone surrogates become U+FFFD, as aye's
 //!   engine cleans text. What can't be written at all (a cycle) raises in
 //!   the executor; no invalid line is written.
-//! - **Transport.** Each worker line is a [`aye_engine::WorkerLine`]; a line
+//! - **Transport.** Each worker line is a [`aye_protocol::WorkerLine`]; a line
 //!   that isn't one is reported as a `protocol-error` diagnostic and the
 //!   worker carries on. A worker's death is noticed by its pid as well as by
 //!   the end of its stream, which a process its tests started may hold open.
@@ -189,10 +189,10 @@
 //! - **An adapter that raises** outside any test (`failed`) ends its batch
 //!   with a `batch-failed` diagnostic and an internal error; its unfinished
 //!   tests are not reported, and the worker goes on with the next batch.
-//! - **Refinement** ([`Runner`] implements [`aye_engine::Refiner`]) starts a
+//! - **Refinement** ([`Runner`] implements [`aye_protocol::Refiner`]) starts a
 //!   fresh worker holding only that adapter's executor, and shuts it down,
 //!   unless the executor lists the session.
-//! - **Session listing** ([`aye_engine::Executor::lists_session`]). The
+//! - **Session listing** ([`aye_protocol::Executor::lists_session`]). The
 //!   worker that refined is kept, with the first lane's environment, for the
 //!   next refinement of its adapter and then as the next run's first lane
 //!   (shut down when the runner is dropped, or when the run gives that lane
@@ -215,7 +215,7 @@
 //!   still pin some; once it has, a lane runs them itself), with one
 //!   `listing-differs` warning naming it. Echo (`-s`) is switched on for
 //!   the kept worker when the run takes it.
-//! - **A worker's session ends in a batch** ([`aye_engine::Batch::ends_session`]),
+//! - **A worker's session ends in a batch** ([`aye_protocol::Batch::ends_session`]),
 //!   so that what fails there is reported and its teardown isn't cut short
 //!   by the shutdown's grace: the batch a lane takes when nothing else of
 //!   its adapter is left for it (for the first lane, once no lane may still
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn the_worker_speaks_this_protocol() {
-        let line = format!("\nPROTOCOL = {}\n", aye_engine::PROTOCOL_VERSION);
+        let line = format!("\nPROTOCOL = {}\n", aye_protocol::PROTOCOL_VERSION);
         assert!(WORKER_SOURCE.contains(&line));
     }
 

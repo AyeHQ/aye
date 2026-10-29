@@ -11,11 +11,11 @@ use std::fmt;
 use anyhow::{Context as _, Result, bail};
 use aye_config::AyeSettings;
 use aye_engine::{
-    Adapter, AdapterError, EmbeddedModule, Executor, MODEL_MODULE, NATIVE_ENGINE_MODULE, Project,
-    REWRITE_MODULE, Recognizer,
+    Adapter, AdapterError, MODEL_MODULE, NATIVE_ENGINE_MODULE, Project, REWRITE_MODULE, Recognizer,
 };
 use aye_engine_pytest::native::SHIM_MODULE;
 use aye_events::AdapterName;
+use aye_protocol::{EmbeddedModule, Executor};
 
 /// Every adapter the binary links, in priority order: the pytest adapter
 /// (for a static listing, `aye --co --no-refine`, the one that predicts

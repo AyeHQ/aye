@@ -23,6 +23,7 @@ aye-events = { path = "crates/aye-events", version = "=0.0.1" }
 aye-fs = { path = "crates/aye-fs", version = "=0.0.1" }
 aye-history = { path = "crates/aye-history", version = "=0.0.1" }
 aye-index = { path = "crates/aye-index", version = "=0.0.1" }
+aye-protocol = { path = "crates/aye-protocol", version = "=0.0.1" }
 aye-provision = { path = "crates/aye-provision", version = "=0.0.1" }
 aye-render = { path = "crates/aye-render", version = "=0.0.1" }
 aye-runner = { path = "crates/aye-runner", version = "=0.0.1" }

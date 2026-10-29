@@ -147,6 +147,7 @@ dependencies = [
  "aye-events",
  "aye-fs",
  "aye-history",
+ "aye-protocol",
  "aye-render",
  "aye-runner",
  "aye-select",
@@ -167,6 +168,7 @@ dependencies = [
  "aye-engine",
  "aye-events",
  "aye-fs",
+ "aye-protocol",
  "aye-static",
  "ruff_python_parser",
  "serde_json",
@@ -191,6 +193,7 @@ name = "aye-engine"
 version = "0.0.1"
 dependencies = [
  "aye-events",
+ "aye-protocol",
  "get-size2",
  "ruff_python_ast",
  "ruff_python_parser",
@@ -209,6 +212,7 @@ dependencies = [
  "aye-engine",
  "aye-events",
  "aye-fs",
+ "aye-protocol",
  "aye-static",
  "ruff_python_parser",
  "serde_json",
@@ -224,6 +228,7 @@ dependencies = [
  "aye-engine",
  "aye-events",
  "aye-fs",
+ "aye-protocol",
  "aye-static",
  "ruff_python_parser",
  "serde_json",
@@ -240,6 +245,7 @@ dependencies = [
  "aye-engine",
  "aye-events",
  "aye-fs",
+ "aye-protocol",
  "ruff_python_parser",
  "serde_json",
  "tempfile",
@@ -278,6 +284,16 @@ name = "aye-index"
 version = "0.0.1"
 
 [[package]]
+name = "aye-protocol"
+version = "0.0.1"
+dependencies = [
+ "aye-events",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "aye-provision"
 version = "0.0.1"
 dependencies = [
@@ -304,6 +320,7 @@ version = "0.0.1"
 dependencies = [
  "aye-engine",
  "aye-events",
+ "aye-protocol",
  "aye-static",
  "serde_json",
  "tempfile",

@@ -15,7 +15,7 @@
 //! used by this engine and by the pytest engine, not a fourth engine; it lands
 //! later behind the services interface in `aye-engine`.
 //!
-//! Depends on: aye-engine, aye-events.
+//! Depends on: aye-engine, aye-events, aye-protocol.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **The reference is `python -m unittest discover` on Python 3.13**
@@ -284,11 +284,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use aye_engine::{
-    Adapter, AdapterError, Claim, EmbeddedModule, Executor, Project, Recognition, Recognizer,
-    Setting, SourceFile,
+    Adapter, AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile,
 };
 use aye_events::{AdapterName, AffinityKey, Case, Certainty, ProjectPath, ProjectPathRef, Span};
 use aye_fs::normalize_absolute;
+use aye_protocol::{EmbeddedModule, Executor};
 
 pub use config::UnittestConfig;
 pub use fnmatch::{fnmatch, valid_module_name};

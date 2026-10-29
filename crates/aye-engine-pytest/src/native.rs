@@ -9,7 +9,7 @@
 //! engine (`aye_native_engine`, with `aye_rewrite` rewriting asserts) runs
 //! the model and knows no framework; `aye_pytest_native` is the glue, the
 //! executor the worker instantiates. It [lists the
-//! session](aye_engine::Executor::lists_session): the worker that refined
+//! session](aye_protocol::Executor::lists_session): the worker that refined
 //! runs batches too, and every other worker lists the session's files
 //! before its first batch.
 //!
@@ -34,10 +34,11 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use aye_engine::{
-    Adapter, AdapterError, Claim, EmbeddedModule, Executor, MODEL_MODULE, NATIVE_ENGINE_MODULE,
-    Project, REWRITE_MODULE, Recognition, Recognizer, Setting, SourceFile,
+    Adapter, AdapterError, Claim, MODEL_MODULE, NATIVE_ENGINE_MODULE, Project, REWRITE_MODULE,
+    Recognition, Recognizer, Setting, SourceFile,
 };
 use aye_events::{AdapterName, Diagnostic, DiagnosticCode, Fnv64, Severity};
+use aye_protocol::{EmbeddedModule, Executor};
 use serde_json::{Value, json};
 
 use crate::{PytestConfig, PytestRecognizer, config::ImportMode};

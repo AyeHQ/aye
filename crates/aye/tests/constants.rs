@@ -11,10 +11,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use aye_engine::ast::visitor::{self, Visitor};
 use aye_engine::ast::{DictItem, Expr, ModModule, Stmt};
-use aye_engine::{EmbeddedModule, PROTOCOL_VERSION, services};
 use aye_events::{
     CompareKind, ComparisonOp, DiagnosticCode, FrameworkStatus, Outcome, Phase, Scope, Severity,
 };
+use aye_protocol::{EmbeddedModule, PROTOCOL_VERSION, services};
 use serde_json::{Value, json};
 
 /// Every Python module aye embeds, once each: the engine's, each adapter's,

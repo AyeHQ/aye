@@ -1,6 +1,6 @@
 //! Running a plan: workers pulling batches, the run's log, `maxfail` across
 //! workers, crash recovery, stopping, and the session listing of executors
-//! that [list the session](aye_engine::Executor::lists_session).
+//! that [list the session](aye_protocol::Executor::lists_session).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
@@ -11,14 +11,14 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use aye_engine::{
-    Batch, Executor, ListingDigest, Policy, RefineError, RefineRequest, Refined, Refiner, Reply,
-    Request, WorkerLine,
-};
 use aye_events::{
     AdapterName, BatchIndex, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, Event,
     Failure, FrameworkStatus, LifetimeId, Outcome, ProjectPath, Record, Severity, Stamper,
     StopReason, TestId, TestResult, WorkerIndex,
+};
+use aye_protocol::{
+    Batch, Executor, ListingDigest, Policy, RefineError, RefineRequest, Refined, Refiner, Reply,
+    Request, WorkerLine,
 };
 use aye_static::EnvVars;
 

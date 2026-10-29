@@ -9,7 +9,7 @@
 //! diffs instead of two text blobs. Per-example re-runs and an `--accept`
 //! mode that rewrites expected output in place are planned.
 //!
-//! Depends on: aye-engine, aye-events.
+//! Depends on: aye-engine, aye-events, aye-protocol.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **This crate is the doctest adapter, and it is native**: it maps
@@ -318,12 +318,12 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use aye_engine::{
-    Adapter, AdapterError, Claim, EmbeddedModule, Executor, Project, Recognition, Recognizer,
-    Setting, SourceFile,
+    Adapter, AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile,
 };
 use aye_events::{
     AdapterName, AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity, Span,
 };
+use aye_protocol::{EmbeddedModule, Executor};
 use aye_static::EnvVars;
 
 pub use config::{DoctestConfig, ImportMode};

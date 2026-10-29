@@ -5,10 +5,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use aye_engine::{RefineRequest, Refined, Refiner, Setting};
+use aye_engine::Setting;
 use aye_events::{
     AdapterName, ContentDigest, Diagnostic, DiagnosticCode, Fnv128, ProjectPath, Severity,
 };
+use aye_protocol::{RefineRequest, Refined, Refiner};
 
 use crate::source::Source;
 use crate::standalone::{self, Scope};

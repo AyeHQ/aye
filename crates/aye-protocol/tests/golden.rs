@@ -13,7 +13,7 @@
 use std::fs;
 use std::path::Path;
 
-use aye_engine::{Reply, Request, WorkerLine};
+use aye_protocol::{Reply, Request, WorkerLine};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 

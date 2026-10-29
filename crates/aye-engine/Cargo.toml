@@ -11,6 +11,7 @@ authors.workspace = true
 
 [dependencies]
 aye-events = { workspace = true }
+aye-protocol = { workspace = true }
 get-size2 = { workspace = true } # version pin only; see the workspace Cargo.toml
 ruff_python_ast = { workspace = true }
 ruff_source_file = { workspace = true }

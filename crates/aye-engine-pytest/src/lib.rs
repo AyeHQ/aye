@@ -23,8 +23,8 @@
 //! Owns: everything pytest-specific. Nothing here is questioned; the
 //! differential harness against plain pytest is the referee.
 //!
-//! Depends on: aye-engine, aye-events. Must not be depended on by any runner
-//! crate; only the binary links it.
+//! Depends on: aye-engine, aye-events, aye-protocol. Must not be depended on
+//! by any runner crate; only the binary links it.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **The project scan covers what pytest's session can load**: the

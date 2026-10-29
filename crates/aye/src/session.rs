@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result};
 use aye_collect::{Collector, Environment, Options, Prepared};
 use aye_config::AyeConfig;
-use aye_engine::{Adapter, Policy, Project, Refiner};
+use aye_engine::{Adapter, Project};
 use aye_events::{
     AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event,
     ExitCode, ProjectPath, Record, RerunCommand, RunId, SCHEMA_VERSION, Severity, Stamper,
@@ -20,6 +20,7 @@ use aye_events::{
 };
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter, StoredRunId};
+use aye_protocol::{Policy, Refiner};
 use aye_render::{
     ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
     JunitOptions, Reporter, Tally, Tee, Text, TextOptions,
