@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use aye_events::{
     Assertion, Captured, Case, Certainty, Columns, Counts, Diagnostic, Envelope, Event, ExitCode,
-    Failure, Frame, Local, Location, Outcome, Phase, Record, Reproduce, SCHEMA_VERSION, Severity,
-    Span, TestId, TestResult,
+    Failure, Frame, Local, Location, Outcome, Phase, Record, Reproduce, SCHEMA_VERSION, Scope,
+    Severity, Span, TestId, TestResult,
 };
 
 const fn ms(n: u64) -> Duration {
@@ -402,11 +402,11 @@ pub(crate) fn lifetime() -> Vec<Record> {
         collected(4, 0),
         Event::LifetimeStarted {
             lifetime: "module:tests/test_db.py".into(),
-            kind: "module".into(),
+            kind: Scope::Module,
         },
         Event::LifetimeStarted {
             lifetime: class.into(),
-            kind: "class".into(),
+            kind: Scope::Class,
         },
         blocked("test_a"),
         blocked("test_b"),

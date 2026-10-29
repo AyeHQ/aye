@@ -7,6 +7,7 @@ use crate::case::Case;
 use crate::diagnostic::Diagnostic;
 use crate::failure::Failure;
 use crate::id::{AdapterName, BatchId, EnvironmentId, LifetimeId, TestId, WorkerId};
+use crate::lifetime::Scope;
 use crate::outcome::{ExitCode, Outcome};
 use crate::result::{Counts, TestResult};
 use crate::serde_ext::{is_zero, millis};
@@ -124,8 +125,8 @@ pub enum Event {
     /// The same lifetime id starts again in each batch that needs it.
     LifetimeStarted {
         lifetime: LifetimeId,
-        /// `session`, `package`, `module`, `class`, …, in aye's words.
-        kind: String,
+        /// The scope it opens: `session`, `package`, `module` or `class`.
+        kind: Scope,
     },
     /// A failed setup is reported once: its failure goes here, and each test
     /// that could not run because of it is `error` with `cause` set to this

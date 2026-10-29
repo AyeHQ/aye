@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::failure::Failure;
 use crate::id::{LifetimeId, TestId};
+use crate::lifetime::Scope;
 use crate::outcome::Outcome;
 use crate::serde_ext::millis;
 
@@ -65,9 +66,8 @@ pub struct TestResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Resource {
     pub name: String,
-    /// How long its value lives: `session`, `package`, `module`, `class`
-    /// or `function`.
-    pub scope: String,
+    /// How long its value lives.
+    pub scope: Scope,
 }
 
 /// A test's outcomes in the runs before this one.

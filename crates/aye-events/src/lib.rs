@@ -32,6 +32,7 @@ mod diagnostic;
 mod event;
 mod failure;
 mod id;
+mod lifetime;
 mod outcome;
 mod path;
 mod result;
@@ -47,6 +48,7 @@ pub use id::{
     AdapterName, BatchId, EnvironmentId, InvalidKey, KeyPrefix, LifetimeId, TestId, TestIdParts,
     TestKey, WorkerId,
 };
+pub use lifetime::Scope;
 pub use outcome::{ExitCode, Outcome, Phase};
 pub use path::{
     DiagnosticPath, FramePath, InvalidProjectPath, LineNumber, Location, ProjectPath,

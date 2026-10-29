@@ -100,7 +100,7 @@ fn every_event() -> Vec<Event> {
         },
         Event::LifetimeStarted {
             lifetime: "class:tests/test_cart.py::TestCart".into(),
-            kind: "class".into(),
+            kind: Scope::Class,
         },
         Event::TestStarted { id: id.clone() },
         Event::SubOutcome {

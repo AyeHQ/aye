@@ -978,6 +978,8 @@ fn join<S: AsRef<str>>(words: &[S]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use aye_events::Scope;
+
     use super::*;
 
     #[test]
@@ -1243,7 +1245,7 @@ mod tests {
             // Started, never finished (a crash): nothing.
             Record::new(Event::LifetimeStarted {
                 lifetime: "t.py::E".into(),
-                kind: "class".into(),
+                kind: Scope::Class,
             }),
             Record::new(Event::LifetimeFinished {
                 lifetime: "t.py::F".into(),
@@ -1523,11 +1525,11 @@ mod tests {
             setup_chain(&[
                 Resource {
                     name: "_xunit_setup_class_fixture_TestA".into(),
-                    scope: "class".into(),
+                    scope: Scope::Class,
                 },
                 Resource {
                     name: "cart".into(),
-                    scope: "function".into(),
+                    scope: Scope::Function,
                 },
             ]),
             "setup_class (class) → cart (function)"

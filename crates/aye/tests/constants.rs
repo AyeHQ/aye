@@ -1,8 +1,8 @@
 //! The constants Python and Rust must agree on, read from the Python aye
 //! embeds (parsed, not run): the outcomes and their severities, the
-//! phases, the service names and the services the engine provides itself,
-//! the protocol version, and the diagnostic codes and severities Python
-//! emits. Each is written once on each side, and a difference is a value
+//! phases, the scopes, the service names and the services the engine
+//! provides itself, the protocol version, and the diagnostic codes and
+//! severities Python emits. Each is written once on each side, and a difference is a value
 //! one side sends that the other misreads or drops.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use aye_engine::ast::visitor::{self, Visitor};
 use aye_engine::ast::{Expr, ModModule, Stmt};
 use aye_engine::{EmbeddedModule, PROTOCOL_VERSION, services};
-use aye_events::{DiagnosticCode, Outcome, Phase, Severity};
+use aye_events::{DiagnosticCode, Outcome, Phase, Scope, Severity};
 use serde_json::{Value, json};
 
 /// Every Python module aye embeds, once each: the engine's, each adapter's,
@@ -65,9 +65,13 @@ fn module_int(module: &ModModule, name: &str) -> Option<u64> {
     })
 }
 
-/// The `NAME = "value"` assignments in the body of the class `name`, in
-/// order.
-fn class_strings(module: &ModModule, name: &str) -> Vec<(String, String)> {
+/// The `NAME = <value>` assignments in the body of the class `name` whose
+/// value `read` reads, in order.
+fn class_values<T>(
+    module: &ModModule,
+    name: &str,
+    read: impl Fn(&Expr) -> Option<T>,
+) -> Vec<(String, T)> {
     let class = module
         .body
         .iter()
@@ -81,9 +85,15 @@ fn class_strings(module: &ModModule, name: &str) -> Vec<(String, String)> {
             let [Expr::Name(target)] = &assign.targets[..] else {
                 return None;
             };
-            Some((target.id.to_string(), literal(&assign.value)?.to_string()))
+            Some((target.id.to_string(), read(&assign.value)?))
         })
         .collect()
+}
+
+/// The `NAME = "value"` assignments in the body of the class `name`, in
+/// order.
+fn class_strings(module: &ModModule, name: &str) -> Vec<(String, String)> {
+    class_values(module, name, |value| literal(value).map(str::to_owned))
 }
 
 fn engine() -> ModModule {
@@ -181,6 +191,21 @@ fn phases_are_the_same_on_both_sides() {
         })
         .collect();
     assert_eq!(class_strings(&engine(), "Phase"), rust);
+}
+
+/// The model's `Scope`, an `IntEnum` whose order is that of `Scope`:
+/// widest first.
+#[test]
+fn scopes_are_the_same_on_both_sides() {
+    let rust: Vec<(String, u64)> = Scope::ALL
+        .iter()
+        .zip(0..)
+        .map(|(scope, at)| (scope.as_str().to_ascii_uppercase(), at))
+        .collect();
+    assert_eq!(
+        class_values(&parse(&aye_engine::MODEL_MODULE), "Scope", integer),
+        rust
+    );
 }
 
 #[test]
