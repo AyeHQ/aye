@@ -2,9 +2,9 @@
 
 The runner (`crates/aye-runner`) and each worker talk over the worker's stdin
 and stdout, one UTF-8 JSON object per line. The message types are in
-`crates/aye-engine` (`Request`, `Reply`, `WorkerLine`, `Batch`, `Policy`).
+`crates/aye-protocol` (`Request`, `Reply`, `WorkerLine`, `Batch`, `Policy`).
 The worker is `crates/aye-runner/python/aye_worker.py`. The protocol version
-is `PROTOCOL_VERSION` in `aye-engine` and `PROTOCOL` in `aye_worker.py` and
+is `PROTOCOL_VERSION` in `aye-protocol` and `PROTOCOL` in `aye_worker.py` and
 `aye_engine.py`, and the handshake checks it.
 
 ## Starting a worker
@@ -364,7 +364,7 @@ runs its tests in plan order, as pytest-xdist's do.
   changes no duration.
 - Services are looked up by name (`Services.get` returns `None` when
   absent), so new services stay additive. The names are listed in
-  `aye_engine::services`. Today the runner asks for `context` (the test and
+  `aye_protocol::services`. Today the runner asks for `context` (the test and
   lifetimes running now) and `cleanup` (teardown registered on the running
   test), and the engine provides both. The others (capture, coverage,
   timeouts, patching, …) are not provided yet.

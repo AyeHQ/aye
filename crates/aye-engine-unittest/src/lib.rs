@@ -13,7 +13,7 @@
 //!
 //! Django is a set of services (settings, test databases, live-server ports)
 //! used by this engine and by the pytest engine, not a fourth engine; it lands
-//! later behind the services interface in `aye-engine`.
+//! later behind the services interface in `aye-protocol`.
 //!
 //! Depends on: aye-adapter, aye-events, aye-protocol.
 //!

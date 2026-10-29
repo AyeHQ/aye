@@ -103,11 +103,12 @@ argv ─▶ aye: args, Session
           ├─▶ aye-collect ────────▶ cases ◀── refine ── worker (imports flagged files)
           ├─▶ aye-select ─────────▶ selected cases
           └─▶ aye-runner ─────────▶ batches ──▶ workers: python -c aye_worker.py
-                                                  aye's engine + one adapter's executor
-                                                  (pytest: aye's pytest module and
-                                                  front-end, the session listed once
-                                                  per worker; unittest, doctest)
-                                                             │ JSON lines
+                                                  aye's engine (aye-engine) and one
+                                                  adapter's executor (pytest: aye's
+                                                  pytest module and front-end, the
+                                                  session listed once per worker;
+                                                  unittest, doctest)
+                                                             │ JSON lines (aye-protocol)
           records, stamped into one log ◀────────────────────┘
                      │
          ┌──────────────┬──┴────────────┬────────────────────┬──────────┬───────────┐
@@ -121,8 +122,11 @@ argv ─▶ aye: args, Session
 
 The leaf crates (`aye-index`, `aye-static`, `aye-fs`) depend on no aye
 crate. Runner crates never depend on an `aye-engine-*` crate. Only the binary
-links the adapters. Each crate's `lib.rs` states its responsibility,
-boundaries and decisions.
+links the adapters. `aye-runner`, `aye-render`, `aye-history` and
+`aye-select` compile no Ruff: the runner speaks `aye-protocol` and embeds
+`aye-engine`, and only `aye-collect` and the adapters, through
+`aye-adapter`, read Python's syntax. Each crate's `lib.rs` states its
+responsibility, boundaries and decisions.
 
 | Crate | Responsibility |
 |---|---|
@@ -131,7 +135,9 @@ boundaries and decisions.
 | `aye-fs` | Lexical path algebra (`normpath` and `normalize_absolute`, both of aye's normalizers, named; `absolute`, `relative_to`, `common_ancestor`, the two relativizers, paths shown with `/`, `expand_path` over a lookup it is given) and the state directory: `StateDir` (`.aye`) and its buckets (`history.json`, `runs`, `cache`), `prepare_dir` with the `.gitignore` and `CACHEDIR.TAG` markers, `atomic_write`. Depends on no aye crate. |
 | `aye` | The binary: the CLI, the run (`session.rs`), `aye config`, `aye show` (`show.rs`), and the adapter registry (`registry.rs`: pytest, unittest and doctest, and which of them a project runs). |
 | `aye-events` | The wire types: events, the envelope and the `Stamper` that writes a run's part of it, outcomes and a test's earlier ones (`OutcomeTrail`), failures (an assertion's `ComparisonOp`, a comparison's `CompareKind`, the `FailureSignature` that groups them), the `RerunCommand` a bad outcome's `reproduce` holds, cases, a batch's `FrameworkStatus`, why a run stopped (`StopReason`), exit codes, `SCHEMA_VERSION`; the identities and paths they hold, each taken apart in one place (`TestId` and its parts, `TestKey`, `AdapterName`, `LifetimeId` and its `Scope`, `AffinityKey`, `RunId`, `RunNumber`, `WorkerIndex`, `BatchIndex`, `EnvironmentId`, `ProjectPath`, `DiagnosticPath`, `FramePath`, `LineNumber`); the diagnostic codes (`DiagnosticCode`, `Severity`) and the one classification of an error the exit code, the summary and the run store answer from (`ErrorClass`); FNV-1a, the one hash aye computes (`Fnv64`, `Fnv128`), and a file's `ContentDigest`, which the run store and the refinement cache keep. Depends on serde and `aye-index`. |
-| `aye-engine` | The contract between the runner and any adapter: the `Adapter`, `Recognizer` and `Refiner` traits, the worker protocol types, service names, `PROTOCOL_VERSION`, and aye's engine (`python/aye_engine.py`). |
+| `aye-protocol` | The worker protocol: what the runner sends a worker and what it answers (`Request`, `Reply`, `WorkerLine`), a `Batch` and its `Policy`, refinement's messages (`RefineRequest`, `Refined`), the handshake's modules and executors (`ModuleSource`, `ExecutorSpec`), an adapter's runtime face (`Executor`, with the `EmbeddedModule`s it installs), service names, `PROTOCOL_VERSION`, and the `Refiner` trait the runner implements for collection; `FrameworkStatus`, re-exported. Depends on `aye-events` only. |
+| `aye-engine` | aye's engine: the Python every executor builds on (`python/aye_engine.py`), the test model, assertion rewriting and the native engine (`aye_model.py`, `aye_rewrite.py`, `aye_native_engine.py`), embedded as constants with their Python tests; and the vocabulary. Depends on `aye-protocol` only. |
+| `aye-adapter` | What an adapter implements: the `Adapter` and `Recognizer` traits, `Claim`, `Recognition`, `SourceFile`, `Project`, `Setting`, `AdapterError`; Ruff's syntax tree, line index and text ranges, re-exported with the `get-size2` pin, so collection and the adapters share one version. Depends on `aye-events` and `aye-protocol`. |
 | `aye-config` | The project root, `[tool.aye]`, and generic TOML and INI loaders that remember each value's origin. Paths come from `aye-fs`. |
 | `aye-collect` | Discovery: the walk, parsing with Ruff's parser, recognizers, merging, refinement and its cache, diagnostics, strict mode. Knows no framework's rules. |
 | `aye-select` | Selection by path, id, dotted name, key, keyword expression, tag expression and last failed, with three-valued logic. |
