@@ -27,10 +27,10 @@ Leaf crates (depend on no aye crate):
 
 Runner crates (engine-agnostic; must never depend on an `aye-adapter-*` crate):
 
-- `crates/aye`: the binary (CLI, wiring, `aye config`, `aye show`, the adapter registry and which adapters a project runs)
+- `crates/aye`: the binary (CLI, wiring, `aye config`, `aye show`, the adapter registry, which adapters a project runs, and the prelude every worker installs: aye's `pytest` module and what it stands on)
 - `crates/aye-events`: the wire types (events, outcomes and `OutcomeTrail`, failures with `ComparisonOp`, `CompareKind` and `FailureSignature`, `RerunCommand`, collected cases, `FrameworkStatus`, `StopReason`), the identities and paths they hold (`TestId`, `TestKey`, `AdapterName`, `LifetimeId`, `Scope`, `AffinityKey`, `RunId`, `RunNumber`, `WorkerIndex`, `BatchIndex`, `ProjectPath`, `DiagnosticPath`, `FramePath`), the envelope's `Stamper`, the diagnostic codes and their classification (`DiagnosticCode`, `ErrorClass`), FNV-1a (`Fnv64`, `Fnv128`) and `ContentDigest`, and the schema version
-- `crates/aye-protocol`: the worker protocol (`Request`, `Reply`, `WorkerLine`, `Batch`, `Policy`, `BatchContext` over the adapter's `AdapterContext`, `MaxFail`, refinement's messages, an adapter's runtime face `Executor`, service names, `PROTOCOL_VERSION`, the `Refiner` trait); depends on `aye-events` only, so the runner compiles no Ruff
-- `crates/aye-adapter`: what an adapter implements (`Adapter`, `Recognizer`, `Claim`, `Requested`, `Recognition`, `RefineReason`, `SourceFile`, `Project`, `Setting`, `FrameworkDefaults`, `AdapterError`) and the Ruff re-exports collection and the adapters share
+- `crates/aye-protocol`: the worker protocol (`Request`, `Reply`, `WorkerLine`, `Batch`, `Policy`, `BatchContext` over the adapter's `AdapterContext`, `MaxFail`, refinement's messages, the handshake's `ModuleSource`s in `ModuleSet`s, an adapter's runtime face `Runtime` with its `EntryPoint` and `SessionMode`, `ServiceName`, `PROTOCOL_VERSION`, the `Refiner` trait); depends on `aye-events` only, so the runner compiles no Ruff
+- `crates/aye-adapter`: what an adapter implements (`Adapter` with its `runtime()`, `Recognizer`, `Claim`, `Requested`, `Recognition`, `RefineReason`, `SourceFile`, `Project`, `Setting`, `FrameworkDefaults`, `AdapterError`) and the Ruff re-exports collection and the adapters share
 - `crates/aye-config`, `crates/aye-collect`, `crates/aye-select`: the project root and config loading, each value with its `ValueSource`, discovery infrastructure (walk, parse, recognize, refine), selection
 - `crates/aye-provision`: environments through a `Provisioner` (uv as a subprocess first; bring-your-own paths), the version matrix's supplier; design only so far
 - `crates/aye-runner`: workers, warm daemon, scheduling, backends, services, transport, and the embedded worker
@@ -38,7 +38,7 @@ Runner crates (engine-agnostic; must never depend on an `aye-adapter-*` crate):
 
 The engine crate (what workers run; the runner embeds it):
 
-- `crates/aye-engine`: aye's engine, in Python (`python/`: `aye_engine.py`, the model, the assertion rewriter, the native engine), standard library only, embedded in the binary; and the vocabulary's full definitions
+- `crates/aye-engine`: aye's engine, in Python (`python/`: `aye_engine.py`, the model, the assertion rewriter, the native engine), standard library only, embedded in the binary (`ENGINE`, which every worker installs first); and the vocabulary's full definitions
 
 Adapter crates (one framework each, implementing `aye-adapter`; only the binary links them):
 

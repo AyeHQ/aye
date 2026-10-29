@@ -15,7 +15,8 @@
 //! used by this adapter and by the pytest adapter, not a fourth adapter; it
 //! lands later behind the services interface in `aye-protocol`.
 //!
-//! Depends on: aye-adapter, aye-events, aye-protocol.
+//! Depends on: aye-adapter, aye-config (`[tool.aye.unittest]`, where a
+//! setting came from), aye-events, aye-fs (path algebra), aye-protocol.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **The reference is `python -m unittest discover` on Python 3.13**

@@ -15,17 +15,20 @@
 //! other run has the front-end list each test file (see [`native`]).
 //!
 //! Python half (embedded, standard library only): aye's own `pytest`
-//! module (`python/native/aye_pytest_shim.py`, the authoring API), the
-//! pytest front-end (`aye_pytest_frontend.py`), which reads a suite into
-//! aye's model and never runs a test, and the executor
-//! (`aye_pytest_native.py`), which hands that model to aye's engine.
+//! module (`python/native/aye_pytest_shim.py`, the authoring API, which the
+//! binary installs in every worker), the pytest front-end
+//! (`aye_pytest_frontend.py`), which reads a suite into aye's model and
+//! never runs a test, and the executor (`aye_pytest_native.py`), which
+//! hands that model to aye's engine.
 //!
 //! Owns: everything pytest-specific. Nothing here is questioned; the
 //! differential harness against plain pytest is the referee.
 //!
-//! Depends on: aye-adapter, aye-engine (the modules its front-end runs
-//! on), aye-events, aye-protocol. Must not be depended on by any runner
-//! crate; only the binary links it.
+//! Depends on: aye-adapter, aye-config (the INI and TOML loaders, where a
+//! setting came from, the worker count), aye-engine (the modules its
+//! front-end runs on), aye-events, aye-fs (path algebra), aye-protocol,
+//! aye-static (the variables it reads by name). Must not be depended on by
+//! any runner crate; only the binary links it.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **The project scan covers what pytest's session can load**: the

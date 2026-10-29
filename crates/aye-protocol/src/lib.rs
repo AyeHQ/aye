@@ -7,9 +7,9 @@
 //! [`Record`]. Beside the messages: a `maxfail` limit ([`MaxFail`]), the
 //! protocol's version ([`PROTOCOL_VERSION`]), the services a worker may
 //! provide ([`ServiceName`]), an adapter's runtime face ([`Runtime`]: the
-//! [`ModuleSet`] it installs, of [`ModuleSource`]s, the executor class it
-//! builds, an [`EntryPoint`], and its [`SessionMode`]), and the
-//! [`Refiner`] trait, which the runner implements and collection calls.
+//! [`ModuleSet`] of [`ModuleSource`]s a worker installs for it, the
+//! [`EntryPoint`] of the executor it builds, and its [`SessionMode`]), and
+//! the [`Refiner`] trait, which the runner implements and collection calls.
 //! `docs/protocol.md` describes the protocol on the wire.
 //!
 //! Runner → engine: services inside the worker (capture, coverage, soft sandbox,
@@ -31,6 +31,10 @@
 //! - **Services are looked up by name**, with `None` when absent, so new
 //!   services stay additive ([`ServiceName`] names them). An engine that
 //!   needs a service it doesn't get degrades or reports, never crashes.
+//! - **Embedded modules are lent, not copied**: a handshake borrows every
+//!   source from the binary ([`ModuleSource::embedded`]), some 600 KB for
+//!   the pytest adapter's, and each crate keeps its modules in install
+//!   order ([`ModuleSet`]), each importing only those before it.
 //! - **The executor protocol is JSON lines** over the worker's original
 //!   stdout, versioned by [`PROTOCOL_VERSION`] and checked at the handshake.
 //!   Requests are [`Request`]s; worker lines are [`WorkerLine`]s: either a

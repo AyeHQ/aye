@@ -9,7 +9,9 @@
 //! diffs instead of two text blobs. Per-example re-runs and an `--accept`
 //! mode that rewrites expected output in place are planned.
 //!
-//! Depends on: aye-adapter, aye-events, aye-protocol.
+//! Depends on: aye-adapter, aye-config (`[tool.aye.doctest]`, the INI and
+//! TOML loaders, where a setting came from), aye-events, aye-fs (path
+//! algebra), aye-protocol, aye-static (the variables it reads by name).
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **This crate is the doctest adapter, and it is native**: it maps

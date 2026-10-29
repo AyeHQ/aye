@@ -2,7 +2,8 @@
 
 The runner (`crates/aye-runner`) and each worker talk over the worker's stdin
 and stdout, one UTF-8 JSON object per line. The message types are in
-`crates/aye-protocol` (`Request`, `Reply`, `WorkerLine`, `Batch`, `Policy`).
+`crates/aye-protocol` (`Request`, `Reply`, `WorkerLine`, `Batch`, `Policy`;
+the handshake's `ModuleSource`, `ExecutorSpec` and `ServiceName`).
 The worker is `crates/aye-runner/python/aye_worker.py`. The protocol version
 is `PROTOCOL_VERSION` in `aye-protocol` and `PROTOCOL` in `aye_worker.py` and
 `aye_engine.py`, and the handshake checks it.
@@ -172,11 +173,17 @@ and `t_ms` (since the batch started); the runner adds `worker`, then `run`,
 
 ## Handshake
 
-`hello` carries everything the worker runs: aye's engine first, then each
-executor's modules, each once, in order. The worker installs every module
-into `sys.modules` from memory, under the file name `<aye:name>`, so
-tracebacks show its lines. It then builds the services named in `services`,
-and one executor per entry (`module:Class`) with the root and the services.
+`hello` carries everything the worker runs: aye's engine first
+(`aye_engine::ENGINE`), then the prelude the binary gives every worker
+(`registry::PRELUDE`: aye's `pytest` module and what it stands on), then
+each executor's own modules (its adapter's `Runtime`), each once, in
+order. Each module imports, as it is installed, only the standard library
+and the modules before it, which a test checks for every worker the
+adapters can have. The worker installs every module into `sys.modules`
+from memory, under the file name `<aye:name>`, so tracebacks show its
+lines. It then builds the services named in `services`, and one executor
+per entry (`module:Class`, an `EntryPoint`) with the root and the
+services.
 
 - A worker of another protocol version answers `ready` with its own version
   and installs nothing. The runner kills it and refuses to run.
@@ -190,11 +197,12 @@ A worker serves one adapter, so the runner sends one executor: that of
 the adapter of the worker's first batch, or of the files a refinement worker
 refines. A batch of another adapter gets a new worker.
 
-| Adapter | Module | Entry |
+| Adapter | Modules | Entry |
 |---|---|---|
-| `pytest` | `aye_model`, `aye_rewrite`, `aye_native_engine`, `pytest` (aye's own), `aye_pytest_frontend`, `aye_pytest_native` | `aye_pytest_native:NativeExecutor` (lists the session) |
-| `unittest` | `aye_model`, `aye_rewrite`, `aye_native_engine`, `pytest` (aye's own), `aye_engine_unittest` | `aye_engine_unittest:UnittestExecutor` |
-| `doctest` | `aye_model`, `aye_rewrite`, `aye_native_engine`, `pytest` (aye's own), `aye_engine_doctest` | `aye_engine_doctest:DoctestExecutor` |
+| every worker | `aye_engine`, then the prelude: `aye_model`, `aye_rewrite`, `aye_native_engine`, `pytest` (aye's own) | |
+| `pytest` | `aye_pytest_frontend`, `aye_pytest_native` | `aye_pytest_native:NativeExecutor` (lists the session) |
+| `unittest` | `aye_engine_unittest` | `aye_engine_unittest:UnittestExecutor` |
+| `doctest` | `aye_engine_doctest` | `aye_engine_doctest:DoctestExecutor` |
 
 Every worker gets aye's `pytest` module before its executor's own, so what a
 test, a conftest or the doctest adapter imports as `pytest` is aye's, even
@@ -239,10 +247,10 @@ adapter, every test file) and its context, reads `refined`, and shuts the
 worker down, unless its executor lists the session (below). Its records are
 not part of the run's log.
 
-An executor that lists the session (`lists_session`: the pytest adapter's)
-keeps what `refine` listed (the imported files, its model) for the
-batches it runs later, as each pytest-xdist worker collects the whole
-session:
+An executor that lists the session (`lists_session`, its runtime's
+`SessionMode::ListsSession`: the pytest adapter's) keeps what `refine`
+listed (the imported files, its model) for the batches it runs later, as
+each pytest-xdist worker collects the whole session:
 
 - The worker that refined is kept, with the environment of a run's first
   lane (`AYE_WORKER=0`, and `gw0` with several workers), for the next
@@ -376,8 +384,8 @@ runs its tests in plan order, as pytest-xdist's do.
   executors are imported, so a test that replaces `time.perf_counter`
   changes no duration.
 - Services are looked up by name (`Services.get` returns `None` when
-  absent), so new services stay additive. The names are listed in
-  `aye_protocol::services`. Today the runner asks for `context` (the test and
+  absent), so new services stay additive. `aye_protocol::ServiceName`
+  names them. Today the runner asks for `context` (the test and
   lifetimes running now) and `cleanup` (teardown registered on the running
   test), and the engine provides both. The others (capture, coverage,
   timeouts, patching, …) are not provided yet.
