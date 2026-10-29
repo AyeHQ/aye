@@ -23,7 +23,11 @@
 //!   `/private/tmp`, which is what the current directory reads as): when the
 //!   given directories share nothing lexically but do once resolved, their
 //!   common ancestor is the resolved one, and [`relative_to`] falls back to
-//!   resolved paths the same way.
+//!   resolved paths the same way. Where the two spellings share more than
+//!   the filesystem's root (both under Linux's `/tmp`), the common ancestor
+//!   stays lexical, as pytest's `get_common_ancestor` keeps it, but when no
+//!   project holds it the root is searched for from the resolved one
+//!   ([`project_root`]), so one command finds one root on every platform.
 //! - **`[tool.aye]` rejects unknown keys and values**, so a typo is an error
 //!   rather than a setting that silently does nothing: `output` must be
 //!   `text` or `json`, in any case as on the command line (it is kept in
@@ -206,9 +210,28 @@ fn resolve_existing(path: &Path) -> Option<PathBuf> {
 /// the crate docs); so is the result.
 pub fn common_ancestor(cwd: &Path, paths: &[PathBuf]) -> PathBuf {
     let cwd = normalize(cwd);
-    let dirs: Vec<PathBuf> = paths
+    let dirs = existing_dirs(&cwd, paths);
+    let Some(lexical) = deepest_common(&dirs) else {
+        return cwd;
+    };
+    if lexical.parent().is_none() && dirs.len() > 1 {
+        // Nothing in common but the filesystem's root: perhaps one directory
+        // spelled two ways.
+        if let Some(common) = resolved_common(&dirs)
+            && common.parent().is_some()
+        {
+            return common;
+        }
+    }
+    lexical
+}
+
+/// The existing paths of `paths` made absolute against `cwd` (already
+/// normalized), files as their parent directory.
+fn existing_dirs(cwd: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
+    paths
         .iter()
-        .map(|p| absolute(&cwd, p))
+        .map(|p| absolute(cwd, p))
         .filter(|p| p.exists())
         .map(|p| {
             if p.is_file() {
@@ -217,22 +240,14 @@ pub fn common_ancestor(cwd: &Path, paths: &[PathBuf]) -> PathBuf {
                 p
             }
         })
-        .collect();
-    let Some(lexical) = deepest_common(&dirs) else {
-        return cwd;
-    };
-    if lexical.parent().is_none() && dirs.len() > 1 {
-        // Nothing in common but the filesystem's root: perhaps one directory
-        // spelled two ways.
-        let resolved: Option<Vec<PathBuf>> =
-            dirs.iter().map(|d| fs::canonicalize(d).ok()).collect();
-        if let Some(common) = resolved.as_deref().and_then(deepest_common)
-            && common.parent().is_some()
-        {
-            return common;
-        }
-    }
-    lexical
+        .collect()
+}
+
+/// The deepest common ancestor of `dirs` resolved on the filesystem;
+/// `None` when one of them does not resolve.
+fn resolved_common(dirs: &[PathBuf]) -> Option<PathBuf> {
+    let resolved: Option<Vec<PathBuf>> = dirs.iter().map(|d| fs::canonicalize(d).ok()).collect();
+    deepest_common(&resolved?)
 }
 
 /// The deepest common ancestor of absolute paths, by whole components.
@@ -249,12 +264,41 @@ fn deepest_common(dirs: &[PathBuf]) -> Option<PathBuf> {
 /// first, so `<root>/tests/..` gives `<root>`.
 pub fn find_root(start: &Path) -> PathBuf {
     let start = normalize(start);
-    for marker in ["pyproject.toml", ".git"] {
-        if let Some(dir) = upward(&start).find(|d| d.join(marker).exists()) {
-            return dir.to_path_buf();
-        }
+    marked(&start).unwrap_or(start)
+}
+
+/// aye's project root for `paths` given in `cwd`: [`find_root`] from their
+/// [`common_ancestor`]. When nothing above that ancestor marks a project,
+/// but the paths, resolved, share a directory inside it (one directory
+/// spelled two ways under a shared `/tmp`, as on Linux), the search starts
+/// from that directory instead, so the root doesn't depend on how much two
+/// spellings happen to share.
+pub fn project_root(cwd: &Path, paths: &[PathBuf]) -> PathBuf {
+    let ancestor = normalize(&common_ancestor(cwd, paths));
+    if let Some(root) = marked(&ancestor) {
+        return root;
     }
-    start
+    let dirs = existing_dirs(&normalize(cwd), paths);
+    if dirs.len() > 1
+        && let Some(resolved) = resolved_common(&dirs)
+        && let Ok(real) = fs::canonicalize(&ancestor)
+        && resolved != real
+        && resolved.starts_with(&real)
+        && let Some(root) = marked(&resolved)
+    {
+        return root;
+    }
+    ancestor
+}
+
+/// The nearest directory from `start` upward holding a `pyproject.toml`,
+/// failing that a `.git`.
+fn marked(start: &Path) -> Option<PathBuf> {
+    ["pyproject.toml", ".git"].into_iter().find_map(|marker| {
+        upward(start)
+            .find(|d| d.join(marker).exists())
+            .map(Path::to_path_buf)
+    })
 }
 
 // ---------------------------------------------------------------- loaders
@@ -694,6 +738,8 @@ mod tests {
         } else {
             assert_eq!(common_ancestor(&cwd, &paths), lexical);
         }
+        // Either way, the root is the project's.
+        assert_eq!(project_root(&cwd, &paths), real.join("proj"));
         // One spelling alone is kept as given, symlinks unresolved.
         assert_eq!(
             common_ancestor(&cwd, &[alias.join("tests")]),
@@ -703,6 +749,10 @@ mod tests {
         std::os::unix::fs::symlink(real.join("proj/tests"), real.join("proj/linked")).unwrap();
         assert_eq!(
             common_ancestor(&cwd, &[PathBuf::from("linked"), PathBuf::from("tests")]),
+            real.join("proj")
+        );
+        assert_eq!(
+            project_root(&cwd, &[PathBuf::from("linked"), PathBuf::from("tests")]),
             real.join("proj")
         );
 

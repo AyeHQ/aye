@@ -81,9 +81,7 @@ fn a_root_reached_through_dot_dot_is_normalized() {
         ),
     ] {
         let given = [normalize(&cwd.join(path_part(arg)))];
-        let found = normalize(&aye_config::find_root(&aye_config::common_ancestor(
-            &cwd, &given,
-        )));
+        let found = normalize(&aye_config::project_root(&cwd, &given));
         assert_eq!(found, root, "{arg} from {}", cwd.display());
         assert_eq!(selector(&cwd, &found, arg), want);
     }
