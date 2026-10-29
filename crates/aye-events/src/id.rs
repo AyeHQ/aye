@@ -1,7 +1,7 @@
-//! Identities: of a test, its key, and the aliases for environments,
-//! lifetimes, workers and batches.
+//! Identities: of a test, its key, an adapter's name, and the aliases for
+//! environments, lifetimes, workers and batches.
 
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 use std::fmt;
 use std::str::FromStr;
 
@@ -255,6 +255,91 @@ impl fmt::Display for InvalidKey {
 
 impl std::error::Error for InvalidKey {}
 
+/// The name an adapter goes by (`pytest`): on each case and batch, in a
+/// refinement request, and as the key of what a run keeps by adapter. An
+/// open set, not an enum: each adapter names itself
+/// ([`AdapterName::new_static`]), and the crates on the runner's side carry
+/// a name as data and never branch on one. A name a worker, a stored log or
+/// a test gives is kept as it was written.
+///
+/// An adapter's own name is never blank, so the empty name, the default,
+/// names none: `aye show`'s case for a name collection didn't list, a
+/// batch the runner saw finish but not start.
+///
+/// It orders, compares and serializes as its text.
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AdapterName(Cow<'static, str>);
+
+impl AdapterName {
+    /// An adapter's own name, which is never blank.
+    pub const fn new_static(name: &'static str) -> Self {
+        assert!(!is_blank(name), "an adapter's name is never blank");
+        Self(Cow::Borrowed(name))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Whether `text` is empty or only white space.
+const fn is_blank(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        if !bytes[at].is_ascii_whitespace() {
+            return false;
+        }
+        at += 1;
+    }
+    true
+}
+
+/// A name as it was written.
+impl From<&'static str> for AdapterName {
+    fn from(name: &'static str) -> Self {
+        Self(Cow::Borrowed(name))
+    }
+}
+
+/// A name as it was written.
+impl From<String> for AdapterName {
+    fn from(name: String) -> Self {
+        Self(Cow::Owned(name))
+    }
+}
+
+impl fmt::Display for AdapterName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for AdapterName {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<str> for AdapterName {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<str> for AdapterName {
+    fn eq(&self, other: &str) -> bool {
+        *self.0 == *other
+    }
+}
+
+impl PartialEq<&str> for AdapterName {
+    fn eq(&self, other: &&str) -> bool {
+        *self.0 == **other
+    }
+}
+
 /// Identifies one environment (interpreter plus dependencies) within a run.
 pub type EnvironmentId = String;
 /// Identifies one lifetime within a run, e.g. `class:tests/t.py::TestX`.
@@ -406,6 +491,29 @@ mod tests {
         ] {
             assert_eq!(TestId::new(id).without_params(), without, "{id}");
         }
+    }
+
+    /// An adapter's name is its text, borrowed for an adapter's own and
+    /// owned for one read back.
+    #[test]
+    fn an_adapter_name_is_its_text() {
+        const PYTEST: AdapterName = AdapterName::new_static("pytest");
+        let read: AdapterName = serde_json::from_str("\"pytest\"").unwrap();
+        assert_eq!(read, PYTEST);
+        assert_eq!(serde_json::to_string(&PYTEST).unwrap(), "\"pytest\"");
+        assert_eq!(PYTEST.as_str(), "pytest");
+        assert_eq!(PYTEST.to_string(), "pytest");
+        assert_eq!(PYTEST, "pytest");
+        assert_eq!(AdapterName::from(String::from("pytest")), PYTEST);
+        let mut names = [PYTEST, AdapterName::from("doctest"), "unittest".into()];
+        names.sort();
+        assert_eq!(
+            names.map(|name| name.to_string()),
+            ["doctest", "pytest", "unittest"]
+        );
+        let by_name = std::collections::BTreeMap::from([(AdapterName::from("doctest"), 1)]);
+        assert_eq!(by_name.get("doctest"), Some(&1));
+        assert!(is_blank("") && is_blank(" \t") && !is_blank(" a"));
     }
 
     #[test]
