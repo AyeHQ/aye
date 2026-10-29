@@ -27,7 +27,7 @@ use aye_render::{
 };
 use aye_runner::{Echo, Plan, Runner, RunnerOptions};
 use aye_select::Selection;
-use aye_static::EnvVars;
+use aye_static::{EnvVars, ProcessEnv};
 
 use crate::args::{Args, Color, Maxfail, Output, Passed, passed, passed_maxfail};
 use crate::busy::Busy;
@@ -60,6 +60,9 @@ pub(crate) struct Session {
     python: PathBuf,
     python_source: aye_runner::PythonSource,
     workers: u32,
+    /// The environment aye started in, read once: what the adapters, the
+    /// interpreter's discovery and the reporters read.
+    env: ProcessEnv,
 }
 
 /// A positional argument and how it was read.
@@ -80,7 +83,7 @@ impl Positional {
 }
 
 impl Session {
-    pub(crate) fn new(args: Args) -> Result<Self> {
+    pub(crate) fn new(args: Args, env: ProcessEnv) -> Result<Self> {
         let cwd = std::env::current_dir().context("cannot read the current directory")?;
         // `.` and `..` are resolved lexically, as pytest's `os.path.abspath`
         // does, before the root is searched for.
@@ -120,6 +123,7 @@ impl Session {
             config.settings.python.as_deref(),
             &root,
             &cwd,
+            &env,
         )
         .context("no Python interpreter found: pass --python, or set [tool.aye] python")?;
         let project = Project {
@@ -128,6 +132,8 @@ impl Session {
             args: &paths,
             config_file: args.config_file.as_deref(),
             framework_args: &args.passthrough,
+            env: &env,
+            tool_aye: &config.settings,
         };
         // Before anything walks the tree: pytest would walk all of it, and
         // nobody means that.
@@ -146,7 +152,7 @@ impl Session {
         // `--co --no-refine` lists without importing: pytest's cases are the
         // static recognizer's prediction.
         let static_listing = args.no_refine && args.collect_only;
-        let chosen = registry::choose(&config.settings, &project, static_listing)?;
+        let chosen = registry::choose(&project, static_listing)?;
         let adapters_why = chosen.why;
         let adapters = chosen.adapters;
         // A run imports every pytest file it runs: aye's pytest front-end
@@ -199,6 +205,7 @@ impl Session {
             python,
             python_source,
             workers,
+            env,
         })
     }
 
@@ -334,6 +341,8 @@ impl Session {
             args: &self.paths,
             config_file: self.args.config_file.as_deref(),
             framework_args: &self.args.passthrough,
+            env: &self.env,
+            tool_aye: &self.config.settings,
         };
         // The refinement cache is keyed on what refining depends on: the
         // interpreter and its packages, the arguments after `--`, and the
@@ -665,7 +674,12 @@ impl Session {
     /// after `--` gives, from the adapter's context). Relative to the
     /// current directory; empty means none.
     fn junit(&self) -> Option<PathBuf> {
-        junit_path(&self.cwd, self.args.junit_xml.as_deref(), &self.defaults)
+        junit_path(
+            &self.env,
+            &self.cwd,
+            self.args.junit_xml.as_deref(),
+            &self.defaults,
+        )
     }
 
     /// `--output`, else `[tool.aye] output`, else text.
@@ -704,8 +718,11 @@ impl Session {
                         live: io::stdout().is_terminal(),
                     },
                 )));
-                if aye_render::github_actions_enabled() {
-                    let workspace = std::env::var_os(EnvVars::GITHUB_WORKSPACE).map(PathBuf::from);
+                if aye_render::github_actions_enabled(&self.env) {
+                    let workspace = self
+                        .env
+                        .get_os(EnvVars::GITHUB_WORKSPACE)
+                        .map(PathBuf::from);
                     let prefix = repository_prefix(&self.root, workspace.as_deref());
                     tee.push(Stdout::new(
                         GithubAnnotations::new(io::stdout()).with_path_prefix(prefix),
@@ -1535,14 +1552,18 @@ fn rerun_args(args: &Args) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// See [`Session::junit`].
+/// See [`Session::junit`]. `env` is the environment the command line's
+/// path is expanded with.
 fn junit_path(
+    env: &ProcessEnv,
     cwd: &Path,
     given: Option<&Path>,
     defaults: &[(AdapterName, FrameworkDefaults)],
 ) -> Option<PathBuf> {
     let path = match given {
-        Some(given) => aye_fs::expand_path(&given.to_string_lossy(), |name| std::env::var_os(name)),
+        Some(given) => aye_fs::expand_path(&given.to_string_lossy(), |name| {
+            env.get_os(name).map(ToOwned::to_owned)
+        }),
         None => first(defaults, |d| d.junit.path.clone())?,
     };
     (!path.as_os_str().is_empty()).then(|| cwd.join(path))

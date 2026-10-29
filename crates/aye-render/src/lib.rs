@@ -146,7 +146,8 @@
 //!   the run finishes, capped at 50; paths can be prefixed for projects below
 //!   the repository's root (the binary prefixes the root's path relative to
 //!   `GITHUB_WORKSPACE`). A diagnostic about no file is annotated on none.
-//!   The binary enables them when [`github_actions_enabled`].
+//!   The binary enables them when [`github_actions_enabled`] says of the
+//!   environment it read.
 
 use std::io;
 

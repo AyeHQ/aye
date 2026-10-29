@@ -699,14 +699,16 @@ fn only_the_command_lines_malformed_expressions_are_usage_errors() {
 #[test]
 fn the_junit_report_can_come_from_the_framework() {
     let cwd = Path::new("/work/sub");
+    let no_env = ProcessEnv::new();
     let context = |path: &str| from_contexts(&[serde_json::json!({ "junitxml": path })]);
     assert_eq!(
-        junit_path(cwd, None, &context("reports/out.xml")),
+        junit_path(&no_env, cwd, None, &context("reports/out.xml")),
         Some(PathBuf::from("/work/sub/reports/out.xml"))
     );
     // The command line's wins.
     assert_eq!(
         junit_path(
+            &no_env,
             cwd,
             Some(Path::new("mine.xml")),
             &context("reports/out.xml")
@@ -714,30 +716,38 @@ fn the_junit_report_can_come_from_the_framework() {
         Some(PathBuf::from("/work/sub/mine.xml"))
     );
     assert_eq!(
-        junit_path(cwd, None, &context("/abs/out.xml")),
+        junit_path(&no_env, cwd, None, &context("/abs/out.xml")),
         Some(PathBuf::from("/abs/out.xml"))
     );
     // pytest writes no report for an empty path.
-    assert_eq!(junit_path(cwd, None, &context("")), None);
+    assert_eq!(junit_path(&no_env, cwd, None, &context("")), None);
     assert_eq!(
-        junit_path(cwd, None, &from_contexts(&[serde_json::Value::Null])),
+        junit_path(
+            &no_env,
+            cwd,
+            None,
+            &from_contexts(&[serde_json::Value::Null])
+        ),
         None
     );
-    assert_eq!(junit_path(cwd, None, &[]), None);
-    // The command line's is read as pytest reads it; the framework's is
-    // the path the adapter worked out.
-    if let Some(home) = home() {
-        assert_eq!(
-            junit_path(cwd, Some(Path::new("~/r.xml")), &[]),
-            Some(Path::new(&home).join("r.xml"))
-        );
-    }
+    assert_eq!(junit_path(&no_env, cwd, None, &[]), None);
+    // The command line's is read as pytest reads it, over the environment
+    // aye started in; the framework's is the path the adapter worked out.
+    let home = ProcessEnv::from_vars([("HOME", "/home/me")]);
     assert_eq!(
-        junit_path(cwd, Some(Path::new("")), &context("x.xml")),
+        junit_path(&home, cwd, Some(Path::new("~/r.xml")), &[]),
+        Some(PathBuf::from("/home/me/r.xml"))
+    );
+    assert_eq!(
+        junit_path(&home, cwd, Some(Path::new("$HOME/${AYE_UNSET}.xml")), &[]),
+        Some(PathBuf::from("/home/me/${AYE_UNSET}.xml"))
+    );
+    assert_eq!(
+        junit_path(&no_env, cwd, Some(Path::new("")), &context("x.xml")),
         None
     );
     assert_eq!(
-        junit_path(cwd, None, &context("$HOME/r.xml")),
+        junit_path(&no_env, cwd, None, &context("$HOME/r.xml")),
         Some(PathBuf::from("/work/sub/$HOME/r.xml"))
     );
     // pytest's `--junitprefix` comes with it.
@@ -749,13 +759,6 @@ fn the_junit_report_can_come_from_the_framework() {
         "ci"
     );
     assert_eq!(junit_prefix(&context("x.xml")), "");
-}
-
-/// The home directory `~` stands for, as [`aye_fs::expand_path`] finds it.
-fn home() -> Option<String> {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .ok()
 }
 
 #[cfg(unix)]
@@ -1035,13 +1038,7 @@ fn the_adapters_defaults_are_what_their_contexts_say() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::write(root.join(name), body).unwrap();
-        let project = Project {
-            root,
-            cwd: root,
-            args: &[],
-            config_file: None,
-            framework_args: &[],
-        };
+        let project = Project::new(root, root);
         for adapter in &adapters {
             let Some(recognizer) = adapter.prepare_among(&project, &names).unwrap() else {
                 continue;

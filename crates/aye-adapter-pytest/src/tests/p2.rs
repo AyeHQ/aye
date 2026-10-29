@@ -92,13 +92,7 @@ fn pytest_plugins_from_the_environment_are_session_plugins() {
         "test_a.py",
         "def test_a(): pass\ndef test_n(num): pass\n",
     );
-    let project = Project {
-        root,
-        cwd: root,
-        args: &[],
-        config_file: None,
-        framework_args: &[],
-    };
+    let project = Project::new(root, root);
     // A project module: its fixtures count.
     let with_plugins = |plugins: &str| {
         PytestRecognizer::with_environment(
@@ -358,13 +352,7 @@ fn pythonpath_directories_are_project_files() {
         "test_ext.py",
         "from extlib.cases import ApiChecks\n\ndef test_local():\n    pass\n",
     );
-    let project = Project {
-        root: &root,
-        cwd: &root,
-        args: &[],
-        config_file: None,
-        framework_args: &[],
-    };
+    let project = Project::new(&root, &root);
     let pythonpath = ext.to_string_lossy().into_owned();
     let recognizer = PytestRecognizer::with_environment(
         &project,

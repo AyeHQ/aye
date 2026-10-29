@@ -373,7 +373,7 @@ fn determine_setup(
         return Ok((rootdir, inifile, config));
     };
     // `absolutepath(os.path.expandvars(rootdir_cmd_arg))`.
-    let rootdir = aye_fs::normalize_absolute(&project.cwd.join(expandvars(arg)));
+    let rootdir = aye_fs::normalize_absolute(&project.cwd.join(expandvars(project.env, arg)));
     if !rootdir.is_dir() {
         return Err(AdapterError::Config(format!(
             "Directory '{}' not found. Check your '--rootdir' option.",
@@ -769,9 +769,8 @@ pub(crate) fn split_junit(args: &[String]) -> (Vec<String>, Junit) {
 }
 
 /// Python's `os.path.expandvars`: `ntpath`'s on Windows, else `posixpath`'s,
-/// over the environment as `os.environ` has it.
-fn expandvars(text: &str) -> String {
-    let env = ProcessEnv::from_process();
+/// over the environment, whichever variable `text` names.
+fn expandvars(env: &ProcessEnv, text: &str) -> String {
     let var = |name: &str| env.get(name).map(str::to_string);
     if cfg!(windows) {
         nt_expandvars(text, var)
@@ -781,9 +780,8 @@ fn expandvars(text: &str) -> String {
 }
 
 /// Python's `os.path.expanduser`: `ntpath`'s on Windows, else
-/// `posixpath`'s, over the environment as `os.environ` has it.
-fn expanduser(text: &str) -> String {
-    let env = ProcessEnv::from_process();
+/// `posixpath`'s, over the environment.
+fn expanduser(env: &ProcessEnv, text: &str) -> String {
     let var = |name: &str| env.get(name).map(str::to_string);
     if cfg!(windows) {
         nt_expanduser(text, var)
@@ -942,9 +940,9 @@ fn nt_join(head: &str, tail: &str) -> String {
 
 /// The report `--junitxml VALUE` asks for, where pytest writes it:
 /// `os.path.abspath(os.path.expanduser(os.path.expandvars(VALUE)))` from
-/// the current directory; `None` when the value is empty. A directory is
-/// pytest's usage error.
-fn report_path(cwd: &Path, value: &str) -> Result<Option<PathBuf>, AdapterError> {
+/// the current directory, over the environment `env`; `None` when the
+/// value is empty. A directory is pytest's usage error.
+fn report_path(env: &ProcessEnv, cwd: &Path, value: &str) -> Result<Option<PathBuf>, AdapterError> {
     if value.is_empty() {
         return Ok(None);
     }
@@ -953,7 +951,7 @@ fn report_path(cwd: &Path, value: &str) -> Result<Option<PathBuf>, AdapterError>
             "--junitxml must be a filename, given: {value}"
         )));
     }
-    let expanded = expanduser(&expandvars(value));
+    let expanded = expanduser(env, &expandvars(env, value));
     Ok(Some(aye_fs::normalize_absolute(&cwd.join(expanded))))
 }
 
@@ -1083,10 +1081,9 @@ fn option_values(args: &[String], long: &str, short: Option<&str>) -> Vec<String
 
 impl PytestConfig {
     /// Discover the configuration the way pytest would for `project`, with
-    /// `PYTEST_ADDOPTS` from the environment.
+    /// `PYTEST_ADDOPTS` from its environment.
     pub fn discover(project: &Project<'_>) -> Result<Self, AdapterError> {
-        let env = std::env::var(EnvVars::PYTEST_ADDOPTS).ok();
-        Self::discover_with(project, env.as_deref())
+        Self::discover_with(project, project.env.get(EnvVars::PYTEST_ADDOPTS))
     }
 
     /// [`Self::discover`] with `PYTEST_ADDOPTS` given.
@@ -1268,7 +1265,7 @@ impl PytestConfig {
             .or(from_env.junit.xml)
             .or(from_addopts.junit.xml)
         {
-            Some(value) => report_path(cwd, &value)?,
+            Some(value) => report_path(project.env, cwd, &value)?,
             None => None,
         };
         let junit_prefix = from_cli
@@ -1467,11 +1464,8 @@ mod tests {
         let args: Vec<PathBuf> = args.iter().map(PathBuf::from).collect();
         PytestConfig::discover_with(
             &Project {
-                root: cwd,
-                cwd,
                 args: &args,
-                config_file: None,
-                framework_args: &[],
+                ..Project::new(cwd, cwd)
             },
             None,
         )
@@ -1518,13 +1512,7 @@ mod tests {
             "pyproject.toml",
             "[tool.pytest]\naddopts = \"-ra\"\n",
         );
-        let project = Project {
-            root: dir.path(),
-            cwd: dir.path(),
-            args: &[],
-            config_file: None,
-            framework_args: &[],
-        };
+        let project = Project::new(dir.path(), dir.path());
         assert!(PytestConfig::discover_with(&project, None).is_err());
 
         write(
@@ -1598,13 +1586,7 @@ mod tests {
     fn setup_cfg_plain_pytest_section_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         write(dir.path(), "setup.cfg", "[pytest]\naddopts = -q\n");
-        let project = Project {
-            root: dir.path(),
-            cwd: dir.path(),
-            args: &[],
-            config_file: None,
-            framework_args: &[],
-        };
+        let project = Project::new(dir.path(), dir.path());
         let err = PytestConfig::discover_with(&project, None).unwrap_err();
         assert!(err.to_string().contains("[tool:pytest]"), "{err}");
     }
@@ -1636,11 +1618,8 @@ mod tests {
             "[pytest]\npython_classes = Check\n",
         );
         let project = Project {
-            root: dir.path(),
-            cwd: dir.path(),
-            args: &[],
             config_file: Some(Path::new("ci/custom.ini")),
-            framework_args: &[],
+            ..Project::new(dir.path(), dir.path())
         };
         let config = PytestConfig::discover_with(&project, None).unwrap();
         assert_eq!(config.rootdir, dir.path().join("ci"));
@@ -1755,17 +1734,7 @@ mod tests {
     }
 
     fn discover_env(cwd: &Path, env: &str) -> PytestConfig {
-        PytestConfig::discover_with(
-            &Project {
-                root: cwd,
-                cwd,
-                args: &[],
-                config_file: None,
-                framework_args: &[],
-            },
-            Some(env),
-        )
-        .unwrap()
+        PytestConfig::discover_with(&Project::new(cwd, cwd), Some(env)).unwrap()
     }
 
     #[test]
@@ -1866,11 +1835,8 @@ mod tests {
         let framework_args: Vec<String> = framework_args.iter().map(|s| (*s).to_string()).collect();
         PytestConfig::discover_with(
             &Project {
-                root: cwd,
-                cwd,
-                args: &[],
-                config_file: None,
                 framework_args: &framework_args,
+                ..Project::new(cwd, cwd)
             },
             env,
         )
@@ -2066,20 +2032,30 @@ mod tests {
         assert_eq!(config.args, ["-ra", "-q"]);
         let config = discover_args(root, None, &["--junitxml="]);
         assert_eq!(config.junitxml, None);
-        // `os.path.expandvars` and `expanduser`, as pytest's `LogXML`:
-        // `ntpath`'s on Windows, where the home is `USERPROFILE`.
-        let (home, reference) = if cfg!(windows) {
+        // `os.path.expandvars` and `expanduser`, as pytest's `LogXML`, over
+        // the project's environment: `ntpath`'s on Windows, where the home
+        // is `USERPROFILE`.
+        let (name, reference) = if cfg!(windows) {
             ("USERPROFILE", "%USERPROFILE%")
         } else {
             ("HOME", "${HOME}")
         };
-        let home = PathBuf::from(std::env::var(home).unwrap());
-        let config = discover_args(root, None, &["--junitxml=~/r.xml"]);
-        assert_eq!(config.junitxml, Some(home.join("r.xml")));
-        let arg = format!("--junitxml={reference}/x/$AYE_UNSET_VAR.xml");
-        let config = discover_args(root, None, &[&arg]);
+        let home = root.join("home");
+        let env = ProcessEnv::from_vars([(name, home.as_os_str())]);
+        let expanded = |arg: &str| {
+            let framework_args = [arg.to_string()];
+            let project = Project {
+                framework_args: &framework_args,
+                env: &env,
+                ..Project::new(root, root)
+            };
+            PytestConfig::discover_with(&project, None)
+                .unwrap()
+                .junitxml
+        };
+        assert_eq!(expanded("--junitxml=~/r.xml"), Some(home.join("r.xml")));
         assert_eq!(
-            config.junitxml,
+            expanded(&format!("--junitxml={reference}/x/$AYE_UNSET_VAR.xml")),
             Some(home.join("x").join("$AYE_UNSET_VAR.xml"))
         );
         // A directory is pytest's usage error.

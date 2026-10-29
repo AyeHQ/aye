@@ -254,6 +254,18 @@ pub struct AyeSettings {
 }
 
 impl AyeSettings {
+    /// No `[tool.aye]`: nothing set, as [`AyeSettings::default`].
+    pub const NONE: Self = Self {
+        workers: None,
+        python: None,
+        output: None,
+        timeout: None,
+        adapters: None,
+        keep_runs: None,
+        unittest: None,
+        doctest: None,
+    };
+
     /// Check the values serde's types let through, and put `output` in
     /// lower case.
     fn check(&mut self) -> Result<(), String> {

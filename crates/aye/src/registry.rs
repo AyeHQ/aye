@@ -11,7 +11,6 @@ use std::fmt;
 use anyhow::{Context as _, Result, bail};
 use aye_adapter::{Adapter, AdapterError, Project, Recognizer};
 use aye_adapter_pytest::native::SHIM_MODULE;
-use aye_config::AyeSettings;
 use aye_engine::{MODEL_MODULE, NATIVE_ENGINE_MODULE, REWRITE_MODULE};
 use aye_events::AdapterName;
 use aye_protocol::{EmbeddedModule, Executor};
@@ -154,12 +153,9 @@ impl fmt::Display for Why {
 /// `static_listing` (`aye --co --no-refine`), the pytest adapter predicts
 /// its cases without importing. The tables of adapters that don't run
 /// (`[tool.aye.unittest]`) are checked all the same: a bad value is an
-/// error whichever adapters run.
-pub(crate) fn choose(
-    settings: &AyeSettings,
-    project: &Project<'_>,
-    static_listing: bool,
-) -> Result<Chosen> {
+/// error whichever adapters run. `[tool.aye]` is the project's.
+pub(crate) fn choose(project: &Project<'_>, static_listing: bool) -> Result<Chosen> {
+    let settings = project.tool_aye;
     let (names, why) = match &settings.adapters {
         Some(names) => (names.clone(), Why::Configured),
         None => (
@@ -202,6 +198,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    use aye_config::AyeSettings;
     use aye_static::EnvVars;
 
     use super::*;
@@ -212,13 +209,11 @@ mod tests {
         fs::write(path, body).unwrap();
     }
 
-    fn project<'a>(root: &'a Path, args: &'a [PathBuf]) -> Project<'a> {
+    fn project<'a>(root: &'a Path, args: &'a [PathBuf], tool_aye: &'a AyeSettings) -> Project<'a> {
         Project {
-            root,
-            cwd: root,
             args,
-            config_file: None,
-            framework_args: &[],
+            tool_aye,
+            ..Project::new(root, root)
         }
     }
 
@@ -228,7 +223,7 @@ mod tests {
             adapters: chosen.map(|names| names.iter().map(ToString::to_string).collect()),
             ..AyeSettings::default()
         };
-        choose(&settings, &project(dir.path(), &[]), false).map(|c| c.names())
+        choose(&project(dir.path(), &[], &settings), false).map(|c| c.names())
     }
 
     #[test]
@@ -266,7 +261,7 @@ mod tests {
         );
         let settings = AyeSettings::default();
         let chosen = |args: &[PathBuf]| {
-            let chosen = choose(&settings, &project(root, args), false).unwrap();
+            let chosen = choose(&project(root, args, &settings), false).unwrap();
             (chosen.names(), chosen.why)
         };
         let default = (
@@ -336,7 +331,7 @@ mod tests {
             "[tool.aye.doctest]\nfoo = 1\n",
             "[tool.aye.doctest]\nmodules = \"yes\"\n",
         ] {
-            let err = choose(&settings(table), &project(root, &[]), false)
+            let err = choose(&project(root, &[], &settings(table)), false)
                 .err()
                 .unwrap_or_else(|| panic!("{table}: accepted"));
             assert!(
@@ -346,7 +341,7 @@ mod tests {
         }
         let good = settings("[tool.aye.unittest]\npattern = \"*_test.py\"\n");
         assert_eq!(
-            choose(&good, &project(root, &[]), false).unwrap().names(),
+            choose(&project(root, &[], &good), false).unwrap().names(),
             ["pytest"]
         );
     }

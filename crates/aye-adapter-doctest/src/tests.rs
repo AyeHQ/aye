@@ -65,13 +65,15 @@ fn write(root: &Path, rel: &str, body: &str) {
     std::fs::write(path, body).unwrap();
 }
 
+/// The project at `root`, with `[tool.aye]` as the binary loads it from
+/// its `pyproject.toml` (kept for the rest of the test run).
 fn project<'a>(root: &'a Path, args: &'a [PathBuf], framework_args: &'a [String]) -> Project<'a> {
+    let tool_aye = aye_config::AyeConfig::load(root).unwrap().settings;
     Project {
-        root,
-        cwd: root,
         args,
-        config_file: None,
         framework_args,
+        tool_aye: Box::leak(Box::new(tool_aye)),
+        ..Project::new(root, root)
     }
 }
 

@@ -111,13 +111,7 @@ fn reasons_name_pytest_plugins_plugins() {
         "import pytest\n@pytest.mark.parametrize('x', [3])\ndef test_hk(x):\n    pass\n",
     );
     let reason = |addopts: Option<&str>, plugins: Option<&str>| {
-        let project = Project {
-            root,
-            cwd: root,
-            args: &[],
-            config_file: None,
-            framework_args: &[],
-        };
+        let project = Project::new(root, root);
         let recognizer = PytestRecognizer::with_environment(
             &project,
             PytestEnv {
@@ -179,11 +173,9 @@ fn prepared(
     let args: Vec<PathBuf> = args.iter().map(PathBuf::from).collect();
     let framework_args: Vec<String> = framework_args.iter().map(|s| (*s).to_string()).collect();
     let project = Project {
-        root,
-        cwd: root,
         args: &args,
-        config_file: None,
         framework_args: &framework_args,
+        ..Project::new(root, root)
     };
     // What `Pytest::prepare_among` builds, with no `PYTEST_ADDOPTS`.
     let recognizer = PytestRecognizer::with_env(&project, None).unwrap();
@@ -215,13 +207,7 @@ fn the_adapter_prepares_pytests_doctests_only_without_the_doctest_adapter() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     project(root);
-    let project = Project {
-        root,
-        cwd: root,
-        args: &[],
-        config_file: None,
-        framework_args: &[],
-    };
+    let project = Project::new(root, root);
     let args =
         |recognizer: &dyn Recognizer| recognizer.context().into_value()["native"]["args"].clone();
     let alone = Pytest::default()
@@ -377,11 +363,8 @@ fn pytests_doctest_options_reach_the_front_end_without_the_doctest_adapter() {
     ];
     let args: Vec<String> = framework_args.iter().map(|s| (*s).to_string()).collect();
     let project = Project {
-        root,
-        cwd: root,
-        args: &[],
-        config_file: None,
         framework_args: &args,
+        ..Project::new(root, root)
     };
     let recognizer = PytestRecognizer::with_env(
         &project,

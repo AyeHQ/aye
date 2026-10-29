@@ -1,12 +1,13 @@
 //! What an adapter implements. [`Adapter`] maps one framework onto aye's
-//! engine: it prepares a [`Recognizer`] for a [`Project`] (or fails with an
-//! [`AdapterError`]), and gives the runtime face a worker installs
+//! engine: it prepares a [`Recognizer`] for a [`Project`] (with the
+//! environment and `[tool.aye]` as the binary read them), or fails with an
+//! [`AdapterError`], and gives the runtime face a worker installs
 //! ([`Executor`]). The recognizer is its static face: it [`Claim`]s paths,
 //! named or found ([`Requested`]), predicts the tests of a parsed
-//! [`SourceFile`] (a [`Recognition`]),
-//! reports the [`Setting`]s it resolved, for `aye config`, says what the
-//! framework's own configuration says about the run ([`FrameworkDefaults`],
-//! with [`JunitDefaults`]), and gives the context its executor gets. Ruff's
+//! [`SourceFile`] (a [`Recognition`]), reports the [`Setting`]s it
+//! resolved, for `aye config`, says what the framework's own configuration
+//! says about the run ([`FrameworkDefaults`], with [`JunitDefaults`]), and
+//! gives the context its executor gets. Ruff's
 //! syntax tree, line index and text ranges are re-exported ([`ast`],
 //! [`LineIndex`], [`TextRange`], [`TextSize`], [`Ranged`]), so collection
 //! and every adapter name the one version of them aye pins.
@@ -22,10 +23,11 @@
 //! `aye-adapter-*` crates; the worker protocol (`aye-protocol`); aye's
 //! engine (`aye-engine`).
 //!
-//! Depends on: aye-events, aye-protocol, aye-config (for the worker
-//! count), and Ruff's `ruff_python_ast`, `ruff_source_file` and
-//! `ruff_text_size`, with the `get-size2` pin that goes with them (see the
-//! workspace `Cargo.toml`). Must not depend on the runner or any adapter.
+//! Depends on: aye-events, aye-protocol, aye-config (for `[tool.aye]` and
+//! the worker count), aye-static (for the environment), and Ruff's
+//! `ruff_python_ast`, `ruff_source_file` and `ruff_text_size`, with the
+//! `get-size2` pin that goes with them (see the workspace `Cargo.toml`).
+//! Must not depend on the runner or any adapter.
 //!
 //! Open: how rich affinity/scope declarations must be to carry pytest's five
 //! fixture scopes and unittest's class/module setup.
@@ -49,9 +51,10 @@
 
 use std::path::{Path, PathBuf};
 
-use aye_config::WorkerCount;
+use aye_config::{AyeSettings, WorkerCount};
 use aye_events::{AdapterName, Case, Diagnostic, IdPrefix, LineNumber, ProjectPathRef, Span};
 use aye_protocol::{AdapterContext, Executor, MaxFail};
+use aye_static::ProcessEnv;
 use serde::{Deserialize, Serialize};
 
 pub use ruff_python_ast as ast;
@@ -73,6 +76,35 @@ pub struct Project<'a> {
     /// read what affects collection from them and pass them on to
     /// refinement through their context.
     pub framework_args: &'a [String],
+    /// The environment aye started in, which the workers inherit, read
+    /// once by the binary: the variables a framework reads by name
+    /// (`PYTEST_ADDOPTS`), and any a path it expands names. Adapters read
+    /// it here, never from the process.
+    pub env: &'a ProcessEnv,
+    /// `[tool.aye]`, as the binary loaded it from the root's
+    /// `pyproject.toml`: an adapter reads its own table here
+    /// (`[tool.aye.unittest]`), never from the file.
+    pub tool_aye: &'a AyeSettings,
+}
+
+impl<'a> Project<'a> {
+    /// The project at `root`, aye started in `cwd`, with nothing else
+    /// given: no paths, no config file, no framework arguments, an empty
+    /// environment and no `[tool.aye]`. For tests, and for the rest given
+    /// with struct update syntax.
+    pub fn new(root: &'a Path, cwd: &'a Path) -> Self {
+        static NO_ENV: ProcessEnv = ProcessEnv::new();
+        static NO_TOOL_AYE: AyeSettings = AyeSettings::NONE;
+        Self {
+            root,
+            cwd,
+            args: &[],
+            config_file: None,
+            framework_args: &[],
+            env: &NO_ENV,
+            tool_aye: &NO_TOOL_AYE,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

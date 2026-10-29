@@ -1056,11 +1056,8 @@ mod tests {
 
     fn recognizer(root: &Path, framework_args: &[String]) -> NativeRecognizer {
         let project = Project {
-            root,
-            cwd: root,
-            args: &[],
-            config_file: None,
             framework_args,
+            ..Project::new(root, root)
         };
         NativeRecognizer::new(PytestRecognizer::with_env(&project, None).unwrap(), false)
     }
@@ -1266,13 +1263,7 @@ mod tests {
         let root = dir.path();
         let source = ">>> 1 + 1\n2\n";
         write(root, "test_notes.txt", source);
-        let project = Project {
-            root,
-            cwd: root,
-            args: &[],
-            config_file: None,
-            framework_args: &[],
-        };
+        let project = Project::new(root, root);
         let recognizer = Pytest::default()
             .prepare_among(&project, &[NAME])
             .unwrap()
@@ -1331,13 +1322,7 @@ mod tests {
             "import pytest\n\n@pytest.mark.parametrize('x', make())\ndef test_b(x):\n    pass\n";
         write(root, "test_a.py", exact);
         write(root, "test_b.py", dynamic);
-        let project = Project {
-            root,
-            cwd: root,
-            args: &[],
-            config_file: None,
-            framework_args: &[],
-        };
+        let project = Project::new(root, root);
         let listing = Pytest::static_listing()
             .prepare_among(&project, &[DOCTEST, NAME])
             .unwrap()
@@ -1422,11 +1407,8 @@ mod tests {
         write(root, "tests/b/helpers.py", "");
         let cli = strings(&["-o", "xfail_strict=true", "--runslow"]);
         let project = Project {
-            root,
-            cwd: root,
-            args: &[],
-            config_file: None,
             framework_args: &cli,
+            ..Project::new(root, root)
         };
         let env = crate::PytestEnv {
             pytest_addopts: Some("-v"),

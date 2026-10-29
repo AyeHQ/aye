@@ -326,7 +326,7 @@ use aye_events::{
     AdapterName, AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity, Span,
 };
 use aye_protocol::{AdapterContext, EmbeddedModule, Executor};
-use aye_static::EnvVars;
+use aye_static::{EnvVars, ProcessEnv};
 
 pub use config::{DoctestConfig, ImportMode};
 
@@ -450,16 +450,16 @@ pub struct Env {
 }
 
 impl Env {
-    /// The variables, from the process's environment.
-    pub fn from_process() -> Self {
+    /// The variables, as `env` holds them.
+    pub fn of(env: &ProcessEnv) -> Self {
         Self {
-            pytest_addopts: std::env::var(EnvVars::PYTEST_ADDOPTS).ok(),
-            python_optimize: std::env::var(EnvVars::PYTHONOPTIMIZE).ok(),
-            ignore_import_mismatch: std::env::var(EnvVars::PY_IGNORE_IMPORTMISMATCH)
-                .is_ok_and(|v| v == "1"),
-            pytest_plugins: std::env::var(EnvVars::PYTEST_PLUGINS)
-                .ok()
-                .filter(|v| !v.trim().is_empty()),
+            pytest_addopts: env.get(EnvVars::PYTEST_ADDOPTS).map(str::to_string),
+            python_optimize: env.get(EnvVars::PYTHONOPTIMIZE).map(str::to_string),
+            ignore_import_mismatch: env.get(EnvVars::PY_IGNORE_IMPORTMISMATCH) == Some("1"),
+            pytest_plugins: env
+                .get(EnvVars::PYTEST_PLUGINS)
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_string),
         }
     }
 }
@@ -753,11 +753,11 @@ impl DoctestRecognizer {
     /// `pytest`, `test*.txt` files are doctests without a pytest
     /// configuration file too.
     pub fn among(project: &Project<'_>, adapters: &[AdapterName]) -> Result<Self, AdapterError> {
-        Self::with_environment(project, adapters, &Env::from_process())
+        Self::with_environment(project, adapters, &Env::of(project.env))
     }
 
     /// [`Self::new`] with `PYTEST_ADDOPTS` and `PYTHONOPTIMIZE` given
-    /// rather than read from the environment.
+    /// rather than taken from the project's environment.
     pub fn with_env(
         project: &Project<'_>,
         pytest_addopts: Option<&str>,
@@ -782,17 +782,16 @@ impl DoctestRecognizer {
         Self::with_environment(project, adapters, &env)
     }
 
-    /// [`Self::among`] with the environment variables given.
+    /// [`Self::among`] with the environment variables given rather than
+    /// taken from the project's environment.
     pub fn with_environment(
         project: &Project<'_>,
         adapters: &[AdapterName],
         env: &Env,
     ) -> Result<Self, AdapterError> {
-        let aye = aye_config::AyeConfig::load(project.root)
-            .map_err(|e| AdapterError::Config(e.to_string()))?;
         let pyproject = project.root.join("pyproject.toml");
-        let table = aye
-            .settings
+        let table = project
+            .tool_aye
             .doctest
             .as_ref()
             .map(|t| (t, pyproject.as_path()));

@@ -475,7 +475,7 @@ use aye_adapter::{
 use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 use aye_fs::normalize_absolute;
 use aye_protocol::AdapterContext;
-use aye_static::EnvVars;
+use aye_static::{EnvVars, ProcessEnv};
 
 pub use config::{PytestConfig, split_xdist};
 pub use native::{NAME, Pytest};
@@ -567,6 +567,17 @@ pub struct PytestEnv<'e> {
     pub pytest_plugins: Option<&'e str>,
     /// `PYTHONPATH`.
     pub pythonpath: Option<&'e str>,
+}
+
+impl<'e> PytestEnv<'e> {
+    /// The variables, as `env` holds them.
+    pub fn of(env: &'e ProcessEnv) -> Self {
+        Self {
+            pytest_addopts: env.get(EnvVars::PYTEST_ADDOPTS),
+            pytest_plugins: env.get(EnvVars::PYTEST_PLUGINS),
+            pythonpath: env.get(EnvVars::PYTHONPATH),
+        }
+    }
 }
 
 /// pytest's `builtin_plugins`, and the plugins merged into pytest that it
@@ -723,22 +734,14 @@ fn module_name(root: &Path, file: &Path) -> Option<String> {
 }
 
 impl PytestRecognizer {
+    /// The recognizer for `project`, with the variables its environment
+    /// holds.
     pub fn new(project: &Project<'_>) -> Result<Self, AdapterError> {
-        let addopts = std::env::var(EnvVars::PYTEST_ADDOPTS).ok();
-        let plugins = std::env::var(EnvVars::PYTEST_PLUGINS).ok();
-        let pythonpath = std::env::var(EnvVars::PYTHONPATH).ok();
-        Self::with_environment(
-            project,
-            PytestEnv {
-                pytest_addopts: addopts.as_deref(),
-                pytest_plugins: plugins.as_deref(),
-                pythonpath: pythonpath.as_deref(),
-            },
-        )
+        Self::with_environment(project, PytestEnv::of(project.env))
     }
 
-    /// [`Self::new`] with `PYTEST_ADDOPTS` given rather than read from the
-    /// environment, and neither `PYTEST_PLUGINS` nor `PYTHONPATH`.
+    /// [`Self::new`] with `PYTEST_ADDOPTS` given rather than taken from the
+    /// project's environment, and neither `PYTEST_PLUGINS` nor `PYTHONPATH`.
     pub fn with_env(
         project: &Project<'_>,
         pytest_addopts: Option<&str>,
@@ -752,7 +755,8 @@ impl PytestRecognizer {
         )
     }
 
-    /// [`Self::new`] with the environment given rather than read.
+    /// [`Self::new`] with the variables given rather than taken from the
+    /// project's environment.
     pub fn with_environment(
         project: &Project<'_>,
         env: PytestEnv<'_>,

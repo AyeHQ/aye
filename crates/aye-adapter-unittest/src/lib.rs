@@ -362,7 +362,7 @@ pub struct UnittestRecognizer {
 impl UnittestRecognizer {
     pub fn new(project: &Project<'_>) -> Result<Self, AdapterError> {
         let root = normalize_absolute(project.root);
-        let config = UnittestConfig::load(&root)?;
+        let config = UnittestConfig::load(&root, project.tool_aye)?;
         let start = normalize_absolute(&config.start);
         let top = normalize_absolute(&config.top);
         let mut starts = vec![(start.clone(), top.clone())];

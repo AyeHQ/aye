@@ -232,13 +232,7 @@ fn run(
     options: Options,
     refiner: Option<&(dyn Refiner + Sync)>,
 ) -> Collection {
-    let project = Project {
-        root,
-        cwd: root,
-        args: &[],
-        config_file: None,
-        framework_args: &[],
-    };
+    let project = Project::new(root, root);
     Collector::new(project, recognizers, options).collect(targets, refiner)
 }
 
@@ -286,11 +280,8 @@ fn run_cached_with(
     framework_args: &[String],
 ) -> Collection {
     let project = Project {
-        root,
-        cwd: root,
-        args: &[],
-        config_file: None,
         framework_args,
+        ..Project::new(root, root)
     };
     let options = Options {
         cache_dir: Some(cache.to_path_buf()),
@@ -1474,13 +1465,7 @@ fn refinement_is_cached_by_content() {
     write(root, "d_check.py", "def dynamic(): pass\n");
     write(root, "e_check.py", "def dynamic(): pass\n");
     let collect = |refiner: &FakeRefiner, recognizers: &[Prepared], version: &str| {
-        let project = Project {
-            root,
-            cwd: root,
-            args: &[],
-            config_file: None,
-            framework_args: &[],
-        };
+        let project = Project::new(root, root);
         let options = Options {
             cache_dir: Some(cache.path().join("cache")),
             version: version.to_string(),
@@ -2670,13 +2655,7 @@ impl Refiner for SlowRefiner {
 }
 
 fn collector_at<'a>(root: &'a Path, recognizers: &'a [Prepared]) -> Collector<'a> {
-    let project = Project {
-        root,
-        cwd: root,
-        args: &[],
-        config_file: None,
-        framework_args: &[],
-    };
+    let project = Project::new(root, root);
     Collector::new(project, recognizers, Options::default())
 }
 

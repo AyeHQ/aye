@@ -65,13 +65,16 @@ fn scratch(files: &[(&str, &str)]) -> tempfile::TempDir {
     dir
 }
 
+/// `[tool.aye]` as the binary loads it from `root`'s `pyproject.toml`.
+fn tool_aye(root: &Path) -> aye_config::AyeSettings {
+    aye_config::AyeConfig::load(root).unwrap().settings
+}
+
 fn recognizer(root: &Path, args: &[PathBuf]) -> Result<UnittestRecognizer, AdapterError> {
     UnittestRecognizer::new(&Project {
-        root,
-        cwd: root,
         args,
-        config_file: None,
-        framework_args: &[],
+        tool_aye: &tool_aye(root),
+        ..Project::new(root, root)
     })
 }
 
@@ -81,11 +84,8 @@ fn recognizer(root: &Path, args: &[PathBuf]) -> Result<UnittestRecognizer, Adapt
 fn collect(root: &Path, args: &[PathBuf]) -> Vec<(String, Recognition)> {
     let recognizer = recognizer(root, args).unwrap();
     let project = Project {
-        root,
-        cwd: root,
         args,
-        config_file: None,
-        framework_args: &[],
+        ..Project::new(root, root)
     };
     let mut out = Vec::new();
     for start in recognizer.roots(&project) {
@@ -273,7 +273,7 @@ for test in flatten(loader.discover(start, pattern, top), []):
 /// unittest's ids for `root` (with the suite's configuration), and the
 /// modules that failed to load.
 fn referee(python: &Path, root: &Path) -> (Vec<String>, Vec<String>) {
-    let config = UnittestConfig::load(root).unwrap();
+    let config = UnittestConfig::load(root, &tool_aye(root)).unwrap();
     let output = Command::new(python)
         .arg("-c")
         .arg(REFEREE)

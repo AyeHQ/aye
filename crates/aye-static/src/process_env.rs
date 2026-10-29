@@ -20,6 +20,11 @@ pub struct ProcessEnv {
 }
 
 impl ProcessEnv {
+    /// An environment holding no variable.
+    pub const fn new() -> Self {
+        Self { vars: Vec::new() }
+    }
+
     /// This process's environment, as it is now.
     pub fn from_process() -> Self {
         Self::from_vars(std::env::vars_os())

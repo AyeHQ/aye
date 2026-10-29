@@ -57,17 +57,7 @@ fn write(root: &Path, rel: &str, body: &str) {
 }
 
 fn recognizer(root: &Path) -> PytestRecognizer {
-    PytestRecognizer::with_env(
-        &Project {
-            root,
-            cwd: root,
-            args: &[],
-            config_file: None,
-            framework_args: &[],
-        },
-        None,
-    )
-    .unwrap()
+    PytestRecognizer::with_env(&Project::new(root, root), None).unwrap()
 }
 
 /// Recognize every test file under `root` the way aye-collect would walk
@@ -75,13 +65,7 @@ fn recognizer(root: &Path) -> PytestRecognizer {
 /// recursed in place.
 fn collect(root: &Path) -> Vec<(String, Recognition)> {
     let recognizer = recognizer(root);
-    let project = Project {
-        root,
-        cwd: root,
-        args: &[],
-        config_file: None,
-        framework_args: &[],
-    };
+    let project = Project::new(root, root);
     let mut out = Vec::new();
     for start in recognizer.roots(&project) {
         walk(&recognizer, root, &start, &mut out);
@@ -467,13 +451,7 @@ fn adapter_faces() {
             .all(|module| module.name != "aye_engine_pytest")
     );
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path(),
-        cwd: dir.path(),
-        args: &[],
-        config_file: None,
-        framework_args: &[],
-    };
+    let project = Project::new(dir.path(), dir.path());
     assert!(adapter.prepare(&project).unwrap().is_some());
 }
 
@@ -836,17 +814,7 @@ fn ids_are_relative_to_the_project_root() {
     );
     write(outer, "sub/pyproject.toml", "[project]\nname = 'sub'\n");
     let root = outer.join("sub");
-    let recognizer = PytestRecognizer::with_env(
-        &Project {
-            root: &root,
-            cwd: &root,
-            args: &[],
-            config_file: None,
-            framework_args: &[],
-        },
-        None,
-    )
-    .unwrap();
+    let recognizer = PytestRecognizer::with_env(&Project::new(&root, &root), None).unwrap();
     assert_eq!(recognizer.config().rootdir, outer);
     let file = Parsed::new(
         "tests/test_a.py",
@@ -898,11 +866,8 @@ fn roots_follow_testpaths() {
     let recognizer = recognizer(root);
     let at = |cwd: &Path, args: &[PathBuf]| {
         recognizer.roots(&Project {
-            root,
-            cwd,
             args,
-            config_file: None,
-            framework_args: &[],
+            ..Project::new(root, cwd)
         })
     };
     assert_eq!(
@@ -923,22 +888,9 @@ fn roots_follow_testpaths() {
         "[pytest]\ntestpaths = tests pkg.mod\naddopts = --pyargs\n",
     );
     write(root, "pkg/mod.py", "");
-    let recognizer = PytestRecognizer::new(&Project {
-        root,
-        cwd: root,
-        args: &[],
-        config_file: None,
-        framework_args: &[],
-    })
-    .unwrap();
+    let recognizer = PytestRecognizer::new(&Project::new(root, root)).unwrap();
     assert_eq!(
-        recognizer.roots(&Project {
-            root,
-            cwd: root,
-            args: &[],
-            config_file: None,
-            framework_args: &[],
-        }),
+        recognizer.roots(&Project::new(root, root)),
         [root.join("tests"), root.join("pkg/mod.py")]
     );
 }
@@ -1614,13 +1566,7 @@ fn context_lifts_maxfail_and_reads_pytest_addopts() {
         "pytest.ini",
         "[pytest]\naddopts = -x -k 'not slow' -ra\n",
     );
-    let project = Project {
-        root,
-        cwd: root,
-        args: &[],
-        config_file: None,
-        framework_args: &[],
-    };
+    let project = Project::new(root, root);
     let plain = recognizer(root);
     let context = plain.context().into_value();
     assert_eq!(context["maxfail"], 1);
@@ -1720,13 +1666,7 @@ fn pytest_addopts_reach_static_collection() {
     let root = dir.path();
     write(root, "pyproject.toml", "[project]\nname = 'x'\n");
     write(root, "tests/b/test_b.py", "def test_b(): pass\n");
-    let project = Project {
-        root,
-        cwd: root,
-        args: &[],
-        config_file: None,
-        framework_args: &[],
-    };
+    let project = Project::new(root, root);
     let recognizer = PytestRecognizer::with_env(
         &project,
         Some("-o disable_test_id_escaping_and_forfeit_all_rights_to_community_support=true --ignore=tests/b"),
@@ -1821,11 +1761,9 @@ fn recognizer_with(
     let framework_args: Vec<String> = framework_args.iter().map(|s| (*s).to_string()).collect();
     PytestRecognizer::with_env(
         &Project {
-            root,
-            cwd: root,
             args: &args,
-            config_file: None,
             framework_args: &framework_args,
+            ..Project::new(root, root)
         },
         env,
     )

@@ -250,6 +250,7 @@ mod show;
 
 use args::{Args, ShowArgs};
 use aye_events::ExitCode;
+use aye_static::ProcessEnv;
 use session::Session;
 
 #[expect(
@@ -295,7 +296,8 @@ fn main() -> process::ExitCode {
         eprintln!("aye: error: {err}");
         return ExitCode::UsageError.into();
     }
-    let session = match Session::new(args) {
+    // The environment is read once, here: everything after reads this.
+    let session = match Session::new(args, ProcessEnv::from_process()) {
         Ok(session) => session,
         Err(err) => {
             eprintln!("aye: error: {err:#}");

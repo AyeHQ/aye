@@ -18,7 +18,7 @@ use aye_events::{
     Record, Severity, TestId, TestResult, WorkerIndex,
 };
 
-use aye_static::EnvVars;
+use aye_static::{EnvVars, ProcessEnv};
 
 use crate::{Reporter, shared};
 
@@ -29,9 +29,10 @@ const DIFF_LINES: usize = 10;
 /// Lines of a worker's error in an annotation.
 const WORKER_LINES: usize = 10;
 
-/// Whether this process runs as a GitHub Actions step.
-pub fn github_actions_enabled() -> bool {
-    is_github_actions(std::env::var_os(EnvVars::GITHUB_ACTIONS).as_deref())
+/// Whether aye runs as a GitHub Actions step, as its environment `env`
+/// says.
+pub fn github_actions_enabled(env: &ProcessEnv) -> bool {
+    is_github_actions(env.get_os(EnvVars::GITHUB_ACTIONS))
 }
 
 fn is_github_actions(value: Option<&std::ffi::OsStr>) -> bool {

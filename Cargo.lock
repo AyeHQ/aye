@@ -169,6 +169,7 @@ dependencies = [
  "aye-config",
  "aye-events",
  "aye-protocol",
+ "aye-static",
  "get-size2",
  "ruff_python_ast",
  "ruff_python_parser",

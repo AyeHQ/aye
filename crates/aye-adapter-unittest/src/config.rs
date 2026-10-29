@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use aye_adapter::{AdapterError, Setting};
-use aye_config::{Origin, Sourced};
+use aye_config::{AyeSettings, Origin, Sourced};
 
 /// The table's keys.
 pub(crate) const START_DIRECTORY: &str = "start-directory";
@@ -33,22 +33,20 @@ pub struct UnittestConfig {
 }
 
 impl UnittestConfig {
-    /// Read `[tool.aye.unittest]` from `root/pyproject.toml`. Unknown keys,
-    /// values that aren't strings, a start or top-level directory that
-    /// isn't one, a start directory outside the top-level directory
-    /// (unittest's "Path must be within the project"), and one below it
-    /// that is no package (unittest's "Start directory is not importable")
-    /// are errors.
-    pub fn load(root: &Path) -> Result<Self, AdapterError> {
-        let aye =
-            aye_config::AyeConfig::load(root).map_err(|e| AdapterError::Config(e.to_string()))?;
+    /// Read `[tool.aye.unittest]` from `tool_aye`, `[tool.aye]` as the
+    /// binary loaded it from `root/pyproject.toml`. Unknown keys, values
+    /// that aren't strings, a start or top-level directory that isn't one,
+    /// a start directory outside the top-level directory (unittest's "Path
+    /// must be within the project"), and one below it that is no package
+    /// (unittest's "Start directory is not importable") are errors.
+    pub fn load(root: &Path, tool_aye: &AyeSettings) -> Result<Self, AdapterError> {
         let path = root.join("pyproject.toml");
         let origin = Origin::file(&path, "[tool.aye.unittest]");
         let shown = || format!("invalid [tool.aye.unittest] in {}", path.display());
         let mut start_directory = Sourced::default_value(DEFAULT_START.to_string());
         let mut pattern = Sourced::default_value(DEFAULT_PATTERN.to_string());
         let mut top_level_directory = Sourced::default_value(None);
-        for (key, value) in aye.settings.unittest.iter().flatten() {
+        for (key, value) in tool_aye.unittest.iter().flatten() {
             let Some(text) = value.as_str() else {
                 return Err(AdapterError::Config(format!(
                     "{}: {key} must be a string, not {value}",

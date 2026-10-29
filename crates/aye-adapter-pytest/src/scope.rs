@@ -5350,13 +5350,7 @@ mod tests {
     fn recognize(source: &str) -> Recognition {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("pytest.ini"), "[pytest]\n").unwrap();
-        let project = Project {
-            root: dir.path(),
-            cwd: dir.path(),
-            args: &[],
-            config_file: None,
-            framework_args: &[],
-        };
+        let project = Project::new(dir.path(), dir.path());
         let recognizer = crate::PytestRecognizer::new(&project).unwrap();
         let parsed = ruff_python_parser::parse_module(source).unwrap();
         let lines = LineIndex::from_source_text(source);
