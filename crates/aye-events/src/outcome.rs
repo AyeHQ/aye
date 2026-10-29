@@ -3,6 +3,11 @@
 use serde::{Deserialize, Serialize};
 
 /// The fixed outcome set. Adding a variant is a breaking change.
+/// Annotations such as *flaky* are separate from it.
+///
+/// Open: whether a snapshot with no value yet maps onto an existing outcome
+/// or onto an annotation (a new outcome after release would break every
+/// consumer that matches on outcomes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {

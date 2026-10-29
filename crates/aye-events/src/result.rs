@@ -10,6 +10,9 @@ use crate::id::{LifetimeId, TestId};
 use crate::outcome::Outcome;
 use crate::serde_ext::millis;
 
+/// How one test ended. A test has one outcome: one that passes its body and
+/// then fails in teardown is `error`, and every failure is kept, each with
+/// its [`Phase`](crate::Phase).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TestResult {
     pub id: TestId,
@@ -20,7 +23,8 @@ pub struct TestResult {
     /// failed teardown).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failures: Vec<Failure>,
-    /// The failed lifetime that kept this test from running.
+    /// The failed lifetime that kept this test from running, instead of a
+    /// copy of its failure (see [`Event::LifetimeFinished`](crate::Event::LifetimeFinished)).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cause: Option<LifetimeId>,
     /// Why it was skipped or expected to fail.
@@ -31,12 +35,15 @@ pub struct TestResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reproduce: Option<Reproduce>,
     /// Name and value pairs the test recorded about itself, in order
-    /// (pytest's `record_property`, its item's `user_properties`). The JUnit
-    /// report writes them on the test case.
+    /// (pytest's `record_property`, its item's `user_properties`). They
+    /// travel in the stream for the JUnit report, which writes them on the
+    /// test case, and any later consumer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<(String, String)>,
     /// How long the body alone took (the `test` phase, pytest's `call`),
-    /// when the adapter tells it apart from setup and teardown.
+    /// when the adapter tells it apart from setup and teardown, for reports
+    /// that count the body alone (pytest's `junit_duration_report = call`);
+    /// `duration` stays setup, body and teardown.
     #[serde(
         rename = "body_duration_ms",
         with = "millis::optional",
@@ -120,7 +127,9 @@ impl Captured {
     }
 }
 
-/// How to rerun exactly this test with exactly these inputs.
+/// How to rerun exactly this test with exactly these inputs. Structured from
+/// day one: an argument vector plus an open map of inputs (seed, frozen
+/// time, environment).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Reproduce {
     pub command: Vec<String>,
@@ -129,9 +138,20 @@ pub struct Reproduce {
     pub inputs: BTreeMap<String, String>,
 }
 
-/// Totals for a run; a fold over its `test_finished` events. A module
-/// skipped while collecting is not among them, nor a failed lifetime that
-/// kept no test from running (see the crate's docs).
+/// Totals for a run; a fold over its `test_finished` events alone: counts
+/// are test results.
+///
+/// A module the framework skipped while collecting (pytest's
+/// `allow_module_level` skip, `importorskip`) has no test to finish: it is a
+/// `skipped` info [`Diagnostic`](crate::Diagnostic) from collection, and the
+/// renderers count it as one skipped item, as pytest's summary and JUnit
+/// report do. No field was needed for it. Nor is a failed lifetime that kept
+/// no test from running among them (a failed `tearDownClass`,
+/// `tearDownModule` or cleanup; a failed setup whose tests the run stopped
+/// before under `maxfail`), though the run fails on it: its
+/// `lifetime_finished` carries the failure, and the renderers count it from
+/// there, as a setup or teardown error (pytest's summary counts it as an
+/// error).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Counts {
     #[serde(default)]

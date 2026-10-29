@@ -12,7 +12,10 @@ use crate::result::{Counts, TestResult};
 use crate::serde_ext::{is_zero, millis};
 
 /// Who stamped what on an event. All fields are optional on the wire so
-/// that workers can send partial envelopes the runner completes.
+/// that workers can send partial envelopes the runner completes: workers
+/// stamp `batch` and a per-worker sequence and time; the runner stamps
+/// `run`, `environment`, `worker` and the run-wide `seq` as it merges worker
+/// streams into the run's log.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Envelope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -116,12 +119,18 @@ pub enum Event {
         cases: u32,
     },
     /// A lifetime's setup begins. Its [`Event::LifetimeFinished`] may never
-    /// come: a worker that crashes or is stopped sends none.
+    /// come: a worker that crashes, or that a stop kills, sends none for the
+    /// lifetimes it had started, so a consumer must not depend on the pair.
+    /// The same lifetime id starts again in each batch that needs it.
     LifetimeStarted {
         lifetime: LifetimeId,
         /// `session`, `package`, `module`, `class`, …, in aye's words.
         kind: String,
     },
+    /// A failed setup is reported once: its failure goes here, and each test
+    /// that could not run because of it is `error` with `cause` set to this
+    /// lifetime instead of a copy of the failure. Adapters that cannot see
+    /// lifetimes (pytest) attach the failure to each test, as pytest does.
     LifetimeFinished {
         lifetime: LifetimeId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -133,7 +142,9 @@ pub enum Event {
         id: TestId,
     },
     /// A result inside a test: a `subTest` block, a doctest example, a
-    /// subtest. The test still finishes with its own outcome.
+    /// subtest. The test still finishes with its own outcome. In the first
+    /// schema because `subTest` blocks and doctest examples need it now;
+    /// snapshots will add one per snapshot.
     SubOutcome {
         id: TestId,
         name: String,
@@ -141,7 +152,7 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failure: Option<Failure>,
         /// Why it was skipped or expected to fail (unittest's `skipTest` in
-        /// a `subTest` block).
+        /// a `subTest` block), as a test carries its own.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
         #[serde(rename = "duration_ms", with = "millis", default)]
@@ -149,8 +160,10 @@ pub enum Event {
     },
     TestFinished(Box<TestResult>),
     /// A name and value pair about the whole run that a test recorded
-    /// (pytest's `record_testsuite_property`). The JUnit report writes each
-    /// pair once on its test suite, however many batches recorded it.
+    /// (pytest's `record_testsuite_property`), emitted when the test records
+    /// it. Each batch is a framework session, so a session-scoped fixture
+    /// that records one does so once per batch: consumers keep each pair
+    /// once, and the JUnit report writes it once on its test suite.
     RunProperty {
         name: String,
         value: String,

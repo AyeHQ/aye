@@ -3,7 +3,14 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The canonical path id of a test. Deliberately has no line number.
+/// The canonical path id of a test: the file path relative to the project
+/// root with `/` separators, then `::`-separated names, then the parameter
+/// id in brackets (`tests/test_cart.py::TestCart::test_add[eur]`).
+///
+/// It deliberately has no line: failure locations, snapshots and the source
+/// rewriter point at a [`Span`](crate::Span) instead. Parameters stay opaque
+/// inside the id; structured parameters, when an adapter knows them, travel
+/// beside it on the [`Case`](crate::Case).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct TestId(pub String);
@@ -44,9 +51,10 @@ impl std::fmt::Display for TestId {
 }
 
 /// A short, stable key for a test: the FNV-1a 64 hash of its id, mixed
-/// (`SplitMix64`'s finalizer) so that every digit depends on every byte. A
-/// key is shown by its first digits, and FNV-1a alone leaves the leading
-/// ones unchanged by the last bytes: `test_0` and `test_1` would share them.
+/// (`SplitMix64`'s finalizer) so that every digit depends on every byte,
+/// printed as 16 hex digits. A key is shown by its first digits, and FNV-1a
+/// alone leaves the leading ones unchanged by the last bytes: `test_0` and
+/// `test_1` would share them.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct TestKey(pub String);
