@@ -22,7 +22,7 @@ The batch is the line: the runner owns everything outside a batch, the engine ev
 Leaf crates (depend on no aye crate):
 
 - `crates/aye-index`: index newtypes (`newtype_index!`) and the collections they index (`IndexVec`, `IndexSlice`)
-- `crates/aye-static`: `EnvVars`, every environment variable aye reads by name or sets, and `ProcessEnv`, the environment as aye read it
+- `crates/aye-static`: `EnvVars`, every environment variable aye reads by name or sets, and `ProcessEnv`, the environment as aye read it, once, in the binary
 - `crates/aye-fs`: lexical path algebra (`normpath`, `normalize_absolute`, `absolute`, the relativizers, `expand_path`) and the state directory, `.aye` (`StateDir`, its buckets, the cache markers, `atomic_write`)
 
 Runner crates (engine-agnostic; must never depend on an `aye-adapter-*` crate):
@@ -30,8 +30,8 @@ Runner crates (engine-agnostic; must never depend on an `aye-adapter-*` crate):
 - `crates/aye`: the binary (CLI, wiring, `aye config`, `aye show`, the adapter registry and which adapters a project runs)
 - `crates/aye-events`: the wire types (events, outcomes and `OutcomeTrail`, failures with `ComparisonOp`, `CompareKind` and `FailureSignature`, `RerunCommand`, collected cases, `FrameworkStatus`, `StopReason`), the identities and paths they hold (`TestId`, `TestKey`, `AdapterName`, `LifetimeId`, `Scope`, `AffinityKey`, `RunId`, `RunNumber`, `WorkerIndex`, `BatchIndex`, `ProjectPath`, `DiagnosticPath`, `FramePath`), the envelope's `Stamper`, the diagnostic codes and their classification (`DiagnosticCode`, `ErrorClass`), FNV-1a (`Fnv64`, `Fnv128`) and `ContentDigest`, and the schema version
 - `crates/aye-protocol`: the worker protocol (`Request`, `Reply`, `WorkerLine`, `Batch`, `Policy`, `BatchContext` over the adapter's `AdapterContext`, `MaxFail`, refinement's messages, an adapter's runtime face `Executor`, service names, `PROTOCOL_VERSION`, the `Refiner` trait); depends on `aye-events` only, so the runner compiles no Ruff
-- `crates/aye-adapter`: what an adapter implements (`Adapter`, `Recognizer`, `Claim`, `Recognition`, `SourceFile`, `Project`, `Setting`, `FrameworkDefaults`, `AdapterError`) and the Ruff re-exports collection and the adapters share
-- `crates/aye-config`, `crates/aye-collect`, `crates/aye-select`: the project root and config loading with origins, discovery infrastructure (walk, parse, recognize, refine), selection
+- `crates/aye-adapter`: what an adapter implements (`Adapter`, `Recognizer`, `Claim`, `Requested`, `Recognition`, `RefineReason`, `SourceFile`, `Project`, `Setting`, `FrameworkDefaults`, `AdapterError`) and the Ruff re-exports collection and the adapters share
+- `crates/aye-config`, `crates/aye-collect`, `crates/aye-select`: the project root and config loading, each value with its `ValueSource`, discovery infrastructure (walk, parse, recognize, refine), selection
 - `crates/aye-provision`: environments through a `Provisioner` (uv as a subprocess first; bring-your-own paths), the version matrix's supplier; design only so far
 - `crates/aye-runner`: workers, warm daemon, scheduling, backends, services, transport, and the embedded worker
 - `crates/aye-render`, `crates/aye-history`: consumers of the event stream (aye-history also keeps each run's log in `.aye/runs`, which `aye show` reads back through aye-render)
@@ -77,7 +77,7 @@ Cargo manages the Rust dependencies (`Cargo.lock`), and uv manages the Python on
 - The worker, aye's engine and every executor import only the standard library. The pytest front-end and its executor import aye's own `pytest` module, never pytest: nothing aye ships imports pytest.
 - Schema changes that remove or rename a field bump `SCHEMA_VERSION`.
 - `ruff_python_*` crates are pinned exactly. Bump them together, with the MSRV.
-- Rust names an environment variable only through `aye_static::EnvVars`, and a variable aye starts reading or setting, in Rust or in the Python it sends to workers, joins the catalogue.
+- Rust names an environment variable only through `aye_static::EnvVars`, and a variable aye starts reading or setting, in Rust or in the Python it sends to workers, joins the catalogue. The binary reads the environment once (`ProcessEnv::from_process`) and hands it down (an adapter reads `Project.env`); `clippy.toml` disallows `std::env::var` and its kin everywhere else, but for the refinement cache's key and the tests' own settings, each with an `#[expect]`.
 - A lint the code breaks on purpose gets `#[expect(lint, reason = "…")]`, not `#[allow]`.
 - A new crate gets an entry in `release-please-config.json` and in `[workspace.dependencies]` between the `x-release-please` markers; CI checks the first.
 
