@@ -89,7 +89,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::Duration;
 
-use aye_events::{Event, Outcome, Previous, Record, TestId, TestResult};
+use aye_events::{Event, Outcome, Previous, Record, RunId, TestId, TestResult};
 use aye_fs::{HISTORY_TEMPORARY, StateBucket, atomic_write, prepare_dir};
 use serde::{Deserialize, Serialize};
 
@@ -125,7 +125,7 @@ pub struct TestStats {
     pub last_outcome: Outcome,
     /// The run that last finished this test, when it had an id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_run: Option<String>,
+    pub last_run: Option<RunId>,
     /// Reserved for flake rates; 0 until they land.
     #[serde(default)]
     pub flips: u32,
@@ -190,7 +190,7 @@ pub struct History {
 /// The run being recorded.
 #[derive(Debug, Clone, Default)]
 struct Run {
-    id: Option<String>,
+    id: Option<RunId>,
     /// Its number in the run store, from its `run_started`.
     number: Option<u64>,
     collect_only: bool,
@@ -343,7 +343,7 @@ impl History {
         }
     }
 
-    fn finish(&mut self, result: &TestResult, run: Option<String>) {
+    fn finish(&mut self, result: &TestResult, run: Option<RunId>) {
         let started = !self.run.opened || self.run.started.contains(&result.id);
         // A bad outcome counts whether the test ran or not: the run failed
         // on it, and `--lf` should run it again.

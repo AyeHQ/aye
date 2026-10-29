@@ -15,7 +15,7 @@ use aye_config::AyeConfig;
 use aye_engine::{Adapter, Policy, Project, Refiner};
 use aye_events::{
     AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event,
-    ExitCode, ProjectPath, Record, SCHEMA_VERSION, Severity, TestId,
+    ExitCode, ProjectPath, Record, RunId, SCHEMA_VERSION, Severity, TestId,
 };
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter};
@@ -23,7 +23,7 @@ use aye_render::{
     ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
     JunitOptions, Reporter, Tally, Tee, Text, TextOptions,
 };
-use aye_runner::{Echo, Plan, Runner, RunnerOptions, Stamper, new_run_id};
+use aye_runner::{Echo, Plan, Runner, RunnerOptions, Stamper};
 use aye_select::Selection;
 use aye_static::EnvVars;
 
@@ -287,7 +287,7 @@ impl Session {
             selection = selection.with_last_failed(last_failed.iter().cloned());
         }
 
-        let run_id = new_run_id();
+        let run_id = RunId::random();
         let runner = Runner::new(RunnerOptions {
             python: self.python.clone(),
             root: self.root.clone(),
@@ -298,7 +298,7 @@ impl Session {
             // run, the run's id.
             env: vec![(
                 EnvVars::PYTEST_XDIST_TESTRUNUID.into(),
-                run_id.clone().into(),
+                run_id.as_str().into(),
             )],
             // `-s` output stays off a machine-readable stdout.
             echo: match self.output() {

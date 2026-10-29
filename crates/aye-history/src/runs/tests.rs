@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use aye_events::{
-    BatchIndex, Case, Counts, Diagnostic, Event, ExitCode, Failure, Outcome, Phase, Record,
+    BatchIndex, Case, Counts, Diagnostic, Event, ExitCode, Failure, Outcome, Phase, Record, RunId,
     Severity, TestId, TestResult,
 };
 
@@ -149,7 +149,8 @@ fn runs_are_numbered_after_the_highest_number_stored_and_last() {
         RunStore::new(&dir).log("r8").unwrap()[0]
             .envelope
             .run
-            .as_deref(),
+            .as_ref()
+            .map(RunId::as_str),
         Some("any")
     );
     assert_eq!(number("r81"), Some(81));

@@ -598,7 +598,7 @@ fn records_are_stamped_and_ordered() {
     for (seq, record) in (1..).zip(&records) {
         let envelope = &record.envelope;
         assert_eq!(envelope.seq, Some(seq));
-        assert_eq!(envelope.run.as_deref(), Some("run-1"));
+        assert_eq!(envelope.run, Some("run-1".into()));
         assert_eq!(envelope.worker, Some(WorkerIndex::FIRST));
         let in_batch = !record.event.kind().starts_with("worker_");
         assert_eq!(

@@ -1,5 +1,4 @@
-//! Identities: of a test, its key, an adapter's name, and the alias for
-//! environments.
+//! Identities: of a test, its key, and an adapter's name.
 
 use std::borrow::{Borrow, Cow};
 use std::fmt;
@@ -339,9 +338,6 @@ impl PartialEq<&str> for AdapterName {
         *self.0 == **other
     }
 }
-
-/// Identifies one environment (interpreter plus dependencies) within a run.
-pub type EnvironmentId = String;
 
 #[cfg(test)]
 mod tests {

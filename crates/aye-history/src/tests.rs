@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use aye_events::{Counts, Envelope, ExitCode, Failure};
+use aye_events::{Counts, Envelope, ExitCode, Failure, RunId};
 
 use super::*;
 
@@ -80,7 +80,7 @@ fn first_duration_is_taken_as_is() {
     assert!(close(stats.last_ms, 10.0));
     assert_eq!(stats.count, 1);
     assert_eq!(stats.last_outcome, Outcome::Passed);
-    assert_eq!(stats.last_run.as_deref(), Some("r1"));
+    assert_eq!(stats.last_run.as_ref().map(RunId::as_str), Some("r1"));
     assert_eq!(stats.flips, 0);
 }
 
@@ -97,7 +97,7 @@ fn later_durations_are_averaged_with_alpha_0_3() {
     assert!(close(stats.last_ms, 5.0));
     assert_eq!(stats.count, 3);
     assert_eq!(stats.last_outcome, Outcome::Passed);
-    assert_eq!(stats.last_run.as_deref(), Some("r3"));
+    assert_eq!(stats.last_run.as_ref().map(RunId::as_str), Some("r3"));
     assert_eq!(
         history.duration(&id("t.py::test_a")),
         Some(Duration::from_secs_f64(0.0106))
@@ -119,7 +119,8 @@ fn the_envelope_run_wins_over_the_run_started() {
             .stats(&id("t.py::test_a"))
             .unwrap()
             .last_run
-            .as_deref(),
+            .as_ref()
+            .map(RunId::as_str),
         Some("r9")
     );
     assert_eq!(
@@ -127,7 +128,8 @@ fn the_envelope_run_wins_over_the_run_started() {
             .stats(&id("t.py::test_b"))
             .unwrap()
             .last_run
-            .as_deref(),
+            .as_ref()
+            .map(RunId::as_str),
         Some("r1")
     );
 }
@@ -372,10 +374,10 @@ fn a_test_that_finishes_without_starting_did_not_run() {
     history.record(&run_finished());
     let a = history.stats(&id("t.py::test_a")).unwrap();
     assert_eq!(a.last_outcome, Outcome::Failed);
-    assert_eq!(a.last_run.as_deref(), Some("r1"));
+    assert_eq!(a.last_run.as_ref().map(RunId::as_str), Some("r1"));
     let b = history.stats(&id("t.py::test_b")).unwrap();
     assert_eq!(b.last_outcome, Outcome::Error);
-    assert_eq!(b.last_run.as_deref(), Some("r2"));
+    assert_eq!(b.last_run.as_ref().map(RunId::as_str), Some("r2"));
     assert_eq!(b.count, 1);
     assert!(close(b.ewma_ms, 50.0));
     assert_eq!(

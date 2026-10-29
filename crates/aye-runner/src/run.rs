@@ -5,13 +5,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::fmt;
-use std::hash::{BuildHasher, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use aye_engine::{
     Batch, Executor, Policy, RefineError, RefineRequest, Refined, Refiner, Reply, Request,
@@ -19,8 +18,8 @@ use aye_engine::{
 };
 use aye_events::{
     AdapterName, BatchIndex, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath,
-    EnvironmentId, Event, Failure, LifetimeId, Outcome, ProjectPath, Record, Severity, TestId,
-    TestResult, WorkerIndex,
+    EnvironmentId, Event, Failure, LifetimeId, Outcome, ProjectPath, Record, RunId, Severity,
+    TestId, TestResult, WorkerIndex,
 };
 use aye_static::EnvVars;
 
@@ -261,7 +260,7 @@ impl StopHandle {
 /// stamper it hands to [`Runner::run`], so `seq` is one sequence.
 #[derive(Debug)]
 pub struct Stamper {
-    run: String,
+    run: RunId,
     environment: Option<EnvironmentId>,
     started: Instant,
     next: u64,
@@ -276,10 +275,10 @@ impl Default for Stamper {
 impl Stamper {
     /// A new run, with a fresh id, starting now.
     pub fn new() -> Self {
-        Self::with_run(new_run_id())
+        Self::with_run(RunId::random())
     }
 
-    pub fn with_run(run: impl Into<String>) -> Self {
+    pub fn with_run(run: impl Into<RunId>) -> Self {
         Self {
             run: run.into(),
             environment: None,
@@ -294,7 +293,7 @@ impl Stamper {
         self
     }
 
-    pub fn run_id(&self) -> &str {
+    pub fn run_id(&self) -> &RunId {
         &self.run
     }
 
@@ -320,18 +319,6 @@ impl Stamper {
         self.next += 1;
         record
     }
-}
-
-/// 16 hex digits, random per call.
-pub fn new_run_id() -> String {
-    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-    hasher.write_u128(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos()),
-    );
-    hasher.write_u32(std::process::id());
-    format!("{:016x}", hasher.finish())
 }
 
 /// Runs plans on workers, and refines files on them.
@@ -2310,8 +2297,8 @@ mod tests {
         record.envelope.t_ms = Some(123_456.0);
         let first = stamper.stamp(record);
         let second = stamper.stamp(Record::new(Event::CollectionStarted));
-        assert_eq!(first.envelope.run.as_deref(), Some("r1"));
-        assert_eq!(first.envelope.environment.as_deref(), Some("py313"));
+        assert_eq!(first.envelope.run, Some("r1".into()));
+        assert_eq!(first.envelope.environment, Some("py313".into()));
         assert_eq!(
             (first.envelope.worker, first.envelope.batch),
             (
@@ -2326,14 +2313,6 @@ mod tests {
         assert!(first.envelope.t_ms.unwrap() < 1000.0);
         assert!(second.envelope.t_ms >= first.envelope.t_ms);
         assert_eq!(stamper.next_seq(), 2);
-    }
-
-    #[test]
-    fn run_ids_differ() {
-        let a = new_run_id();
-        assert_eq!(a.len(), 16);
-        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
-        assert_ne!(a, new_run_id());
     }
 
     #[test]

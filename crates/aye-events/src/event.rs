@@ -6,11 +6,11 @@ use serde::{Deserialize, Serialize};
 use crate::case::Case;
 use crate::diagnostic::Diagnostic;
 use crate::failure::Failure;
-use crate::id::{AdapterName, EnvironmentId, TestId};
+use crate::id::{AdapterName, TestId};
 use crate::lifetime::{LifetimeId, Scope};
 use crate::outcome::{ExitCode, Outcome};
 use crate::result::{Counts, TestResult};
-use crate::run::{BatchIndex, WorkerIndex};
+use crate::run::{BatchIndex, EnvironmentId, RunId, WorkerIndex};
 use crate::serde_ext::{is_zero, millis};
 
 /// Who stamped what on an event. All fields are optional on the wire so
@@ -21,7 +21,7 @@ use crate::serde_ext::{is_zero, millis};
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Envelope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run: Option<String>,
+    pub run: Option<RunId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<EnvironmentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

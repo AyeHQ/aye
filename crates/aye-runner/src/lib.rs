@@ -235,7 +235,7 @@ mod worker;
 pub use python::{PythonSource, find_python, venv_python};
 pub use run::{
     BatchEnd, BatchSummary, Crash, Plan, RunSummary, Runner, RunnerOptions, Stamper, StopHandle,
-    StopReason, new_run_id,
+    StopReason,
 };
 pub use schedule::DEFAULT_WEIGHT;
 pub use worker::{

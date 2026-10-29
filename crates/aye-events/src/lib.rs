@@ -49,7 +49,7 @@ pub use diagnostic::{
 };
 pub use event::{Envelope, Event, Record};
 pub use failure::{Assertion, Columns, Compare, Difference, Failure, Frame, Local, Side};
-pub use id::{AdapterName, EnvironmentId, InvalidKey, KeyPrefix, TestId, TestIdParts, TestKey};
+pub use id::{AdapterName, InvalidKey, KeyPrefix, TestId, TestIdParts, TestKey};
 pub use lifetime::{LifetimeId, Scope};
 pub use outcome::{ExitCode, Outcome, Phase};
 pub use path::{
@@ -57,7 +57,7 @@ pub use path::{
     ProjectPathRef, Span,
 };
 pub use result::{Captured, Counts, Previous, Reproduce, Resource, TestResult};
-pub use run::{BatchIndex, WorkerIndex};
+pub use run::{BatchIndex, EnvironmentId, RunId, WorkerIndex};
 
 /// Bumped only when a field is removed or renamed, or its meaning changes.
 ///
