@@ -57,7 +57,9 @@ use aye_runner::{
 /// `close` in `calls-<pid>.log`, with its worker's `AYE_WORKER`, and lists
 /// `test_a` then `test_b` in each file, the other way round in a file whose
 /// name holds `differs` on any worker but the first, which takes 30s to
-/// list a file whose name holds `slow`.
+/// list a file whose name holds `slow`. The module imports `fake_prelude`,
+/// which a worker has only when the runner installs its prelude
+/// ([`PRELUDE`]) first, refining or running.
 const FAKE_SOURCE: &str = r#"
 import gc
 import os
@@ -68,6 +70,7 @@ import threading
 import time
 
 import aye_engine as engine
+import fake_prelude
 
 
 def protocol_fd():
@@ -263,6 +266,11 @@ class ListingExecutor(FakeExecutor):
         note_call("close")
 "#;
 
+/// What the fake executor's module imports beside aye's engine: the
+/// prelude every worker installs before any runtime's own modules, as the
+/// binary's is aye's `pytest` module.
+const PRELUDE: ModuleSet = ModuleSet::new(const { &[ModuleSource::embedded("fake_prelude", "")] });
+
 const FAKE_MODULES: ModuleSet =
     ModuleSet::new(const { &[ModuleSource::embedded("fake_executor", FAKE_SOURCE)] });
 
@@ -328,6 +336,7 @@ fn fixture_echoing(python: PathBuf, workers: u32, echo: Echo) -> Fixture {
         root: root.clone(),
         cwd: root.clone(),
         workers,
+        prelude: PRELUDE,
         runtimes: vec![FAKE, OTHER, LISTING],
         env: vec![("FAKE_DIR".into(), root.into_os_string())],
         echo,
@@ -427,6 +436,7 @@ fn the_handshake_reports_the_interpreter() {
     let python = python_or_skip!();
     let dir = tempfile::tempdir().unwrap();
     let mut spec = WorkerSpec::new(&python, dir.path(), dir.path());
+    spec.prelude = PRELUDE;
     spec.runtimes = vec![FAKE];
     let worker = spawn(&spec).unwrap();
     assert!(worker.pid() > 0);
@@ -2525,6 +2535,7 @@ fn collecting_only_starts_no_worker_for_the_other_lanes() {
         root: root.clone(),
         cwd: root.clone(),
         workers: 3,
+        prelude: PRELUDE,
         runtimes: vec![LISTING],
         env: vec![("FAKE_DIR".into(), root.into_os_string())],
         collect_only: true,

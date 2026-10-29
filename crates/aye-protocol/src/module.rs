@@ -28,7 +28,8 @@ impl ModuleSource {
 /// Embedded modules in install order, owned by the crate that embeds them.
 /// Each imports, when it is installed, only the standard library and the
 /// modules installed before it: those before it in its set, and those of
-/// the sets a worker installs first (aye's engine's, first of all).
+/// the sets a worker installs first (aye's engine, then the prelude the
+/// binary gives every worker, then each runtime's own set).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ModuleSet(&'static [ModuleSource]);
 

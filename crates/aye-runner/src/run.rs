@@ -17,8 +17,8 @@ use aye_events::{
     StopReason, TestId, TestResult, WorkerIndex,
 };
 use aye_protocol::{
-    AdapterContext, Batch, BatchContext, ListingDigest, Policy, RefineError, RefineRequest,
-    Refined, Refiner, Reply, Request, Runtime, WorkerLine,
+    AdapterContext, Batch, BatchContext, ListingDigest, ModuleSet, Policy, RefineError,
+    RefineRequest, Refined, Refiner, Reply, Request, Runtime, WorkerLine,
 };
 use aye_static::EnvVars;
 
@@ -47,6 +47,9 @@ pub struct RunnerOptions {
     /// Workers to run at most (0 counts as 1); never more than there are
     /// batches.
     pub workers: u32,
+    /// What every worker installs after aye's engine, whatever its
+    /// runtimes ([`WorkerSpec::prelude`]).
+    pub prelude: ModuleSet,
     /// Every adapter's runtime face. Workers get only those the cases at
     /// hand need.
     pub runtimes: Vec<Runtime>,
@@ -570,6 +573,7 @@ impl Runner {
 
     fn spec(&self, runtimes: Vec<Runtime>) -> WorkerSpec {
         let mut spec = WorkerSpec::new(&self.options.python, &self.options.root, &self.options.cwd);
+        spec.prelude = self.options.prelude;
         spec.runtimes = runtimes;
         spec.env.clone_from(&self.options.env);
         spec.registry = Some(self.stop.workers.clone());

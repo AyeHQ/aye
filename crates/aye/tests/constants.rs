@@ -26,6 +26,7 @@ fn embedded() -> Vec<ModuleSource> {
         aye_engine::MODEL_MODULE,
         aye_engine::REWRITE_MODULE,
         aye_engine::NATIVE_ENGINE_MODULE,
+        aye_adapter_pytest::native::SHIM_MODULE,
     ];
     modules.extend(aye_adapter_pytest::native::MODULES.iter().cloned());
     modules.push(aye_adapter_unittest::MODULE);

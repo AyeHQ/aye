@@ -48,7 +48,9 @@ use crate::{PytestConfig, PytestRecognizer, config::ImportMode};
 
 /// aye's own `pytest` module: the authoring API (marks, fixtures,
 /// `raises`, `approx`, outcomes) the front-end reads, installed as
-/// `pytest`.
+/// `pytest`. The binary installs it in every worker, whatever its adapter,
+/// after the model, the rewriter and the engine it stands on, so that it
+/// is in `sys.modules` before the front-end and any test import it.
 pub const SHIM_MODULE: ModuleSource = ModuleSource::embedded(
     "pytest",
     include_str!("../python/native/aye_pytest_shim.py"),
@@ -67,21 +69,23 @@ pub const NATIVE_MODULE: ModuleSource = ModuleSource::embedded(
     include_str!("../python/native/aye_pytest_native.py"),
 );
 
-/// The native executor's modules, in install order (after `aye_engine`):
-/// the model, the rewriter and the engine first, then aye's `pytest`, so
-/// it is in `sys.modules` before the front-end and any test import it.
-pub const MODULES: ModuleSet = ModuleSet::new(
-    const {
-        &[
-            MODEL_MODULE,
-            REWRITE_MODULE,
-            NATIVE_ENGINE_MODULE,
-            SHIM_MODULE,
-            FRONTEND_MODULE,
-            NATIVE_MODULE,
-        ]
-    },
-);
+/// The native executor's own modules, in install order: after aye's
+/// engine, and after aye's `pytest` module ([`SHIM_MODULE`]) and what it
+/// stands on, which the binary installs in every worker first.
+pub const MODULES: ModuleSet = ModuleSet::new(const { &[FRONTEND_MODULE, NATIVE_MODULE] });
+
+/// The modules whose names and sources [`modules_digest`] covers, in the
+/// order it has always hashed them: what a pytest worker installs after
+/// aye's engine. The digest is in the context, and so in the refinement
+/// cache's key, which a change to these, or to their order, changes.
+static DIGESTED: [ModuleSource; 6] = [
+    MODEL_MODULE,
+    REWRITE_MODULE,
+    NATIVE_ENGINE_MODULE,
+    SHIM_MODULE,
+    FRONTEND_MODULE,
+    NATIVE_MODULE,
+];
 
 /// The native executor.
 pub const ENTRY: EntryPoint = EntryPoint::new("aye_pytest_native", "NativeExecutor");
@@ -389,11 +393,11 @@ fn native_context(config: &PytestConfig) -> NativeContext {
     }
 }
 
-/// A 64-bit FNV-1a digest of the executor's module names and sources, in
-/// hex.
+/// A 64-bit FNV-1a digest of the names and sources of the modules the
+/// executor runs on ([`DIGESTED`]), in hex.
 fn modules_digest() -> String {
     let mut hash = Fnv64::new();
-    for module in MODULES {
+    for module in &DIGESTED {
         for text in [&module.name, &module.source] {
             hash.write(text.as_bytes());
             hash.write(&[0]);
@@ -1068,8 +1072,11 @@ mod tests {
         NativeRecognizer::new(PytestRecognizer::with_env(&project, None).unwrap(), false)
     }
 
+    /// The executor's own modules, which a worker installs after aye's
+    /// `pytest` module and what it stands on; the context's digest covers
+    /// those too, in the order it has always hashed them.
     #[test]
-    fn the_executor_installs_the_native_modules_in_order() {
+    fn the_executor_installs_its_modules_and_the_digest_covers_what_they_stand_on() {
         let runtime = Pytest::default().runtime();
         assert_eq!(runtime.adapter, "pytest");
         assert_eq!(
@@ -1077,8 +1084,10 @@ mod tests {
             "aye_pytest_native:NativeExecutor"
         );
         let names: Vec<&str> = runtime.modules.names().collect();
+        assert_eq!(names, ["aye_pytest_frontend", "aye_pytest_native"]);
+        let digested: Vec<&str> = DIGESTED.iter().map(|m| &*m.name).collect();
         assert_eq!(
-            names,
+            digested,
             [
                 "aye_model",
                 "aye_rewrite",

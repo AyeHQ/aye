@@ -275,6 +275,7 @@ impl Session {
             root: self.root.clone(),
             cwd: self.cwd.clone(),
             workers: self.workers,
+            prelude: registry::PRELUDE,
             runtimes: self.adapters.iter().map(|a| a.runtime()).collect(),
             // pytest-xdist's `testrun_uid`, which its workers share: one per
             // run, the run's id.

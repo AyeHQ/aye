@@ -306,7 +306,8 @@ pub const MODULE: ModuleSource = ModuleSource::embedded(
 );
 
 /// What a worker installs for the unittest adapter's executor, after aye's
-/// engine.
+/// engine and the prelude the binary gives every worker (aye's `pytest`
+/// module and what it stands on).
 pub const MODULES: ModuleSet = ModuleSet::new(const { &[MODULE] });
 
 /// The adapter's name, in cases, batches and the registry.

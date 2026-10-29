@@ -193,8 +193,9 @@
 //! - **aye's engine runs every test** (October 2026): pytest suites run
 //!   with aye's own `pytest` module and pytest is never imported. The
 //!   pytest adapter's front-end refines every test file (`registry.rs`),
-//!   and the other adapters' workers get aye's `pytest` module too (the
-//!   doctest adapter imports conftests, which import it). `aye config` says
+//!   and every adapter's workers get aye's `pytest` module, with what it
+//!   stands on, before their own modules (`registry::PRELUDE`: the doctest
+//!   adapter imports conftests, which import it). `aye config` says
 //!   `engine   native`. `--native`, the prototype's switch, is accepted and
 //!   does nothing (`AYE_NATIVE` is no longer read), and reruns leave it
 //!   out. A run of pytest's tests can't do without refinement: `--no-refine`

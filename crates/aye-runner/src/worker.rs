@@ -23,7 +23,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use aye_engine::ENGINE;
-use aye_protocol::{PROTOCOL_VERSION, Reply, Request, Runtime, ServiceName, WorkerLine};
+use aye_protocol::{ModuleSet, PROTOCOL_VERSION, Reply, Request, Runtime, ServiceName, WorkerLine};
 
 use aye_static::EnvVars;
 
@@ -82,8 +82,12 @@ pub struct WorkerSpec {
     pub root: PathBuf,
     /// The directory the worker starts in.
     pub cwd: PathBuf,
+    /// Installed after aye's engine and before every runtime's modules,
+    /// whatever the runtimes: the binary's prelude, aye's `pytest` module
+    /// and what it stands on.
+    pub prelude: ModuleSet,
     /// The runtimes whose executors the worker builds. Their modules are
-    /// installed after aye's engine, in order, each name once.
+    /// installed after the prelude, in order, each name once.
     pub runtimes: Vec<Runtime>,
     /// Services to provide: [`ServiceName::DEFAULT`] unless told
     /// otherwise.
@@ -108,6 +112,7 @@ impl WorkerSpec {
             python: python.into(),
             root: root.into(),
             cwd: cwd.into(),
+            prelude: ModuleSet::default(),
             runtimes: Vec::new(),
             services: ServiceName::DEFAULT.to_vec(),
             env: Vec::new(),
@@ -116,11 +121,13 @@ impl WorkerSpec {
         }
     }
 
-    /// The handshake this spec sends.
+    /// The handshake this spec sends: aye's engine, the prelude, then each
+    /// runtime's modules, each name once, in that order.
     pub fn hello(&self) -> Request {
         let mut seen = HashSet::new();
         let modules = ENGINE
             .iter()
+            .chain(self.prelude)
             .chain(self.runtimes.iter().flat_map(|runtime| runtime.modules))
             .filter(|module| seen.insert(&*module.name))
             .cloned()
@@ -906,7 +913,7 @@ mod tests {
 
     use aye_engine::ENGINE_MODULE;
     use aye_events::{AdapterName, BatchIndex, Event};
-    use aye_protocol::{EntryPoint, ModuleSet, ModuleSource, SessionMode};
+    use aye_protocol::{EntryPoint, ModuleSource, SessionMode};
 
     use super::*;
 
@@ -914,8 +921,10 @@ mod tests {
     const TWO: ModuleSource = ModuleSource::embedded("two", "");
 
     #[test]
-    fn hello_installs_the_engine_then_each_module_once() {
+    fn hello_installs_the_engine_the_prelude_then_each_module_once() {
+        const ZERO: ModuleSource = ModuleSource::embedded("zero", "");
         let mut spec = WorkerSpec::new("python", "/repo", "/repo");
+        spec.prelude = ModuleSet::new(const { &[ZERO, ONE] });
         spec.runtimes = vec![
             Runtime {
                 adapter: AdapterName::new_static("a"),
@@ -943,7 +952,8 @@ mod tests {
         assert_eq!(protocol, PROTOCOL_VERSION);
         assert_eq!(root, "/repo");
         let names: Vec<&str> = modules.iter().map(|m| &*m.name).collect();
-        assert_eq!(names, ["aye_engine", "one", "two"]);
+        assert_eq!(names, ["aye_engine", "zero", "one", "two"]);
+        assert_eq!(modules, [ENGINE_MODULE, ZERO, ONE, TWO]);
         assert_eq!(executors.len(), 2);
         assert_eq!(executors[1].entry.to_string(), "two:B");
         assert_eq!(

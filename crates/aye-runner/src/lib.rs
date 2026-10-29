@@ -48,9 +48,10 @@
 //!   lands, this is the bring-your-own provisioner.
 //! - **One spawn path.** [`spawn`] starts `python -c <aye_worker source>`
 //!   ([`WORKER_SOURCE`]) in the user's working directory with its standard
-//!   streams piped, sends `hello` (aye's engine, then each executor's
-//!   modules once, in order, the executors and the services by name) and
-//!   reads until `ready`, refusing a worker of another protocol version.
+//!   streams piped, sends `hello` (aye's engine, the prelude the binary
+//!   gives every worker, then each runtime's modules, each once, in order;
+//!   the executors and the services) and reads until `ready`, refusing a
+//!   worker of another protocol version.
 //!   Runs, refinement and later backends all go through it. Workers get
 //!   `PYTHONIOENCODING=utf-8` and their own process group, so the terminal's
 //!   Ctrl-C reaches only aye, which stops them through a [`StopHandle`].

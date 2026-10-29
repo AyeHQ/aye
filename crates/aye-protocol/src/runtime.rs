@@ -15,7 +15,8 @@ use crate::{ExecutorSpec, ModuleSet};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Runtime {
     pub adapter: AdapterName,
-    /// Installed in order, after aye's engine (`aye_engine::ENGINE`).
+    /// Installed in order, after aye's engine (`aye_engine::ENGINE`) and
+    /// the prelude every worker gets, whatever its runtimes.
     pub modules: ModuleSet,
     /// The `aye_engine.Executor` subclass the worker builds.
     pub entry: EntryPoint,

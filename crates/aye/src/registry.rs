@@ -1,24 +1,25 @@
 //! The adapters the runner knows, in priority order, which of them a
-//! project runs, and what the binary must know of them beyond the contract
-//! (which ones pytest collects in one module, what a conftest is). Linking
-//! an adapter here is the only place one is depended on. aye's engine runs
-//! every test: the pytest adapter reads pytest's tests with its front-end
-//! and aye's own `pytest` module, and the other adapters' workers get that
-//! module too ([`WithAyePytest`]), so pytest is never imported.
+//! project runs, what every worker installs before any adapter's modules
+//! ([`PRELUDE`]), and what the binary must know of them beyond the
+//! contract (which ones pytest collects in one module, what a conftest
+//! is). Linking an adapter here is the only place one is depended on.
+//! aye's engine runs every test: the pytest adapter reads pytest's tests
+//! with its front-end and aye's own `pytest` module, which every adapter's
+//! workers get, so pytest is never imported.
 
 use std::fmt;
 
 use anyhow::{Context as _, Result, bail};
-use aye_adapter::{Adapter, AdapterError, Project, Recognizer};
+use aye_adapter::{Adapter, Project};
 use aye_adapter_pytest::native::SHIM_MODULE;
 use aye_engine::{MODEL_MODULE, NATIVE_ENGINE_MODULE, REWRITE_MODULE};
 use aye_events::AdapterName;
-use aye_protocol::{ModuleSet, Runtime};
+use aye_protocol::ModuleSet;
 
 /// Every adapter the binary links, in priority order: the pytest adapter
 /// (for a static listing, `aye --co --no-refine`, the one that predicts
 /// without importing: [`aye_adapter_pytest::Pytest::static_listing`]), then
-/// unittest's and doctest's, with aye's `pytest` module in their workers.
+/// unittest's and doctest's.
 fn known(static_listing: bool) -> Vec<Box<dyn Adapter>> {
     let pytest = if static_listing {
         aye_adapter_pytest::Pytest::static_listing()
@@ -27,80 +28,28 @@ fn known(static_listing: bool) -> Vec<Box<dyn Adapter>> {
     };
     vec![
         Box::new(pytest),
-        Box::new(WithAyePytest {
-            inner: aye_adapter_unittest::Unittest,
-            modules: UNITTEST_WITH_AYE_PYTEST,
-        }),
-        Box::new(WithAyePytest {
-            inner: aye_adapter_doctest::Doctest,
-            modules: DOCTEST_WITH_AYE_PYTEST,
-        }),
+        Box::new(aye_adapter_unittest::Unittest),
+        Box::new(aye_adapter_doctest::Doctest),
     ]
 }
 
-/// The unittest adapter's modules after aye's `pytest` module and what it
-/// stands on, in the native engine's order.
-const UNITTEST_WITH_AYE_PYTEST: ModuleSet = ModuleSet::new(
+/// What every worker installs after aye's engine and before its adapters'
+/// own modules, whatever they are: aye's `pytest` module and what it stands
+/// on (the model, the rewriter and the native engine), so that what a
+/// worker imports as `pytest` (a conftest the doctest adapter loads, a test
+/// module beside `TestCase` classes, the pytest front-end) is aye's, rather
+/// than failing without pytest or loading the real one: pytest is never
+/// imported.
+pub(crate) const PRELUDE: ModuleSet = ModuleSet::new(
     const {
         &[
             MODEL_MODULE,
             REWRITE_MODULE,
             NATIVE_ENGINE_MODULE,
             SHIM_MODULE,
-            aye_adapter_unittest::MODULE,
         ]
     },
 );
-
-/// The doctest adapter's, likewise.
-const DOCTEST_WITH_AYE_PYTEST: ModuleSet = ModuleSet::new(
-    const {
-        &[
-            MODEL_MODULE,
-            REWRITE_MODULE,
-            NATIVE_ENGINE_MODULE,
-            SHIM_MODULE,
-            aye_adapter_doctest::MODULE,
-        ]
-    },
-);
-
-/// An adapter other than pytest's whose workers get aye's own `pytest`
-/// module first, so that what they import (the conftests the doctest
-/// adapter loads, a test module beside `TestCase` classes) imports it
-/// rather than failing without pytest, or loading the real one: pytest is
-/// never imported. Otherwise the adapter itself.
-struct WithAyePytest<A> {
-    inner: A,
-    /// aye's `pytest` module and its own, in install order (the adapter's
-    /// own last).
-    modules: ModuleSet,
-}
-
-impl<A: Adapter> Adapter for WithAyePytest<A> {
-    fn name(&self) -> AdapterName {
-        self.inner.name()
-    }
-
-    fn prepare(&self, project: &Project<'_>) -> Result<Option<Box<dyn Recognizer>>, AdapterError> {
-        self.inner.prepare(project)
-    }
-
-    fn prepare_among(
-        &self,
-        project: &Project<'_>,
-        adapters: &[AdapterName],
-    ) -> Result<Option<Box<dyn Recognizer>>, AdapterError> {
-        self.inner.prepare_among(project, adapters)
-    }
-
-    fn runtime(&self) -> Runtime {
-        Runtime {
-            modules: self.modules,
-            ..self.inner.runtime()
-        }
-    }
-}
 
 /// Whether pytest, the referee whenever it runs, collects the adapter's
 /// tests of a file through the one collector that collects pytest's own,
@@ -206,8 +155,10 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    use aye_adapter::ast::Stmt;
+    use aye_adapter::ast::visitor::{self, Visitor};
     use aye_config::AyeSettings;
-    use aye_protocol::{Request, SessionMode};
+    use aye_protocol::{Request, Runtime, SessionMode};
     use aye_static::EnvVars;
 
     use super::*;
@@ -288,35 +239,38 @@ mod tests {
         );
     }
 
-    /// The pytest adapter's executor is aye's engine with the pytest
-    /// front-end; the other adapters' workers get aye's `pytest` module
-    /// before their own modules, and keep their entries. A static listing
-    /// changes only what the pytest adapter's recognizer predicts.
+    /// Every adapter's executor runs on aye's engine without pytest: its
+    /// workers install aye's `pytest` module and what it stands on first,
+    /// and its own modules are none of those. The pytest adapter's lists
+    /// the session, and a static listing changes only what its recognizer
+    /// predicts.
     #[test]
     fn every_adapter_runs_on_ayes_engine_without_pytest() {
+        assert_eq!(
+            PRELUDE.names().collect::<Vec<_>>(),
+            ["aye_model", "aye_rewrite", "aye_native_engine", "pytest"]
+        );
         let adapters = known(false);
         let pytest = adapters[0].runtime();
-        assert_eq!(pytest.adapter, "pytest");
         assert_eq!(pytest.entry.to_string(), "aye_pytest_native:NativeExecutor");
         assert_eq!(pytest.session, SessionMode::ListsSession);
-        assert_eq!(known(true)[0].runtime().entry, pytest.entry);
-        for (adapter, own) in adapters.iter().skip(1).zip([
-            (aye_adapter_unittest::Unittest.runtime()),
-            (aye_adapter_doctest::Doctest.runtime()),
-        ]) {
+        assert_eq!(known(true)[0].runtime(), pytest);
+        for adapter in &adapters {
             let runtime = adapter.runtime();
-            let names: Vec<&str> = runtime.modules.names().collect();
-            assert_eq!(
-                names[..4],
-                ["aye_model", "aye_rewrite", "aye_native_engine", "pytest"]
-            );
-            assert_eq!(
-                runtime.modules.modules()[4..],
-                *own.modules.modules(),
-                "{}",
-                own.adapter
-            );
-            assert_eq!((runtime.adapter, runtime.entry), (own.adapter, own.entry));
+            assert_eq!(runtime.adapter, adapter.name());
+            for name in runtime.modules.names() {
+                assert!(
+                    !aye_engine::ENGINE
+                        .names()
+                        .chain(PRELUDE.names())
+                        .any(|first| first == name),
+                    "{}: {name}",
+                    runtime.adapter
+                );
+            }
+        }
+        for adapter in &adapters[1..] {
+            assert_eq!(adapter.runtime().session, SessionMode::PerBatch);
         }
     }
 
@@ -353,14 +307,23 @@ mod tests {
     ];
 
     /// The handshake of a worker for `adapters` (indices into the known
-    /// adapters, in the order the run lists them), as the runner sends it,
-    /// with each module's source, once checked against its file, written
-    /// as `<name>`.
-    fn hello(adapters: &[usize]) -> String {
+    /// adapters, in the order the run lists them), as the runner sends it.
+    fn handshake(adapters: &[usize]) -> Request {
         let known = known(false);
         let mut spec = aye_runner::WorkerSpec::new("python", "/repo", "/repo");
+        spec.prelude = PRELUDE;
         spec.runtimes = adapters.iter().map(|&at| known[at].runtime()).collect();
-        let hello = spec.hello();
+        spec.hello()
+    }
+
+    /// Each adapter alone, the default run's two, and all three in one
+    /// worker.
+    const WORKERS: [&[usize]; 5] = [&[0], &[1], &[2], &[2, 0], &[0, 1, 2]];
+
+    /// [`handshake`], with each module's source, once checked against its
+    /// file, written as `<name>`.
+    fn hello(adapters: &[usize]) -> String {
+        let hello = handshake(adapters);
         let mut line = serde_json::to_string(&hello).unwrap();
         let Request::Hello { modules, .. } = hello else {
             panic!("expected hello");
@@ -403,6 +366,7 @@ mod tests {
                 executors.join(","),
             )
         };
+        assert_eq!(WORKERS, [&[0][..], &[1], &[2], &[2, 0], &[0, 1, 2]]);
         assert_eq!(hello(&[0]), pinned(&[PYTEST], &[PYTEST_ENTRY]));
         assert_eq!(hello(&[1]), pinned(&[UNITTEST], &[UNITTEST_ENTRY]));
         assert_eq!(hello(&[2]), pinned(&[DOCTEST], &[DOCTEST_ENTRY]));
@@ -417,6 +381,122 @@ mod tests {
                 &[PYTEST_ENTRY, UNITTEST_ENTRY, DOCTEST_ENTRY]
             )
         );
+    }
+
+    /// The standard library's modules that the Python a worker installs
+    /// imports as it is installed. Each must be the standard library's:
+    /// what a worker installs imports nothing else but aye's modules
+    /// installed before it.
+    const STANDARD_LIBRARY: [&str; 54] = [
+        "__future__",
+        "abc",
+        "argparse",
+        "ast",
+        "atexit",
+        "bisect",
+        "builtins",
+        "collections",
+        "configparser",
+        "contextlib",
+        "dataclasses",
+        "datetime",
+        "decimal",
+        "difflib",
+        "doctest",
+        "enum",
+        "fnmatch",
+        "functools",
+        "gc",
+        "getpass",
+        "glob",
+        "hashlib",
+        "importlib",
+        "inspect",
+        "io",
+        "itertools",
+        "json",
+        "linecache",
+        "logging",
+        "marshal",
+        "math",
+        "nt",
+        "numbers",
+        "os",
+        "pathlib",
+        "platform",
+        "pprint",
+        "re",
+        "reprlib",
+        "shlex",
+        "shutil",
+        "stat",
+        "sys",
+        "tempfile",
+        "threading",
+        "time",
+        "tomllib",
+        "traceback",
+        "types",
+        "typing",
+        "unicodedata",
+        "unittest",
+        "uuid",
+        "warnings",
+    ];
+
+    /// The modules a module imports as it is installed: in its top-level
+    /// statements and its classes' bodies, not in its functions'.
+    #[derive(Default)]
+    struct Imports(Vec<String>);
+
+    impl<'a> Visitor<'a> for Imports {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            match stmt {
+                Stmt::FunctionDef(_) => {}
+                Stmt::Import(import) => {
+                    self.0
+                        .extend(import.names.iter().map(|alias| alias.name.to_string()));
+                }
+                Stmt::ImportFrom(import) => {
+                    let module = import.module.as_ref().map_or("", |m| m.as_str());
+                    self.0
+                        .push(format!("{}{module}", ".".repeat(import.level as usize)));
+                }
+                _ => visitor::walk_stmt(self, stmt),
+            }
+        }
+    }
+
+    /// Each module a worker installs imports, as it is installed, only the
+    /// standard library and the modules installed before it (of aye's
+    /// engine, the prelude, or the adapters' sets), for every worker the
+    /// adapters can have: a module installed too early fails the
+    /// handshake.
+    #[test]
+    fn every_module_a_worker_installs_imports_only_those_before_it() {
+        for adapters in WORKERS {
+            let Request::Hello { modules, .. } = handshake(adapters) else {
+                panic!("expected hello");
+            };
+            let mut installed: Vec<&str> = Vec::new();
+            for module in &modules {
+                let parsed = ruff_python_parser::parse_module(&module.source)
+                    .unwrap_or_else(|e| panic!("{}: {e}", module.name))
+                    .into_syntax();
+                let mut imports = Imports::default();
+                imports.visit_body(&parsed.body);
+                for import in &imports.0 {
+                    let top = import.split('.').next().unwrap_or_default();
+                    assert!(
+                        installed.contains(&top) || STANDARD_LIBRARY.contains(&top),
+                        "{adapters:?}: {} imports {import}, which is neither installed \
+                         before it nor the standard library's",
+                        module.name
+                    );
+                }
+                installed.push(&module.name);
+            }
+        }
     }
 
     #[test]
@@ -465,15 +545,12 @@ mod tests {
     #[test]
     fn the_python_sent_to_workers_names_only_catalogued_variables() {
         let mut sources = vec![("aye_worker", aye_runner::WORKER_SOURCE)];
-        for adapter in known(false) {
-            sources.extend(
-                adapter
-                    .runtime()
-                    .modules
-                    .iter()
-                    .map(|m| (&*m.name, &*m.source)),
-            );
-        }
+        let runtimes: Vec<Runtime> = known(false).iter().map(|a| a.runtime()).collect();
+        let modules = aye_engine::ENGINE
+            .iter()
+            .chain(PRELUDE)
+            .chain(runtimes.iter().flat_map(|runtime| runtime.modules));
+        sources.extend(modules.map(|m| (&*m.name, &*m.source)));
         let mut named = BTreeSet::new();
         for (module, source) in sources {
             let lines = source
