@@ -14,12 +14,12 @@ authors = ["René-Jean Corneille"]
 [workspace.dependencies]
 # x-release-please-start-version
 aye-adapter = { path = "crates/aye-adapter", version = "=0.0.1" }
+aye-adapter-doctest = { path = "crates/aye-adapter-doctest", version = "=0.0.1" }
+aye-adapter-pytest = { path = "crates/aye-adapter-pytest", version = "=0.0.1" }
+aye-adapter-unittest = { path = "crates/aye-adapter-unittest", version = "=0.0.1" }
 aye-collect = { path = "crates/aye-collect", version = "=0.0.1" }
 aye-config = { path = "crates/aye-config", version = "=0.0.1" }
 aye-engine = { path = "crates/aye-engine", version = "=0.0.1" }
-aye-engine-doctest = { path = "crates/aye-engine-doctest", version = "=0.0.1" }
-aye-engine-pytest = { path = "crates/aye-engine-pytest", version = "=0.0.1" }
-aye-engine-unittest = { path = "crates/aye-engine-unittest", version = "=0.0.1" }
 aye-events = { path = "crates/aye-events", version = "=0.0.1" }
 aye-fs = { path = "crates/aye-fs", version = "=0.0.1" }
 aye-history = { path = "crates/aye-history", version = "=0.0.1" }

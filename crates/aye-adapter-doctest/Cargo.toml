@@ -1,6 +1,6 @@
 [package]
-name = "aye-engine-unittest"
-description = "unittest engine for aye: native recognition and execution of unittest.TestCase suites"
+name = "aye-adapter-doctest"
+description = "doctest adapter for aye: docstring, text-file and markdown examples as tests"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,8 +15,10 @@ aye-config = { workspace = true }
 aye-events = { workspace = true }
 aye-fs = { workspace = true }
 aye-protocol = { workspace = true }
+aye-static = { workspace = true }
 ruff_python_parser = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

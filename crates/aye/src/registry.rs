@@ -10,30 +10,30 @@ use std::fmt;
 
 use anyhow::{Context as _, Result, bail};
 use aye_adapter::{Adapter, AdapterError, Project, Recognizer};
+use aye_adapter_pytest::native::SHIM_MODULE;
 use aye_config::AyeSettings;
 use aye_engine::{MODEL_MODULE, NATIVE_ENGINE_MODULE, REWRITE_MODULE};
-use aye_engine_pytest::native::SHIM_MODULE;
 use aye_events::AdapterName;
 use aye_protocol::{EmbeddedModule, Executor};
 
 /// Every adapter the binary links, in priority order: the pytest adapter
 /// (for a static listing, `aye --co --no-refine`, the one that predicts
-/// without importing: [`aye_engine_pytest::Pytest::static_listing`]), then
+/// without importing: [`aye_adapter_pytest::Pytest::static_listing`]), then
 /// unittest's and doctest's, with aye's `pytest` module in their workers.
 fn known(static_listing: bool) -> Vec<Box<dyn Adapter>> {
     let pytest = if static_listing {
-        aye_engine_pytest::Pytest::static_listing()
+        aye_adapter_pytest::Pytest::static_listing()
     } else {
-        aye_engine_pytest::Pytest::default()
+        aye_adapter_pytest::Pytest::default()
     };
     vec![
         Box::new(pytest),
         Box::new(WithAyePytest {
-            inner: aye_engine_unittest::Unittest,
+            inner: aye_adapter_unittest::Unittest,
             modules: &UNITTEST_WITH_AYE_PYTEST,
         }),
         Box::new(WithAyePytest {
-            inner: aye_engine_doctest::Doctest,
+            inner: aye_adapter_doctest::Doctest,
             modules: &DOCTEST_WITH_AYE_PYTEST,
         }),
     ]
@@ -46,7 +46,7 @@ static UNITTEST_WITH_AYE_PYTEST: [EmbeddedModule; 5] = [
     REWRITE_MODULE,
     NATIVE_ENGINE_MODULE,
     SHIM_MODULE,
-    aye_engine_unittest::MODULE,
+    aye_adapter_unittest::MODULE,
 ];
 
 /// The doctest adapter's, likewise.
@@ -55,7 +55,7 @@ static DOCTEST_WITH_AYE_PYTEST: [EmbeddedModule; 5] = [
     REWRITE_MODULE,
     NATIVE_ENGINE_MODULE,
     SHIM_MODULE,
-    aye_engine_doctest::MODULE,
+    aye_adapter_doctest::MODULE,
 ];
 
 /// An adapter other than pytest's whose workers get aye's own `pytest`
@@ -102,7 +102,7 @@ impl<A: Adapter> Adapter for WithAyePytest<A> {
 /// load it. The doctest adapter's tests are pytest's `DoctestModule`,
 /// another collector, whose error pytest reports as well.
 pub(crate) fn collects_in_one_module(adapter: &AdapterName) -> bool {
-    *adapter == aye_engine_pytest::NAME || *adapter == aye_engine_unittest::NAME
+    *adapter == aye_adapter_pytest::NAME || *adapter == aye_adapter_unittest::NAME
 }
 
 /// Whether a diagnostic's path (relative to the root, `/` separators) is a
@@ -164,8 +164,8 @@ pub(crate) fn choose(
         Some(names) => (names.clone(), Why::Configured),
         None => (
             vec![
-                aye_engine_doctest::NAME.to_string(),
-                aye_engine_pytest::NAME.to_string(),
+                aye_adapter_doctest::NAME.to_string(),
+                aye_adapter_pytest::NAME.to_string(),
             ],
             Why::Default,
         ),
@@ -270,7 +270,7 @@ mod tests {
             (chosen.names(), chosen.why)
         };
         let default = (
-            vec![aye_engine_doctest::NAME, aye_engine_pytest::NAME],
+            vec![aye_adapter_doctest::NAME, aye_adapter_pytest::NAME],
             Why::Default,
         );
         assert_eq!(chosen(&[]), default);
@@ -297,8 +297,8 @@ mod tests {
         assert!(pytest.lists_session);
         assert_eq!(known(true)[0].executor().entry, pytest.entry);
         for (adapter, own) in adapters.iter().skip(1).zip([
-            (aye_engine_unittest::Unittest.executor()),
-            (aye_engine_doctest::Doctest.executor()),
+            (aye_adapter_unittest::Unittest.executor()),
+            (aye_adapter_doctest::Doctest.executor()),
         ]) {
             let executor = adapter.executor();
             let names: Vec<&str> = executor.modules.iter().map(|m| m.name).collect();

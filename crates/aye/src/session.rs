@@ -180,7 +180,7 @@ impl Session {
             && !args.collect_only
             && adapters
                 .iter()
-                .any(|adapter| adapter.name() == aye_engine_pytest::NAME)
+                .any(|adapter| adapter.name() == aye_adapter_pytest::NAME)
         {
             anyhow::bail!(
                 "--no-refine lists tests without importing them, with --co; a run of \
@@ -484,7 +484,7 @@ impl Session {
         let pytest_runs = self
             .prepared
             .iter()
-            .any(|(name, _)| *name == aye_engine_pytest::NAME);
+            .any(|(name, _)| *name == aye_adapter_pytest::NAME);
         let mut collection_errors = false;
         let broken = broken_conftest_dirs(&collection.diagnostics);
         for diagnostic in &collection.diagnostics {
@@ -503,7 +503,7 @@ impl Session {
             }
             conftests.see(None, &mut diagnostic);
             if pytest_runs {
-                once.refined(&aye_engine_pytest::NAME, &diagnostic);
+                once.refined(&aye_adapter_pytest::NAME, &diagnostic);
             }
             collection_errors |= diagnostic.severity == Severity::Error;
             out.emit(Event::Diagnostic(diagnostic));

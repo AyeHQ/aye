@@ -26,9 +26,9 @@ fn embedded() -> Vec<EmbeddedModule> {
         aye_engine::REWRITE_MODULE,
         aye_engine::NATIVE_ENGINE_MODULE,
     ];
-    modules.extend(aye_engine_pytest::native::MODULES);
-    modules.push(aye_engine_unittest::MODULE);
-    modules.push(aye_engine_doctest::MODULE);
+    modules.extend(aye_adapter_pytest::native::MODULES);
+    modules.push(aye_adapter_unittest::MODULE);
+    modules.push(aye_adapter_doctest::MODULE);
     modules.push(EmbeddedModule {
         name: "aye_worker",
         source: aye_runner::WORKER_SOURCE,

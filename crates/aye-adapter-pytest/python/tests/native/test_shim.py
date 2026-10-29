@@ -1943,7 +1943,7 @@ def test_installed_as_pytest_after_a_real_pytest_it_serves_no_private_module(tmp
     }
 
 
-DOCTEST_ADAPTER = HERE.parents[3] / "aye-engine-doctest" / "python" / "aye_engine_doctest.py"
+DOCTEST_ADAPTER = HERE.parents[3] / "aye-adapter-doctest" / "python" / "aye_engine_doctest.py"
 
 FOUND = r"""
 import importlib.metadata, importlib.util, json, sys, types

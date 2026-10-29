@@ -1372,11 +1372,11 @@ fn a_collection_error_from_refinement_counts_as_the_pytest_adapters() {
         message: format!("cannot import {path}"),
     };
     let mut once = OneModuleErrors::default();
-    once.refined(&aye_engine_pytest::NAME, &error("test_imp.py"));
+    once.refined(&aye_adapter_pytest::NAME, &error("test_imp.py"));
     // A conftest's, or anything but an error, is another matter.
-    once.refined(&aye_engine_pytest::NAME, &error("conftest.py"));
+    once.refined(&aye_adapter_pytest::NAME, &error("conftest.py"));
     once.refined(
-        &aye_engine_pytest::NAME,
+        &aye_adapter_pytest::NAME,
         &Diagnostic {
             severity: Severity::Warning,
             ..error("test_warn.py")
