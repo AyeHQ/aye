@@ -36,6 +36,10 @@ divan = "0.1"
 # The gzip of `.aye/runs`, with the default backend: miniz_oxide, pure Rust.
 flate2 = "1.1"
 globset = "0.4"
+# Snapshot tests (dev-dependencies only): `filters` and `redactions` take out
+# what varies between machines and runs.
+insta = { version = "1.49", features = ["filters", "redactions"] }
+insta-cmd = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 shlex = "1"
