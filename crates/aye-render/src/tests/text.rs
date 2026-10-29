@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use aye_events::{
-    Assertion, Captured, Counts, Event, ExitCode, Failure, Outcome, Phase, Record, TestId,
-    TestResult,
+    Assertion, BatchIndex, Captured, Counts, Event, ExitCode, Failure, Outcome, Phase, Record,
+    TestId, TestResult, WorkerIndex,
 };
 
 use super::{feed, lines, streams};
@@ -330,7 +330,7 @@ fn a_failed_workers_error_is_whole_from_very_verbose() {
         exit_status: Some(1),
         error: Some(error),
     });
-    record.envelope.worker = Some(aye_events::WorkerIndex::from_u32(2));
+    record.envelope.worker = Some(WorkerIndex::from_u32(2));
     let records = [record];
     let out = text(&records, 0);
     assert!(
@@ -961,7 +961,7 @@ fn errors_are_named_for_what_they_are_and_shown_once() {
     ]
     .map(|mut record| {
         if matches!(record.event, Event::Diagnostic(_)) {
-            record.envelope.batch = Some(aye_events::BatchIndex::from_u32(0));
+            record.envelope.batch = Some(BatchIndex::from_u32(0));
         }
         record
     });
@@ -1007,7 +1007,7 @@ fn what_the_command_line_names_and_doesnt_exist_is_a_usage_error() {
         "tests/test_a.py",
         "tests/test_a.py::test_x[9]: pytest found no such test",
     );
-    record.envelope.batch = Some(aye_events::BatchIndex::from_u32(3));
+    record.envelope.batch = Some(BatchIndex::from_u32(3));
     let out = text(
         &[
             record,

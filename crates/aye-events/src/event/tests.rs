@@ -166,7 +166,7 @@ fn the_runs_number_and_its_id_are_two_keys() {
         root: "/p".into(),
         collect_only: false,
         workers: 1,
-        run: Some(81),
+        run: RunNumber::new(81),
     });
     record.envelope.run = Some("e14d5f08d1554fbc".into());
     let line = serde_json::to_string(&record).unwrap();

@@ -1,4 +1,4 @@
-use aye_events::{Failure, Phase};
+use aye_events::{Failure, Phase, RunNumber};
 
 use super::*;
 
@@ -52,7 +52,7 @@ fn the_renderers_are_told_the_runs_number_age_and_stale_files() {
         (path("tests/test_b.py"), Change::Gone),
     ];
     let told = context(&stored, &stale, stored.finished_ms + 120_000);
-    assert_eq!(told.run, Some(81));
+    assert_eq!(told.run, RunNumber::new(81));
     assert_eq!(told.ago.as_deref(), Some("2 min ago"));
     assert_eq!(
         told.stale,
@@ -95,7 +95,7 @@ fn details_come_at_the_second_level_unless_the_flags_say() {
 fn a_run_is_picked_by_its_number_or_the_start_of_an_old_id() {
     let dir = tempfile::tempdir().unwrap();
     let runs = dir.path().join("runs");
-    let started = |run: Option<u64>| {
+    let started = |run: Option<RunNumber>| {
         let mut record = Record::new(Event::RunStarted {
             schema_version: 1,
             aye_version: "0".into(),
@@ -126,7 +126,7 @@ fn a_run_is_picked_by_its_number_or_the_start_of_an_old_id() {
     )
     .unwrap();
     let store = RunStore::new(&runs);
-    let picked = |wanted: Option<&str>| pick(&store, wanted, 10).map(|meta| meta.run);
+    let picked = |wanted: Option<&str>| pick(&store, wanted, 10).map(|meta| meta.run.to_string());
     assert_eq!(picked(None).ok().as_deref(), Some("r2"));
     for wanted in ["r1", "1", "R1", "01"] {
         assert_eq!(picked(Some(wanted)).ok().as_deref(), Some("r1"), "{wanted}");
@@ -139,6 +139,22 @@ fn a_run_is_picked_by_its_number_or_the_start_of_an_old_id() {
             "{wanted}"
         );
     }
+    // A number no stored run has is the start of an old id, when one has
+    // it; a number a run has names that run.
+    for old in ["9abcdef012345678", "1abcdef012345678"] {
+        let meta = RunMeta {
+            run: old.into(),
+            ..meta.clone()
+        };
+        std::fs::write(
+            runs.join(format!("{old}.json")),
+            serde_json::to_vec(&meta).unwrap(),
+        )
+        .unwrap();
+    }
+    assert_eq!(picked(Some("9")).ok().as_deref(), Some("9abcdef012345678"));
+    assert!(picked(Some("r9")).is_err());
+    assert_eq!(picked(Some("1")).ok().as_deref(), Some("r1"));
 }
 
 #[test]

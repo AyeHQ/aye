@@ -52,9 +52,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use aye_config::AyeConfig;
 use aye_events::{
     AdapterName, Case, Certainty, Counts, Diagnostic, Event, ExitCode, LifetimeId, Outcome,
-    ProjectPath, Record, Severity, TestId, TestResult, WorkerIndex,
+    ProjectPath, Record, RunNumber, Severity, TestId, TestResult, WorkerIndex,
 };
-use aye_history::{Change, RunMeta, RunStore};
+use aye_history::{Change, RunMeta, RunStore, StoredRunId};
 use aye_render::{
     ColorChoice, Extra, JsonLines, Keys, Reporter, ShowContext, ShowMode, Text, TextOptions,
     summary_words,
@@ -144,7 +144,7 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
     if args.log {
         let mut out = io::BufWriter::new(io::stdout().lock());
         return match store
-            .copy_log(&meta.run, &mut out)
+            .copy_log(&meta.run.to_string(), &mut out)
             .and_then(|()| out.flush())
         {
             Err(err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
@@ -161,7 +161,7 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
             other => Ok(other?),
         };
     }
-    let records = store.log(&meta.run).map_err(unreadable)?;
+    let records = store.log(&meta.run.to_string()).map_err(unreadable)?;
     let log = Log::of(&records);
     let keys = Keys::of(&records);
 
@@ -270,16 +270,16 @@ fn pick(store: &RunStore, wanted: Option<&str>, keep: usize) -> Result<RunMeta, 
         return Err(no_run(store, keep));
     }
     let lower = wanted.to_ascii_lowercase();
-    let number = aye_history::runs::number(&lower)
-        .or_else(|| aye_history::runs::number(&format!("r{lower}")));
-    if let Some(number) = number
+    if let Ok(number) = lower.parse::<RunNumber>()
         && let Some(meta) = runs.iter().find(|meta| meta.number() == Some(number))
     {
         return Ok(meta.clone());
     }
     let mut found: Vec<RunMeta> = runs
         .iter()
-        .filter(|meta| meta.number().is_none() && meta.run.starts_with(&lower))
+        .filter(
+            |meta| matches!(&meta.run, StoredRunId::Legacy(id) if id.as_str().starts_with(&lower)),
+        )
         .cloned()
         .collect();
     match found.len() {
@@ -302,7 +302,7 @@ fn pick(store: &RunStore, wanted: Option<&str>, keep: usize) -> Result<RunMeta, 
 
 fn ids(runs: &[RunMeta]) -> String {
     runs.iter()
-        .map(|meta| meta.run.as_str())
+        .map(|meta| meta.run.to_string())
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -356,7 +356,7 @@ fn run_line(meta: &RunMeta, last: bool) -> String {
     let string = |text: &str| serde_json::Value::from(text).to_string();
     let mut fields = vec![
         r#""type":"run""#.to_owned(),
-        format!(r#""id":{}"#, string(&meta.run)),
+        format!(r#""id":{}"#, string(&meta.run.to_string())),
         format!(r#""started":{}"#, string(&rfc3339(meta.started_ms))),
     ];
     if let Some(code) = meta.exit_code {
@@ -488,7 +488,7 @@ fn by_key<'a>(
     found: &'a [String],
     with_results: &HashSet<&str>,
     keys: &Keys,
-    run: &str,
+    run: &StoredRunId,
 ) -> Result<&'a str, String> {
     let shown: Vec<&str> = found
         .iter()
@@ -519,7 +519,7 @@ fn by_key<'a>(
     }
 }
 
-fn nothing_named(arg: &str, run: &str, closest: &[&str]) -> String {
+fn nothing_named(arg: &str, run: &StoredRunId, closest: &[&str]) -> String {
     let mut message = format!("{arg}: no test of run {run} has that name");
     if !closest.is_empty() {
         message.push_str("; the closest:");

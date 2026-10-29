@@ -1,10 +1,13 @@
-//! A run's identities: its id, the environment it ran in, the lanes its
-//! workers run on and the batches they are handed; and the stamper that
-//! writes the run's part of each record's envelope.
+//! A run's identities: its id, its number in the run store, the
+//! environment it ran in, the lanes its workers run on and the batches they
+//! are handed; and the stamper that writes the run's part of each record's
+//! envelope.
 
 use std::borrow::Borrow;
 use std::fmt;
 use std::hash::{BuildHasher, Hasher};
+use std::num::NonZeroU64;
+use std::str::FromStr;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use aye_index::newtype_index;
@@ -84,6 +87,81 @@ impl PartialEq<&str> for RunId {
         *self.0 == **other
     }
 }
+
+/// A run's number in the run store, from 1: the store claims it before the
+/// run's `run_started`, which says it (`run_number`). The history keeps the
+/// number of the run a test's streak of bad outcomes began in, and a bad
+/// outcome's `history` says it (`since`).
+///
+/// It prints as the store spells it, `r81`, reads from `r81` or `81` (as
+/// `aye show --run` takes it), and serializes as the number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RunNumber(NonZeroU64);
+
+impl RunNumber {
+    /// The run numbered `n`; `None` for 0, which numbers no run.
+    pub const fn new(n: u64) -> Option<Self> {
+        match NonZeroU64::new(n) {
+            Some(n) => Some(Self(n)),
+            None => None,
+        }
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// `r81`.
+impl fmt::Display for RunNumber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "r{}", self.0)
+    }
+}
+
+/// `r81` or `81`: ASCII digits, with leading zeros or without, after an `r`
+/// or not, of a number from 1.
+impl FromStr for RunNumber {
+    type Err = InvalidRunNumber;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let digits = text.strip_prefix('r').unwrap_or(text);
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(InvalidRunNumber(text.into()));
+        }
+        digits
+            .parse()
+            .ok()
+            .and_then(Self::new)
+            .ok_or_else(|| InvalidRunNumber(text.into()))
+    }
+}
+
+impl Serialize for RunNumber {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(self.get())
+    }
+}
+
+/// A number from 1; 0 is refused.
+impl<'de> Deserialize<'de> for RunNumber {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let n = u64::deserialize(deserializer)?;
+        Self::new(n).ok_or_else(|| serde::de::Error::custom("run number 0"))
+    }
+}
+
+/// A text that is not a run's number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidRunNumber(Box<str>);
+
+impl fmt::Display for InvalidRunNumber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "`{}` is not a run's number", self.0)
+    }
+}
+
+impl std::error::Error for InvalidRunNumber {}
 
 /// One environment (an interpreter and its dependencies) a run's tests ran
 /// in: the envelope's `environment`. Reserved for the matrix: nothing sets
@@ -310,6 +388,37 @@ mod tests {
         assert!(first.envelope.t_ms.unwrap() < 1000.0);
         assert!(second.envelope.t_ms >= first.envelope.t_ms);
         assert_eq!(stamper.next_seq(), 2);
+    }
+
+    /// A run's number prints as `r81`, reads from `r81` or `81`, and
+    /// serializes as the number it was when it was a `u64`.
+    #[test]
+    fn a_run_number_is_r_and_its_digits() {
+        let n = RunNumber::new(81).unwrap();
+        assert_eq!(n.get(), 81);
+        assert_eq!(n.to_string(), "r81");
+        for text in ["r81", "81", "r081", "081"] {
+            assert_eq!(text.parse::<RunNumber>(), Ok(n), "{text}");
+        }
+        for text in [
+            "",
+            "r",
+            "rr81",
+            "R81",
+            "r0",
+            "0",
+            "r-1",
+            "+81",
+            "r8a",
+            "r99999999999999999999",
+        ] {
+            assert!(text.parse::<RunNumber>().is_err(), "{text}");
+        }
+        assert_eq!(RunNumber::new(0), None);
+        assert_eq!(serde_json::to_string(&n).unwrap(), "81");
+        assert_eq!(serde_json::from_str::<RunNumber>("81").unwrap(), n);
+        assert!(serde_json::from_str::<RunNumber>("0").is_err());
+        assert!(RunNumber::new(9) < RunNumber::new(10));
     }
 
     /// An index prints and serializes as the number it was when it was a

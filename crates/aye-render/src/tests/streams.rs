@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use aye_events::{
     Assertion, Captured, Case, Certainty, Columns, Counts, Diagnostic, Envelope, Event, ExitCode,
-    Failure, Frame, Local, Location, Outcome, Phase, Record, Reproduce, SCHEMA_VERSION, Scope,
-    Severity, Span, TestId, TestResult,
+    Failure, Frame, Local, Location, Outcome, Phase, Record, Reproduce, RunNumber, SCHEMA_VERSION,
+    Scope, Severity, Span, TestId, TestResult, WorkerIndex,
 };
 
 const fn ms(n: u64) -> Duration {
@@ -530,7 +530,7 @@ pub(crate) fn diagnostics() -> Vec<Record> {
             ms(90),
         ),
     ]);
-    records[8].envelope.worker = Some(aye_events::WorkerIndex::from_u32(1));
+    records[8].envelope.worker = Some(WorkerIndex::from_u32(1));
     records
 }
 
@@ -755,7 +755,7 @@ fn patch_binding() -> TestResult {
     );
     result.history = Some(Previous {
         outcomes: "pppppppfff".into(),
-        since: Some(78),
+        since: RunNumber::new(78),
     });
     result
 }
@@ -1107,7 +1107,7 @@ pub(crate) fn full() -> Vec<Record> {
             root: "/home/me/tests_pytest".into(),
             collect_only: false,
             workers: 1,
-            run: Some(81),
+            run: RunNumber::new(81),
         },
         Event::CollectionStarted,
         diagnostic(
@@ -1143,7 +1143,7 @@ pub(crate) fn full() -> Vec<Record> {
             record.event,
             Event::WorkerStarted { .. } | Event::TestFinished(_) | Event::WorkerFinished { .. }
         ) {
-            record.envelope.worker = Some(aye_events::WorkerIndex::FIRST);
+            record.envelope.worker = Some(WorkerIndex::FIRST);
         }
     }
     records

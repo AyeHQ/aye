@@ -89,13 +89,13 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::Duration;
 
-use aye_events::{Event, Outcome, Previous, Record, RunId, TestId, TestResult};
+use aye_events::{Event, Outcome, Previous, Record, RunId, RunNumber, TestId, TestResult};
 use aye_fs::{HISTORY_TEMPORARY, StateBucket, atomic_write, prepare_dir};
 use serde::{Deserialize, Serialize};
 
 pub mod runs;
 
-pub use runs::{Change, RunMeta, RunStore, RunWriter};
+pub use runs::{Change, RunMeta, RunStore, RunWriter, StoredRunId};
 
 /// The history file, inside the directory history is given.
 pub const FILE: &str = StateBucket::History.name();
@@ -137,7 +137,7 @@ pub struct TestStats {
     /// outcomes began; `None` when its last outcome isn't bad, or when that
     /// run had no number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bad_since: Option<u64>,
+    pub bad_since: Option<RunNumber>,
 }
 
 impl TestStats {
@@ -192,7 +192,7 @@ pub struct History {
 struct Run {
     id: Option<RunId>,
     /// Its number in the run store, from its `run_started`.
-    number: Option<u64>,
+    number: Option<RunNumber>,
     collect_only: bool,
     /// Whether a `run_started` opened it: only then does a `test_finished`
     /// without a `test_started` mean the test never started.
@@ -207,7 +207,7 @@ struct Run {
 #[derive(Debug, Clone, Default)]
 struct Before {
     recent: String,
-    bad_since: Option<u64>,
+    bad_since: Option<RunNumber>,
     /// Whether its last outcome was bad.
     bad: bool,
 }

@@ -145,8 +145,8 @@ use anstream::stream::{AsLockedWrite, RawStream};
 use anstyle::{AnsiColor, Style};
 use aye_events::{
     Assertion, Captured, Certainty, Columns, Compare, Counts, Diagnostic, DiagnosticCode, Event,
-    ExitCode, Failure, Frame, LifetimeId, Local, Outcome, Phase, Record, Severity, TestId,
-    TestResult, WorkerIndex,
+    ExitCode, Failure, Frame, LifetimeId, Local, Outcome, Phase, Record, RunNumber, Severity,
+    TestId, TestResult, WorkerIndex,
 };
 
 use crate::tally::{self, Noted, Tally, Tone};
@@ -253,7 +253,7 @@ pub struct Text<W: RawStream> {
     /// number.
     root: Option<String>,
     workers: u32,
-    run: Option<u64>,
+    run: Option<RunNumber>,
     /// From `collection_finished`.
     selected: Option<u32>,
     header_shown: bool,
@@ -1274,7 +1274,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
                 .context
                 .run
                 .or(self.run)
-                .map(|run| format!("run r{run}"));
+                .map(|run| format!("run {run}"));
             match (run, &self.context.ago) {
                 (Some(run), Some(ago)) => parts.push(format!("{run}, {ago}")),
                 (Some(run), None) => parts.push(run),

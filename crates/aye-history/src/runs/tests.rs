@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use aye_events::{
     BatchIndex, Case, Counts, Diagnostic, Event, ExitCode, Failure, Outcome, Phase, Record, RunId,
-    Severity, TestId, TestResult,
+    RunNumber, Severity, TestId, TestResult,
 };
 
 use super::*;
@@ -73,7 +73,15 @@ fn keep(dir: &Path, keep: usize, records: &[Record]) -> Option<String> {
     for record in records {
         writer.record(record);
     }
-    writer.finish(BTreeMap::new()).unwrap()
+    writer
+        .finish(BTreeMap::new())
+        .unwrap()
+        .map(|id| id.to_string())
+}
+
+/// The id a run is stored under, from its text.
+fn stored(id: &str) -> StoredRunId {
+    StoredRunId::from(id)
 }
 
 /// The names of the files in `dir`, sorted.
@@ -114,7 +122,7 @@ fn a_run_is_kept_whole_with_its_summary_and_as_last() {
     // The summary, and `last`.
     let meta = store.last().unwrap();
     assert_eq!(meta.run, "r1");
-    assert_eq!(meta.number(), Some(1));
+    assert_eq!(meta.number(), RunNumber::new(1));
     assert_eq!(meta.version, VERSION);
     assert_eq!(meta.exit_code, Some(ExitCode::TestsFailed));
     assert_eq!((meta.counts.passed, meta.counts.failed), (1, 1));
@@ -153,11 +161,32 @@ fn runs_are_numbered_after_the_highest_number_stored_and_last() {
             .map(RunId::as_str),
         Some("any")
     );
-    assert_eq!(number("r81"), Some(81));
-    for not in ["81", "r", "r+1", "r-1", "rx", "0123456789abcdef", ""] {
-        assert_eq!(number(not), None, "{not}");
+    assert_eq!(
+        stored("r81"),
+        StoredRunId::Numbered(RunNumber::new(81).unwrap())
+    );
+    assert_eq!(stored("r81").to_string(), "r81");
+    // Any other text is a legacy id, as it was written: a number's own
+    // spelling has no leading zero.
+    for not in [
+        "81",
+        "r",
+        "r+1",
+        "r-1",
+        "rx",
+        "0123456789abcdef",
+        "",
+        "r0",
+        "r081",
+    ] {
+        assert_eq!(stored(not).number(), None, "{not}");
+        assert_eq!(stored(not).to_string(), not);
     }
-    assert_eq!(numbered(81), "r81");
+    assert_eq!(serde_json::to_string(&stored("r81")).unwrap(), r#""r81""#);
+    assert_eq!(
+        serde_json::from_str::<StoredRunId>(r#""r081""#).unwrap(),
+        stored("r081")
+    );
 }
 
 #[test]
@@ -167,26 +196,20 @@ fn a_number_another_run_holds_is_skipped() {
     keep(&dir, 10, &run("a", project.path(), OUTCOMES));
     // Another aye claimed r2 and is still writing it.
     let mut other = RunWriter::new(&dir, 10);
-    assert_eq!(other.claim(), Some(2));
-    assert_eq!(other.claim(), Some(2), "claimed once");
+    assert_eq!(other.claim(), RunNumber::new(2));
+    assert_eq!(other.claim(), RunNumber::new(2), "claimed once");
     assert!(dir.join("r2.jsonl.gz").is_file());
     let mut writer = RunWriter::new(&dir, 10);
-    assert_eq!(writer.claim(), Some(3));
+    assert_eq!(writer.claim(), RunNumber::new(3));
     // Each run is stored under the number it claimed, whichever ends first.
     for record in &run("b", project.path(), OUTCOMES) {
         writer.record(record);
     }
-    assert_eq!(
-        writer.finish(BTreeMap::new()).unwrap().as_deref(),
-        Some("r3")
-    );
+    assert_eq!(writer.finish(BTreeMap::new()).unwrap(), Some(stored("r3")));
     for record in &run("c", project.path(), OUTCOMES) {
         other.record(record);
     }
-    assert_eq!(
-        other.finish(BTreeMap::new()).unwrap().as_deref(),
-        Some("r2")
-    );
+    assert_eq!(other.finish(BTreeMap::new()).unwrap(), Some(stored("r2")));
     let store = RunStore::new(&dir);
     assert_eq!(store.log("r3").unwrap(), run("b", project.path(), OUTCOMES));
     assert_eq!(store.log("r2").unwrap(), run("c", project.path(), OUTCOMES));
@@ -203,7 +226,7 @@ fn a_number_claimed_for_a_run_that_isnt_kept_is_free_again() {
     let dir = project.path().join(".aye/runs");
     // Claimed, and the run only collected.
     let mut writer = RunWriter::new(&dir, 10);
-    assert_eq!(writer.claim(), Some(1));
+    assert_eq!(writer.claim(), RunNumber::new(1));
     let mut records = run("a", project.path(), OUTCOMES);
     if let Event::RunStarted { collect_only, .. } = &mut records[0].event {
         *collect_only = true;
@@ -215,12 +238,12 @@ fn a_number_claimed_for_a_run_that_isnt_kept_is_free_again() {
     assert_eq!(names(&dir), [] as [String; 0]);
     // Claimed, and the run never started.
     let mut writer = RunWriter::new(&dir, 10);
-    assert_eq!(writer.claim(), Some(1));
+    assert_eq!(writer.claim(), RunNumber::new(1));
     assert_eq!(writer.finish(BTreeMap::new()).unwrap(), None);
     assert_eq!(names(&dir), [] as [String; 0]);
     // Claimed, and the run had nothing to show.
     let mut writer = RunWriter::new(&dir, 10);
-    assert_eq!(writer.claim(), Some(1));
+    assert_eq!(writer.claim(), RunNumber::new(1));
     for record in &run("b", project.path(), &[]) {
         writer.record(record);
     }
@@ -270,7 +293,7 @@ fn runs_stored_under_hex_ids_count_for_no_number_and_are_pruned_like_any_other()
         RunStore::new(dir)
             .runs()
             .into_iter()
-            .map(|meta| meta.run)
+            .map(|meta| meta.run.to_string())
             .collect()
     };
     assert_eq!(ids(&dir), ["r1", old]);
@@ -333,7 +356,11 @@ fn the_newest_runs_are_kept_and_the_rest_deleted() {
         std::thread::sleep(Duration::from_millis(5));
     }
     let store = RunStore::new(&dir);
-    let kept: Vec<String> = store.runs().into_iter().map(|meta| meta.run).collect();
+    let kept: Vec<String> = store
+        .runs()
+        .into_iter()
+        .map(|meta| meta.run.to_string())
+        .collect();
     assert_eq!(kept, ["r3", "r2"]);
     assert!(!dir.join("r1.jsonl.gz").exists());
     assert!(!dir.join("r1.json").exists());
@@ -385,20 +412,23 @@ fn two_runs_at_once_each_keep_their_own_log() {
             })
         })
         .collect();
-    let stored: BTreeMap<&str, String> = threads
+    let ids: BTreeMap<&str, StoredRunId> = threads
         .into_iter()
         .map(|thread| thread.join().unwrap())
         .collect();
-    let mut numbers: Vec<&str> = stored.values().map(String::as_str).collect();
+    let mut numbers: Vec<String> = ids.values().map(StoredRunId::to_string).collect();
     numbers.sort_unstable();
     assert_eq!(numbers, ["r1", "r2"]);
     let store = RunStore::new(&dir);
     assert_eq!(store.runs().len(), 2);
-    for (id, stored) in &stored {
-        assert_eq!(store.log(stored).unwrap(), run(id, &root, OUTCOMES));
+    for (id, stored) in &ids {
+        assert_eq!(
+            store.log(&stored.to_string()).unwrap(),
+            run(id, &root, OUTCOMES)
+        );
     }
     // `last` is the one that finished last.
-    assert_eq!(store.last().unwrap().run, stored["slow"]);
+    assert_eq!(store.last().unwrap().run, ids["slow"]);
 }
 
 #[test]
@@ -749,7 +779,11 @@ fn last_is_listed_first_and_the_newest_run_stands_for_it_when_gone() {
     }
     let store = RunStore::new(&dir);
     let ids = |store: &RunStore| -> Vec<String> {
-        store.runs().into_iter().map(|meta| meta.run).collect()
+        store
+            .runs()
+            .into_iter()
+            .map(|meta| meta.run.to_string())
+            .collect()
     };
     assert_eq!(ids(&store), ["r3", "r2", "r1"]);
     // Two runs finishing at once: the one that renamed `last` last is the

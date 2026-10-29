@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use aye_events::{
-    Counts, DiagnosticCode, Event, ExitCode, Outcome, ProjectPath, Record, TestId, TestKey,
+    Counts, DiagnosticCode, Event, ExitCode, Outcome, ProjectPath, Record, RunNumber, TestId,
+    TestKey,
 };
 
 use super::{feed, lines, streams};
@@ -185,7 +186,7 @@ fn details_say_where_the_run_was_and_whether_the_file_changed() {
     let part = part(&records, &[id]);
     let k = key(&records, id);
     let context = || ShowContext {
-        run: Some(81),
+        run: RunNumber::new(81),
         ago: Some("2 min ago".into()),
         stale: BTreeMap::new(),
     };

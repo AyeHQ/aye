@@ -9,6 +9,7 @@ use crate::failure::Failure;
 use crate::id::TestId;
 use crate::lifetime::{LifetimeId, Scope};
 use crate::outcome::Outcome;
+use crate::run::RunNumber;
 use crate::serde_ext::millis;
 
 /// How one test ended. A test has one outcome: one that passes its body and
@@ -80,7 +81,7 @@ pub struct Previous {
     /// The number of the run in which the test's current streak of bad
     /// outcomes began, when it began before this run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub since: Option<u64>,
+    pub since: Option<RunNumber>,
 }
 
 impl TestResult {

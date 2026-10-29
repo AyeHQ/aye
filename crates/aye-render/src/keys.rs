@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use aye_events::{Event, ProjectPath, Record, TestKey};
+use aye_events::{Event, ProjectPath, Record, RunNumber, TestKey};
 
 /// The fewest hex digits in a key.
 pub(crate) const MIN: usize = 5;
@@ -136,7 +136,7 @@ fn common(a: &str, b: &str) -> usize {
 #[derive(Debug, Clone, Default)]
 pub struct ShowContext {
     /// The run's number (`r81`).
-    pub run: Option<u64>,
+    pub run: Option<RunNumber>,
     /// How long ago the run finished: `2 min ago`.
     pub ago: Option<String>,
     /// The files, as ids spell them, that changed since the run, each with

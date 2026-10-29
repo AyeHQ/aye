@@ -136,7 +136,7 @@ use std::time::Duration;
 
 use aye_events::{
     Captured, Certainty, Compare, Counts, Diagnostic, DiagnosticCode, Event, ExitCode, Failure,
-    LifetimeId, Local, Outcome, Record, Severity, TestId, TestResult, WorkerIndex,
+    LifetimeId, Local, Outcome, Record, RunNumber, Severity, TestId, TestResult, WorkerIndex,
 };
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
@@ -191,7 +191,7 @@ pub struct JsonLines<W: Write> {
     verbosity: i8,
     collect_only: bool,
     /// From `run_started`.
-    run: Option<u64>,
+    run: Option<RunNumber>,
     /// From `collection_finished`.
     selected: Option<u32>,
     /// Each worker's Python version, from its `worker_started`.
@@ -797,7 +797,7 @@ impl<W: Write> JsonLines<W> {
             return None;
         }
         Some(Shown {
-            run: self.context.run.or(self.run).map(|run| format!("r{run}")),
+            run: self.context.run.or(self.run).map(|run| run.to_string()),
             python: self.pythons.get(&worker).cloned(),
             stale: self.context.stale.contains_key(path),
         })
@@ -899,7 +899,7 @@ impl<W: Write> JsonLines<W> {
                     previous: total,
                     passed,
                     failed,
-                    since: previous.since.map(|since| format!("r{since}")),
+                    since: previous.since.map(|since| since.to_string()),
                 })
             });
         }
@@ -1273,7 +1273,7 @@ impl<W: Write> JsonLines<W> {
             .then_some("aye show <key> --output json");
         let omitted = failures.len().saturating_sub(FAILURES);
         self.line(&Line::Summary(Summary {
-            run: self.context.run.or(self.run).map(|run| format!("r{run}")),
+            run: self.context.run.or(self.run).map(|run| run.to_string()),
             exit: u8::from(exit_code),
             tests: self.selected,
             failed: counts.failed,

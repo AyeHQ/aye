@@ -331,7 +331,7 @@ pub(crate) fn history(previous: &Previous) -> Option<String> {
             .count();
         let since = previous
             .since
-            .map(|since| format!(" (since r{since})"))
+            .map(|since| format!(" (since {since})"))
             .unwrap_or_default();
         return Some(format!("failed the previous {} too{since}", runs(streak)));
     }
@@ -962,7 +962,7 @@ fn join<S: AsRef<str>>(words: &[S]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use aye_events::Scope;
+    use aye_events::{RunNumber, Scope};
 
     use super::*;
 
@@ -1542,10 +1542,10 @@ mod tests {
 
     #[test]
     fn history_in_words() {
-        let words = |outcomes: &str, since| {
+        let words = |outcomes: &str, since: Option<u64>| {
             history(&Previous {
                 outcomes: outcomes.into(),
-                since,
+                since: since.and_then(RunNumber::new),
             })
         };
         assert_eq!(words("", None), None);

@@ -10,7 +10,7 @@ use crate::id::{AdapterName, TestId};
 use crate::lifetime::{LifetimeId, Scope};
 use crate::outcome::{ExitCode, Outcome};
 use crate::result::{Counts, TestResult};
-use crate::run::{BatchIndex, EnvironmentId, RunId, WorkerIndex};
+use crate::run::{BatchIndex, EnvironmentId, RunId, RunNumber, WorkerIndex};
 use crate::serde_ext::{is_zero, millis};
 
 /// Who stamped what on an event. All fields are optional on the wire so
@@ -78,7 +78,7 @@ pub enum Event {
             default,
             skip_serializing_if = "Option::is_none"
         )]
-        run: Option<u64>,
+        run: Option<RunNumber>,
     },
     CollectionStarted,
     /// How far a long collection has got, for a live display. Sent only

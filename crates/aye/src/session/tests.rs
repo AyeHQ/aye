@@ -1,6 +1,6 @@
 use std::sync::atomic::AtomicU32;
 
-use aye_events::BatchIndex;
+use aye_events::{BatchIndex, RunNumber};
 
 use super::*;
 
@@ -230,7 +230,7 @@ fn the_run_store_keeps_every_record_of_the_stream() {
         BTreeMap::from([("teardown_error".to_owned(), 1)])
     );
     let kinds: Vec<&str> = store
-        .log(&meta.run)
+        .log(&meta.run.to_string())
         .unwrap()
         .iter()
         .map(|record| record.event.kind())
@@ -280,7 +280,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
                 root: dir.path().display().to_string(),
                 collect_only: false,
                 workers: 1,
-                run: Some(number),
+                run: RunNumber::new(number),
             },
             Event::TestStarted {
                 id: TestId::new("t.py::test_x"),
@@ -303,7 +303,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut writer = RunWriter::new(&runs, 10);
     let number = writer.claim();
-    assert_eq!(number, Some(1));
+    assert_eq!(number, RunNumber::new(1));
     let mut stream = Stream {
         reporters: Tee::new().with(Keeping(Arc::clone(&seen))),
         history: Some(Remember {
@@ -345,7 +345,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     };
     let x = Previous {
         outcomes: "pf".into(),
-        since: Some(2),
+        since: RunNumber::new(2),
     };
     let y = Previous {
         outcomes: "pp".into(),
@@ -363,7 +363,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     let log = store.log("r1").unwrap();
     assert_eq!(said(&log), expected);
     assert!(
-        matches!(log[0].event, Event::RunStarted { run: Some(1), .. }),
+        matches!(log[0].event, Event::RunStarted { run, .. } if run == RunNumber::new(1)),
         "{:?}",
         log[0]
     );
@@ -372,7 +372,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     let saved = History::load(&state);
     let kept = |name: &str| {
         let test = saved.stats(&TestId::new(name)).unwrap();
-        (test.recent.clone(), test.bad_since)
+        (test.recent.clone(), test.bad_since.map(RunNumber::get))
     };
     assert_eq!(kept("t.py::test_x"), ("pfe".into(), Some(2)));
     assert_eq!(kept("t.py::test_y"), ("ppe".into(), Some(1)));

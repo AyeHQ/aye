@@ -109,7 +109,11 @@ fn store(cwd: &Path) -> aye_history::RunStore {
 
 /// The runs the project `cwd` is in keeps.
 fn runs_in(cwd: &Path) -> HashSet<String> {
-    store(cwd).runs().into_iter().map(|meta| meta.run).collect()
+    store(cwd)
+        .runs()
+        .into_iter()
+        .map(|meta| meta.run.to_string())
+        .collect()
 }
 
 /// The log of the run the project `cwd` is in kept since `before`, every
@@ -120,8 +124,8 @@ fn kept(cwd: &Path, before: &HashSet<String>) -> Option<Vec<Value>> {
     let meta = store
         .runs()
         .into_iter()
-        .find(|meta| !before.contains(&meta.run))?;
-    let log = store.log(&meta.run).unwrap();
+        .find(|meta| !before.contains(&meta.run.to_string()))?;
+    let log = store.log(&meta.run.to_string()).unwrap();
     Some(
         log.iter()
             .map(|record| serde_json::to_value(record).unwrap())

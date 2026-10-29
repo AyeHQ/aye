@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use aye_events::{Counts, Envelope, ExitCode, Failure, RunId};
+use aye_events::{Counts, Envelope, ExitCode, Failure, RunId, RunNumber};
 
 use super::*;
 
@@ -586,7 +586,7 @@ fn numbered_run(
 ) {
     let mut opening = run_started(run, false);
     if let Event::RunStarted { run, .. } = &mut opening.event {
-        *run = number;
+        *run = number.and_then(RunNumber::new);
     }
     history.record(&opening);
     for &(name, outcome, ms) in tests {
@@ -598,7 +598,7 @@ fn numbered_run(
 
 fn recent(history: &History, name: &str) -> (String, Option<u64>) {
     let stats = history.stats(&id(name)).unwrap();
-    (stats.recent.clone(), stats.bad_since)
+    (stats.recent.clone(), stats.bad_since.map(RunNumber::get))
 }
 
 #[test]
@@ -697,7 +697,7 @@ fn previous_is_what_history_knew_before_the_run() {
         history.previous(&id("t.py::test_a")),
         Some(Previous {
             outcomes: "pf".into(),
-            since: Some(2)
+            since: RunNumber::new(2)
         })
     );
     // During one, the same once this run recorded it, whatever it was in
@@ -705,7 +705,7 @@ fn previous_is_what_history_knew_before_the_run() {
     // last result's.
     let mut opening = run_started("y", false);
     if let Event::RunStarted { run, .. } = &mut opening.event {
-        *run = Some(3);
+        *run = RunNumber::new(3);
     }
     history.record(&opening);
     history.record(&started("t.py::test_a"));
@@ -714,7 +714,7 @@ fn previous_is_what_history_knew_before_the_run() {
         history.previous(&id("t.py::test_a")),
         Some(Previous {
             outcomes: "pf".into(),
-            since: Some(2)
+            since: RunNumber::new(2)
         })
     );
     assert_eq!(recent(&history, "t.py::test_a"), ("pfp".into(), None));

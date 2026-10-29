@@ -57,7 +57,9 @@ pub use path::{
     ProjectPathRef, Span,
 };
 pub use result::{Captured, Counts, Previous, Reproduce, Resource, TestResult};
-pub use run::{BatchIndex, EnvironmentId, RunId, Stamper, WorkerIndex};
+pub use run::{
+    BatchIndex, EnvironmentId, InvalidRunNumber, RunId, RunNumber, Stamper, WorkerIndex,
+};
 
 /// Bumped only when a field is removed or renamed, or its meaning changes.
 ///

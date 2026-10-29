@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use aye_events::{
     Assertion, Captured, Counts, DiagnosticCode, Event, ExitCode, Failure, Frame, Location,
-    Outcome, Phase, Record, TestId, TestResult,
+    Outcome, Phase, Record, RunNumber, TestId, TestResult,
 };
 use serde_json::Value;
 
@@ -583,7 +583,7 @@ fn the_summary_says_why_the_run_stopped() {
 fn the_summary_names_a_stored_run() {
     let mut records = streams::pass_only();
     if let Event::RunStarted { run, .. } = &mut records[0].event {
-        *run = Some(81);
+        *run = RunNumber::new(81);
     }
     assert!(json(&records, -1).starts_with(r#"{"type":"summary","run":"r81","exit":0,"#));
 }

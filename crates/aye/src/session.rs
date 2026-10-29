@@ -18,7 +18,7 @@ use aye_events::{
     ExitCode, ProjectPath, Record, RunId, SCHEMA_VERSION, Severity, Stamper, TestId,
 };
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
-use aye_history::{History, RunWriter};
+use aye_history::{History, RunWriter, StoredRunId};
 use aye_render::{
     ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
     JunitOptions, Reporter, Tally, Tee, Text, TextOptions,
@@ -1320,7 +1320,7 @@ impl Keep {
         self.writer.dir()
     }
 
-    fn finish(self) -> io::Result<Option<String>> {
+    fn finish(self) -> io::Result<Option<StoredRunId>> {
         self.writer.finish(self.tally.extra().named())
     }
 }
