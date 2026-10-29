@@ -408,20 +408,28 @@ fn diagnostic_codes_choose_the_exit_code() {
         span: None,
         message: String::new(),
     };
+    let before = DiagnosticOrigin::BeforeBatches;
     let mut errors = Errors::default();
-    errors.see(&diagnostic(Severity::Warning, "usage-error"));
+    errors.see(&diagnostic(Severity::Warning, "usage-error"), before);
     assert!(!errors.any && !errors.usage);
-    errors.see(&diagnostic(Severity::Error, "collection-error"));
+    errors.see(&diagnostic(Severity::Error, "collection-error"), before);
     assert!(errors.any && !errors.usage && !errors.internal);
-    errors.see(&diagnostic(Severity::Error, "usage-error"));
+    errors.see(&diagnostic(Severity::Error, "usage-error"), before);
     assert!(errors.usage);
-    errors.see(&diagnostic(Severity::Error, "internal-error"));
+    errors.see(&diagnostic(Severity::Error, "internal-error"), before);
     assert!(errors.internal);
     let mut errors = Errors::default();
-    errors.see(&diagnostic(Severity::Error, "unclaimed"));
+    errors.see(&diagnostic(Severity::Error, "unclaimed"), before);
     assert!(errors.usage);
-    errors.see(&diagnostic(Severity::Error, "not-found"));
-    assert!(errors.not_found);
+    let mut errors = Errors::default();
+    errors.see(&diagnostic(Severity::Error, "not-found"), before);
+    assert!(errors.usage);
+    let mut errors = Errors::default();
+    errors.see(
+        &diagnostic(Severity::Error, "not-found"),
+        DiagnosticOrigin::Batch(0),
+    );
+    assert!(errors.any && !errors.usage);
 }
 
 /// Every diagnostic code aye 0.0.1 knows, and one it doesn't, with what an
@@ -464,31 +472,40 @@ const EXIT: [(&str, &str, &str); 26] = [
 /// a batch's as `run_exit_code` does after it.
 #[test]
 fn every_code_decides_the_exit_code_as_before() {
-    for (code, before, from_batch) in EXIT {
+    let known: Vec<&str> = EXIT[..25].iter().map(|(code, ..)| *code).collect();
+    let all: Vec<&str> = DiagnosticCode::ALL
+        .iter()
+        .map(DiagnosticCode::as_str)
+        .collect();
+    assert_eq!(known, all);
+    let decides = |code: &str, origin| {
         let mut errors = Errors::default();
-        errors.see(&Diagnostic {
+        let diagnostic = Diagnostic {
             severity: Severity::Error,
             code: code.into(),
             path: DiagnosticPath::Nowhere,
             span: None,
             message: String::new(),
-        });
-        assert!(errors.any, "{code}");
-        let collecting = if errors.internal {
-            "internal"
-        } else if errors.not_found || errors.usage {
-            "usage"
-        } else {
-            "error"
         };
-        let running = if errors.internal {
+        errors.see(&diagnostic, origin);
+        assert!(errors.any, "{code}");
+        if errors.internal {
             "internal"
         } else if errors.usage {
             "usage"
         } else {
             "error"
-        };
-        assert_eq!((collecting, running), (before, from_batch), "{code}");
+        }
+    };
+    for (code, before, from_batch) in EXIT {
+        assert_eq!(
+            (
+                decides(code, DiagnosticOrigin::BeforeBatches),
+                decides(code, DiagnosticOrigin::Batch(0))
+            ),
+            (before, from_batch),
+            "{code}"
+        );
     }
 }
 

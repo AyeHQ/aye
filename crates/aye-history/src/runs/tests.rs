@@ -615,6 +615,12 @@ const SHOWS: [(&str, bool, bool); 26] = [
 
 #[test]
 fn every_code_shows_as_before() {
+    let known: Vec<&str> = SHOWS[..25].iter().map(|(code, ..)| *code).collect();
+    let all: Vec<&str> = DiagnosticCode::ALL
+        .iter()
+        .map(DiagnosticCode::as_str)
+        .collect();
+    assert_eq!(known, all);
     for (code, before, from_batch) in SHOWS {
         let mut record = Record::new(error(code, "tests/t.py"));
         let before_batches = shows(&record);

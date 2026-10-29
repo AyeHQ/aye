@@ -57,7 +57,10 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use aye_events::{Counts, DiagnosticCode, Event, ExitCode, ProjectPath, Record, Severity};
+use aye_events::{
+    Counts, DiagnosticCode, DiagnosticOrigin, ErrorClass, Event, ExitCode, ProjectPath, Record,
+    Severity,
+};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -510,7 +513,7 @@ impl Run {
 
 /// Whether a record gives a run something to show: a test's result, a
 /// failed lifetime or worker, an error diagnostic other than the command
-/// line's (what it names that doesn't exist).
+/// line's (what it names that doesn't exist; [`ErrorClass::shows`]).
 fn shows(record: &Record) -> bool {
     match &record.event {
         Event::TestFinished(_)
@@ -518,12 +521,9 @@ fn shows(record: &Record) -> bool {
             failure: Some(_), ..
         }
         | Event::WorkerFinished { error: Some(_), .. } => true,
-        Event::Diagnostic(diagnostic) => {
-            diagnostic.severity == Severity::Error
-                && !(diagnostic.code == DiagnosticCode::Unclaimed
-                    || (diagnostic.code == DiagnosticCode::NotFound
-                        && record.envelope.batch.is_none()))
-        }
+        Event::Diagnostic(diagnostic) => diagnostic
+            .error_class(DiagnosticOrigin::of(&record.envelope))
+            .is_some_and(ErrorClass::shows),
         _ => false,
     }
 }

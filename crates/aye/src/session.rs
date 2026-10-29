@@ -14,8 +14,8 @@ use aye_collect::{Collector, Environment, Options, Prepared};
 use aye_config::AyeConfig;
 use aye_engine::{Adapter, Policy, Project, Refiner};
 use aye_events::{
-    Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, Event, ExitCode, ProjectPath, Record,
-    SCHEMA_VERSION, Severity, TestId,
+    Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event, ExitCode,
+    ProjectPath, Record, SCHEMA_VERSION, Severity, TestId,
 };
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter};
@@ -537,7 +537,7 @@ impl Session {
             out.emit(Event::Diagnostic(diagnostic));
         }
         // pytest refuses to run when an explicit argument names nothing.
-        let usage_error = out.errors.not_found || out.errors.usage;
+        let usage_error = out.errors.usage;
         // A hook that failed while pytest collected (aye's pytest front-end
         // runs the collection hooks in refinement) is pytest's
         // `INTERNALERROR`: the session ends there, status 3, `--co` too.
@@ -1170,25 +1170,24 @@ fn dotted_reach(word: &str, path: &str) -> Named {
     named
 }
 
-/// Error diagnostics seen in the stream, by what they mean for the exit code.
+/// Error diagnostics seen in the stream, by what they mean for the exit code
+/// ([`aye_events::ErrorClass::exit_code`]).
 #[derive(Debug, Clone, Copy, Default)]
 struct Errors {
     any: bool,
-    not_found: bool,
     usage: bool,
     internal: bool,
 }
 
 impl Errors {
-    fn see(&mut self, diagnostic: &Diagnostic) {
-        if diagnostic.severity != Severity::Error {
+    fn see(&mut self, diagnostic: &Diagnostic, origin: DiagnosticOrigin) {
+        let Some(class) = diagnostic.error_class(origin) else {
             return;
-        }
+        };
         self.any = true;
-        match diagnostic.code {
-            DiagnosticCode::NotFound => self.not_found = true,
-            DiagnosticCode::Unclaimed | DiagnosticCode::UsageError => self.usage = true,
-            DiagnosticCode::InternalError => self.internal = true,
+        match class.exit_code() {
+            Some(ExitCode::UsageError) => self.usage = true,
+            Some(ExitCode::InternalError) => self.internal = true,
             _ => {}
         }
     }
@@ -1240,7 +1239,7 @@ impl Stream<'_> {
             history.tell(record);
         }
         if let Event::Diagnostic(d) = &record.event {
-            errors.see(d);
+            errors.see(d, DiagnosticOrigin::of(&record.envelope));
         }
         if let Err(err) = reporters.report(record)
             && err.kind() != io::ErrorKind::BrokenPipe

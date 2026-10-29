@@ -36,7 +36,9 @@ mod result;
 mod serde_ext;
 
 pub use case::{Case, Certainty};
-pub use diagnostic::{Diagnostic, DiagnosticCode, Severity};
+pub use diagnostic::{
+    Diagnostic, DiagnosticCode, DiagnosticOrigin, ErrorClass, Severity, SummaryKind,
+};
 pub use event::{Envelope, Event, Record};
 pub use failure::{Assertion, Columns, Compare, Difference, Failure, Frame, Local, Side};
 pub use id::{

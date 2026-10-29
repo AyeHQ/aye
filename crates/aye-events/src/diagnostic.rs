@@ -1,10 +1,15 @@
 //! Diagnostics: what collection, a worker or the runner wants the user to
-//! know, and how severe it is.
+//! know, how severe it is, and, for an error, what it means for the run
+//! ([`classify`]).
 
 use serde::{Deserialize, Serialize};
 
 use crate::path::{DiagnosticPath, Span};
 use crate::serde_ext::string_enum;
+
+mod classify;
+
+pub use classify::{DiagnosticOrigin, ErrorClass, SummaryKind};
 
 /// How much a diagnostic matters, from the least to the worst, so that
 /// `max()` of several is the worst: an error fails the run, a warning and

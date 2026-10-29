@@ -4,7 +4,9 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use aye_events::{Counts, Diagnostic, DiagnosticCode, Event, Record, Severity};
+use aye_events::{
+    Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, Event, Record, Severity, SummaryKind,
+};
 
 use crate::shared;
 
@@ -47,7 +49,7 @@ impl Tally {
                 if diagnostic.severity == Severity::Error
                     && self
                         .errors
-                        .count(diagnostic, record.envelope.batch.is_some()) =>
+                        .count(diagnostic, DiagnosticOrigin::of(&record.envelope)) =>
             {
                 Some(Noted::Error(diagnostic))
             }
@@ -225,8 +227,9 @@ pub fn summary_words(counts: &Counts, extra: &Extra) -> Vec<String> {
         .collect()
 }
 
-/// Error diagnostics, by what the text summary line calls them, each once
-/// however many batches repeat it (a framework rejecting its arguments).
+/// Error diagnostics, by what the text summary line calls them
+/// ([`aye_events::ErrorClass::summary`]), each once however many batches
+/// repeat it (a framework rejecting its arguments).
 #[derive(Debug, Default)]
 pub(crate) struct ErrorKinds {
     pub collection: u32,
@@ -237,10 +240,10 @@ pub(crate) struct ErrorKinds {
 }
 
 impl ErrorKinds {
-    /// Counts an error diagnostic the first time it comes: whether it was.
-    /// `from_batch`: whether a batch reported it, rather than the runner
-    /// before anything ran.
-    pub(crate) fn count(&mut self, diagnostic: &Diagnostic, from_batch: bool) -> bool {
+    /// Counts an error diagnostic the first time it comes from `origin`:
+    /// whether it was. A batch stopped early is seen, but not counted: the
+    /// summary's verdict and the stop notice say so.
+    pub(crate) fn count(&mut self, diagnostic: &Diagnostic, origin: DiagnosticOrigin) -> bool {
         let key = (
             diagnostic.code.clone(),
             diagnostic.path.to_string(),
@@ -249,21 +252,11 @@ impl ErrorKinds {
         if !self.seen.insert(key) {
             return false;
         }
-        match diagnostic.code {
-            // A batch the framework stopped early: the summary's verdict and
-            // the stop notice say so.
-            DiagnosticCode::BatchStopped => {}
-            DiagnosticCode::UsageError | DiagnosticCode::Unclaimed => self.usage += 1,
-            // What the command line names doesn't exist: pytest's usage
-            // error. A requested id the framework can't find in a batch is
-            // a collection error.
-            DiagnosticCode::NotFound if !from_batch => self.usage += 1,
-            DiagnosticCode::InternalError
-            | DiagnosticCode::AdapterError
-            | DiagnosticCode::ProtocolError
-            | DiagnosticCode::BatchFailed
-            | DiagnosticCode::NoExecutor => self.internal += 1,
-            _ => self.collection += 1,
+        match diagnostic.code.class(origin).summary() {
+            Some(SummaryKind::Collection) => self.collection += 1,
+            Some(SummaryKind::Usage) => self.usage += 1,
+            Some(SummaryKind::Internal) => self.internal += 1,
+            None => {}
         }
         true
     }
@@ -307,8 +300,8 @@ mod tests {
         ("some-other-code", "collection", "collection"),
     ];
 
-    /// What the summary counts an error with `code` as.
-    fn counted(code: &str, from_batch: bool) -> &'static str {
+    /// What the summary counts an error with `code` from `origin` as.
+    fn counted(code: &str, origin: DiagnosticOrigin) -> &'static str {
         let mut kinds = ErrorKinds::default();
         let diagnostic = Diagnostic {
             severity: Severity::Error,
@@ -317,7 +310,7 @@ mod tests {
             span: None,
             message: String::new(),
         };
-        assert!(kinds.count(&diagnostic, from_batch), "{code}");
+        assert!(kinds.count(&diagnostic, origin), "{code}");
         match (kinds.collection, kinds.usage, kinds.internal) {
             (1, 0, 0) => "collection",
             (0, 1, 0) => "usage",
@@ -329,9 +322,18 @@ mod tests {
 
     #[test]
     fn every_code_is_counted_as_before() {
+        let known: Vec<&str> = SUMMARY[..25].iter().map(|(code, ..)| *code).collect();
+        let all: Vec<&str> = DiagnosticCode::ALL
+            .iter()
+            .map(DiagnosticCode::as_str)
+            .collect();
+        assert_eq!(known, all);
         for (code, before, from_batch) in SUMMARY {
             assert_eq!(
-                (counted(code, false), counted(code, true)),
+                (
+                    counted(code, DiagnosticOrigin::BeforeBatches),
+                    counted(code, DiagnosticOrigin::Batch(0))
+                ),
                 (before, from_batch),
                 "{code}"
             );
