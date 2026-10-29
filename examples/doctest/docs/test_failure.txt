@@ -1,0 +1,16 @@
+What a failing doctest looks like
+=================================
+
+doctest can't skip an example at run time, so this one passes by default.
+With AYE_EXAMPLE_FAIL=1 set, the cart gets a fourth apple that the expected
+total below doesn't account for, and the report shows what was expected and
+what the example printed instead.
+
+    >>> import os
+    >>> from decimal import Decimal
+    >>> from shop import Cart, Product
+    >>> apples = 4 if os.environ.get("AYE_EXAMPLE_FAIL") == "1" else 3
+    >>> cart = Cart()
+    >>> cart.add(Product("apple", "Apple", Decimal("0.50")), apples)
+    >>> cart.total()
+    Decimal('1.50')
