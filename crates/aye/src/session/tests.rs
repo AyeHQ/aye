@@ -535,8 +535,8 @@ impl aye_adapter::Recognizer for Context {
         aye_adapter::Recognition::default()
     }
 
-    fn context(&self) -> serde_json::Value {
-        self.0.clone()
+    fn context(&self) -> aye_protocol::AdapterContext {
+        self.0.clone().into()
     }
 }
 

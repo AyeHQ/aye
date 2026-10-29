@@ -114,14 +114,14 @@ fn pytest_plugins_from_the_environment_are_session_plugins() {
     let recognition = recognize_with(&recognizer, root, "test_a.py");
     assert!(recognition.refine.is_some(), "{recognition:?}");
     assert_eq!(
-        recognizer.context()["env_plugins"],
+        recognizer.context().into_value()["env_plugins"],
         serde_json::json!(["-p", "myplugin"])
     );
     // A module aye can't read may mark, deselect or parametrize any test.
     let recognizer = with_plugins(" installed_plugin , pytest_cov");
     let recognition = recognize_with(&recognizer, root, "test_a.py");
     assert_eq!(recognition.cases[0].certainty, Certainty::Partial);
-    let context = recognizer.context();
+    let context = recognizer.context().into_value();
     assert_eq!(
         context["env_plugins"],
         serde_json::json!(["-p", "installed_plugin", "-p", "pytest_cov"])
@@ -133,7 +133,10 @@ fn pytest_plugins_from_the_environment_are_session_plugins() {
         "[pytest]\naddopts = -p no:installed_plugin\n",
     );
     let recognizer = with_plugins("installed_plugin");
-    assert_eq!(recognizer.context()["env_plugins"], serde_json::json!([]));
+    assert_eq!(
+        recognizer.context().into_value()["env_plugins"],
+        serde_json::json!([])
+    );
     assert_eq!(
         certainties(&recognize_with(&recognizer, root, "test_a.py"))[0],
         ("test_a.py::test_a", Certainty::Exact)
@@ -725,7 +728,7 @@ fn test_modules_importing_a_colliding_helper_are_refined_together() {
     );
     let found = recognizer(root);
     assert_eq!(
-        found.context()["colliding_modules"],
+        found.context().into_value()["colliding_modules"],
         serde_json::json!(["helpers"])
     );
     for rel in ["tests/a/test_a.py", "tests/b/test_b.py"] {
@@ -756,7 +759,10 @@ fn test_modules_importing_a_colliding_helper_are_refined_together() {
         "[tool.pytest.ini_options]\naddopts = '--import-mode=importlib'\n",
     );
     let found = recognizer(root);
-    assert_eq!(found.context()["colliding_modules"], serde_json::json!([]));
+    assert_eq!(
+        found.context().into_value()["colliding_modules"],
+        serde_json::json!([])
+    );
     assert!(
         !recognize_with(&found, root, "tests/a/test_a.py")
             .refine
@@ -769,7 +775,7 @@ fn test_modules_importing_a_colliding_helper_are_refined_together() {
     write(root, "tests/b/__init__.py", "");
     write(root, "tests/__init__.py", "");
     assert_eq!(
-        recognizer(root).context()["colliding_modules"],
+        recognizer(root).context().into_value()["colliding_modules"],
         serde_json::json!([])
     );
 }

@@ -222,7 +222,8 @@ fn the_adapter_prepares_pytests_doctests_only_without_the_doctest_adapter() {
         config_file: None,
         framework_args: &[],
     };
-    let args = |recognizer: &dyn Recognizer| recognizer.context()["native"]["args"].clone();
+    let args =
+        |recognizer: &dyn Recognizer| recognizer.context().into_value()["native"]["args"].clone();
     let alone = Pytest::default()
         .prepare_among(&project, &[crate::NAME])
         .unwrap()

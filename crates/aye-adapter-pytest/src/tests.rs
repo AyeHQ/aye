@@ -858,7 +858,7 @@ fn ids_are_relative_to_the_project_root() {
     // The conftest above the project root is in scope.
     assert_eq!(found.certainty, Certainty::Partial);
     assert_eq!(
-        recognizer.context(),
+        recognizer.context().into_value(),
         serde_json::json!({
             "rootdir": outer.to_string_lossy(),
             "inifile": outer.join("pytest.ini").to_string_lossy(),
@@ -1046,7 +1046,7 @@ fn settings_and_context() {
     assert_eq!(get("python_classes").origin, "default");
     assert_eq!(get("rootdir").value, root.display().to_string());
     assert_eq!(configured.config().args, ["-q"]);
-    let context = configured.context();
+    let context = configured.context().into_value();
     assert_eq!(context["xdist_workers"], "auto");
     assert_eq!(
         context["inifile"],
@@ -1055,7 +1055,7 @@ fn settings_and_context() {
 
     let bare = tempfile::tempdir().unwrap();
     let bare = recognizer(bare.path());
-    let context = bare.context();
+    let context = bare.context().into_value();
     assert_eq!(context["inifile"], serde_json::Value::Null);
     assert_eq!(context["xdist_workers"], serde_json::Value::Null);
     assert_eq!(bare.config().args, [] as [String; 0]);
@@ -1607,7 +1607,7 @@ fn context_lifts_maxfail_and_reads_pytest_addopts() {
         framework_args: &[],
     };
     let plain = recognizer(root);
-    let context = plain.context();
+    let context = plain.context().into_value();
     assert_eq!(context["maxfail"], 1);
     assert_eq!(plain.config().args, ["-k", "not slow", "-ra"]);
     assert_eq!(context["keyword"], "not slow");
@@ -1617,13 +1617,14 @@ fn context_lifts_maxfail_and_reads_pytest_addopts() {
         with_env.config().args,
         ["-k", "not slow", "-ra", "-m", "db", "-v"]
     );
-    let with_env = with_env.context();
+    let with_env = with_env.context().into_value();
     assert_eq!(with_env["maxfail"], 3);
     assert_eq!(with_env["xdist_workers"], "auto");
     assert_eq!(with_env["tags"], "db");
     let unlimited = PytestRecognizer::with_env(&project, Some("--maxfail 0"))
         .unwrap()
-        .context();
+        .context()
+        .into_value();
     assert_eq!(unlimited["maxfail"], serde_json::Value::Null);
     assert_eq!(unlimited["deselect"], serde_json::json!([]));
 }
@@ -1644,7 +1645,7 @@ fn context_names_deselect_prefixes() {
         "def test_a(): pass\ndef test_b(): pass\n",
     );
     let recognizer = recognizer_with(root, &["sub"], &[], None);
-    let context = recognizer.context();
+    let context = recognizer.context().into_value();
     // pytest's prefixes are relative to the rootdir, aye's ids to the
     // project root.
     assert_eq!(
@@ -1846,7 +1847,7 @@ fn context_carries_the_framework_args_and_the_junit_report() {
         with_args.config().args,
         ["-ra", "-m", "slow", "-v", "--reuse-db", "-k", "fast"]
     );
-    let context = with_args.context();
+    let context = with_args.context().into_value();
     assert_eq!(
         context["junitxml"],
         root.join("out")
@@ -1861,7 +1862,7 @@ fn context_carries_the_framework_args_and_the_junit_report() {
     assert_eq!(context["tags"], "slow");
     let plain = recognizer(root);
     assert_eq!(plain.config().args, ["-ra"]);
-    let context = plain.context();
+    let context = plain.context().into_value();
     assert_eq!(
         context["junitxml"],
         root.join("a.xml").to_string_lossy().as_ref()
@@ -1875,11 +1876,13 @@ fn context_carries_the_framework_args_and_the_junit_report() {
     std::fs::create_dir_all(root.join("tests/unit")).unwrap();
     write(root, "pytest.ini", "[pytest]\ntestpaths = tests/*\n");
     assert_eq!(
-        recognizer(root).context()["roots"],
+        recognizer(root).context().into_value()["roots"],
         serde_json::json!([root.join("tests").join("unit").to_string_lossy()])
     );
     assert_eq!(
-        recognizer_with(root, &["tests"], &[], None).context()["roots"],
+        recognizer_with(root, &["tests"], &[], None)
+            .context()
+            .into_value()["roots"],
         serde_json::json!([root.join("tests").to_string_lossy()])
     );
 }
@@ -1904,7 +1907,7 @@ fn context_carries_the_junit_settings() {
     };
     write(root, "pyproject.toml", "[project]\nname = \"x\"\n");
     assert_eq!(
-        junit(recognizer(root).context()),
+        junit(recognizer(root).context().into_value()),
         [
             serde_json::json!("pytest"),
             serde_json::json!("no"),
@@ -1920,7 +1923,7 @@ fn context_carries_the_junit_settings() {
          junit_log_passing_tests = false\naddopts = \"-o junit_family=legacy\"\n",
     );
     assert_eq!(
-        junit(recognizer(root).context()),
+        junit(recognizer(root).context().into_value()),
         [
             serde_json::json!("mysuite"),
             serde_json::json!("all"),
@@ -1940,7 +1943,8 @@ fn context_carries_the_junit_settings() {
         ],
         Some("-o junit_logging=log -o junit_log_passing_tests=yes"),
     )
-    .context();
+    .context()
+    .into_value();
     assert_eq!(
         junit(context),
         [
@@ -1956,7 +1960,10 @@ fn context_carries_the_junit_settings() {
         "pytest.ini",
         "[pytest]\njunit_log_passing_tests = maybe\n",
     );
-    assert_eq!(recognizer(root).context()["junit_log_passing_tests"], true);
+    assert_eq!(
+        recognizer(root).context().into_value()["junit_log_passing_tests"],
+        true
+    );
 }
 
 #[test]
@@ -2209,7 +2216,7 @@ fn deselect_drops_no_case_and_the_context_names_its_prefixes() {
         ]
     );
     assert_eq!(
-        recognizer(root).context()["deselect"],
+        recognizer(root).context().into_value()["deselect"],
         serde_json::json!([
             "tests/test_a.py::test_x",
             "tests/test_a.py::TestC::test_m[1"
@@ -2224,7 +2231,7 @@ fn deselect_drops_no_case_and_the_context_names_its_prefixes() {
         6
     );
     assert_eq!(
-        recognizer.context()["deselect"],
+        recognizer.context().into_value()["deselect"],
         serde_json::json!([
             "tests/test_a.py::test_x",
             "tests/test_a.py::TestC::test_m[1",

@@ -47,7 +47,7 @@
 use std::path::{Path, PathBuf};
 
 use aye_events::{AdapterName, Case, Diagnostic, LineNumber, ProjectPathRef, Span};
-use aye_protocol::Executor;
+use aye_protocol::{AdapterContext, Executor};
 use serde::{Deserialize, Serialize};
 
 pub use ruff_python_ast as ast;
@@ -210,9 +210,10 @@ pub trait Recognizer: Send + Sync {
     }
 
     /// Adapter-specific context sent with every batch and refinement
-    /// (pytest's rootdir and inifile).
-    fn context(&self) -> serde_json::Value {
-        serde_json::Value::Null
+    /// (pytest's rootdir and inifile): the adapter's typed context, built
+    /// once ([`AdapterContext::of`]). None by default.
+    fn context(&self) -> AdapterContext {
+        AdapterContext::default()
     }
 }
 

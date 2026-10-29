@@ -38,9 +38,11 @@ use aye_adapter::{
 };
 use aye_engine::{MODEL_MODULE, NATIVE_ENGINE_MODULE, REWRITE_MODULE};
 use aye_events::{AdapterName, Diagnostic, DiagnosticCode, Fnv64, Severity};
-use aye_protocol::{EmbeddedModule, Executor};
+use aye_protocol::{AdapterContext, EmbeddedModule, Executor};
+use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::context::PytestContext;
 use crate::{PytestConfig, PytestRecognizer, config::ImportMode};
 
 /// aye's own `pytest` module: the authoring API (marks, fixtures,
@@ -163,8 +165,8 @@ pub struct NativeRecognizer {
     /// Whether [`Recognizer::recognize`] gives the static recognizer's
     /// prediction ([`Pytest::static_listing`]).
     static_listing: bool,
-    /// The context's `native` section, built once.
-    native: OnceLock<Value>,
+    /// The context, with its `native` section, built once.
+    context: OnceLock<PytestContext>,
 }
 
 impl NativeRecognizer {
@@ -172,14 +174,8 @@ impl NativeRecognizer {
         Self {
             inner,
             static_listing,
-            native: OnceLock::new(),
+            context: OnceLock::new(),
         }
-    }
-
-    /// The `native` section of the context (see [`Recognizer::context`]).
-    fn native(&self) -> &Value {
-        self.native
-            .get_or_init(|| native_context(self.inner.config()))
     }
 }
 
@@ -243,57 +239,88 @@ impl Recognizer for NativeRecognizer {
     }
 
     /// The pytest adapter's context (see [`PytestRecognizer`]'s), plus
-    /// `native`:
-    ///
-    /// - `rootdir`, `inifile` (absolute; `null` without one), `confcutdir`
-    ///   (absolute), `pythonpath` (absolute, in order);
-    /// - `python_files`, `python_classes`, `python_functions`, `testpaths`,
-    ///   `norecursedirs`, `usefixtures`, `markers`, `filterwarnings`: lists
-    ///   of strings, pytest's defaults when unset;
-    /// - `xfail_strict` (`strict_xfail`, its alias `xfail_strict`, else
-    ///   `strict`), `strict_markers` (`strict_markers`, else `strict`; both
-    ///   also from `--strict-markers` and `--strict`),
-    ///   `strict_parametrization_ids`, `disable_test_id_escaping`,
-    ///   `collect_imported_tests`, `consider_namespace_packages`,
-    ///   `noconftest`: booleans, resolved;
-    /// - `import_mode`: `prepend`, `append` or `importlib`;
-    ///   `empty_parameter_set_mark`: a string (`""` for pytest's default);
-    /// - `plugins`: the `-p` values in order (`no:NAME` included);
-    ///   `env_plugins`: the modules `PYTEST_PLUGINS` names;
-    /// - `ini`: every raw value of the configuration, by name, after `-o`
-    ///   and the `--strict…` flags, for `getini` to coerce by the option's
-    ///   type: a string from an INI file, `[tool.pytest.ini_options]`
-    ///   scalars or `-o`; a list of strings for an array of
-    ///   `[tool.pytest.ini_options]`; the TOML value itself (string, bool,
-    ///   number, list) from `[tool.pytest]` or `pytest.toml`;
-    /// - `args`: pytest's arguments, as the front-end parses them
-    ///   ([`PytestConfig::args`]: `addopts`, `PYTEST_ADDOPTS`, then those
-    ///   after `--`; without pytest-xdist's, `-x`/`--maxfail`, the JUnit
-    ///   and, when the doctest adapter runs, the doctest options, which the
-    ///   runner and the doctest adapter handle), for options conftests add;
-    /// - `options`: `args` parsed as pytest 9.1.1 parses its own options,
-    ///   `{dest: value}` for every built-in option (pytest's dest names and
-    ///   defaults: `verbose`, `keyword`, `markexpr`, `plugins`,
-    ///   `runxfail`, `basetemp`, `capture`, `pythonwarnings`,
-    ///   `override_ini`, …), `maxfail`, `xmlpath` and `junitprefix` from
-    ///   the options the runner lifted, and `file_or_dir` for positional
-    ///   arguments; `unknown_options` lists the options it doesn't know
-    ///   (a plugin's, a conftest's), as given;
-    /// - `modules_digest`: a digest of the executor's sources, so that the
-    ///   refinement cache never answers for other sources.
-    fn context(&self) -> Value {
-        let mut context = self.inner.context();
-        if let Some(object) = context.as_object_mut() {
-            object.insert("native".into(), self.native().clone());
-        }
-        context
+    /// [`NativeContext`].
+    fn context(&self) -> AdapterContext {
+        AdapterContext::of(self.context.get_or_init(|| PytestContext {
+            native: Some(native_context(self.inner.config())),
+            ..self.inner.pytest_context().clone()
+        }))
     }
 }
 
 // ---------------------------------------------------------------- the context
 
-/// The `native` section for `config` (see [`NativeRecognizer::context`]).
-fn native_context(config: &PytestConfig) -> Value {
+/// The `native` section of the pytest adapter's context: what the
+/// front-end starts from.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct NativeContext {
+    /// pytest's rootdir, absolute.
+    rootdir: String,
+    /// pytest's inifile, absolute; `null` without one.
+    inifile: Option<String>,
+    /// pytest's confcutdir, absolute.
+    confcutdir: String,
+    /// `pythonpath`, absolute, in order.
+    pythonpath: Vec<String>,
+    /// From `python_files` to `markers`, and `filterwarnings`: lists of
+    /// strings, pytest's defaults when unset.
+    python_files: Vec<String>,
+    python_classes: Vec<String>,
+    python_functions: Vec<String>,
+    testpaths: Vec<String>,
+    norecursedirs: Vec<String>,
+    usefixtures: Vec<String>,
+    markers: Vec<String>,
+    filterwarnings: Vec<String>,
+    /// `strict_xfail`, its alias `xfail_strict`, else `strict`.
+    xfail_strict: bool,
+    /// `strict_markers`, else `strict`; both also from `--strict-markers`
+    /// and `--strict`.
+    strict_markers: bool,
+    /// From `strict_parametrization_ids` to `noconftest`: resolved.
+    strict_parametrization_ids: bool,
+    disable_test_id_escaping: bool,
+    collect_imported_tests: bool,
+    consider_namespace_packages: bool,
+    noconftest: bool,
+    /// `prepend`, `append` or `importlib`.
+    import_mode: &'static str,
+    /// `""` for pytest's default.
+    empty_parameter_set_mark: String,
+    /// The `-p` values in order (`no:NAME` included).
+    plugins: Vec<String>,
+    /// The modules `PYTEST_PLUGINS` names.
+    env_plugins: Vec<String>,
+    /// Every raw value of the configuration, by name, after `-o` and the
+    /// `--strict…` flags, for `getini` to coerce by the option's type: a
+    /// string from an INI file, `[tool.pytest.ini_options]` scalars or
+    /// `-o`; a list of strings for an array of `[tool.pytest.ini_options]`;
+    /// the TOML value itself (string, bool, number, list) from
+    /// `[tool.pytest]` or `pytest.toml`.
+    ini: BTreeMap<String, Value>,
+    /// pytest's arguments, as the front-end parses them
+    /// ([`PytestConfig::args`]: `addopts`, `PYTEST_ADDOPTS`, then those
+    /// after `--`; without pytest-xdist's, `-x`/`--maxfail`, the JUnit and,
+    /// when the doctest adapter runs, the doctest options, which the runner
+    /// and the doctest adapter handle), for options conftests add.
+    args: Vec<String>,
+    /// [`Self::args`] parsed as pytest 9.1.1 parses its own options,
+    /// `{dest: value}` for every built-in option (pytest's dest names and
+    /// defaults: `verbose`, `keyword`, `markexpr`, `plugins`, `runxfail`,
+    /// `basetemp`, `capture`, `pythonwarnings`, `override_ini`, …),
+    /// `maxfail`, `xmlpath` and `junitprefix` from the options the runner
+    /// lifted, and `file_or_dir` for positional arguments.
+    options: BTreeMap<String, Value>,
+    /// The options [`Self::options`] doesn't know (a plugin's, a
+    /// conftest's), as given.
+    unknown_options: Vec<String>,
+    /// A digest of the executor's sources, so that the refinement cache
+    /// never answers for other sources.
+    modules_digest: String,
+}
+
+/// The `native` section for `config`.
+fn native_context(config: &PytestConfig) -> NativeContext {
     let args = config.args.clone();
     let mut ini = read_ini(config.inifile.as_deref());
     apply_overrides(&mut ini, &args);
@@ -319,40 +346,40 @@ fn native_context(config: &PytestConfig) -> Value {
     };
     let strict = flag(&["strict"]).unwrap_or(false);
     let path = |p: &Path| p.to_string_lossy().into_owned();
-    json!({
-        "rootdir": path(&config.rootdir),
-        "inifile": config.inifile.as_deref().map(path),
-        "confcutdir": path(&config.confcutdir),
-        "pythonpath": config.pythonpath.iter().map(|p| path(p)).collect::<Vec<_>>(),
-        "python_files": config.python_files.value,
-        "python_classes": config.python_classes.value,
-        "python_functions": config.python_functions.value,
-        "testpaths": config.testpaths.value,
-        "norecursedirs": config.norecursedirs.value,
-        "usefixtures": config.usefixtures.value,
-        "markers": config.markers.value,
-        "filterwarnings": ini.get("filterwarnings").map(ini_lines).unwrap_or_default(),
-        "xfail_strict": flag(&["strict_xfail", "xfail_strict"]).unwrap_or(strict),
-        "strict_markers": flag(&["strict_markers"]).unwrap_or(strict),
-        "strict_parametrization_ids": config.strict_parametrization_ids.value,
-        "disable_test_id_escaping": config.disable_test_id_escaping.value,
-        "collect_imported_tests": config.collect_imported_tests.value,
-        "consider_namespace_packages": config.consider_namespace_packages,
-        "noconftest": config.noconftest,
-        "import_mode": match config.import_mode {
+    NativeContext {
+        rootdir: path(&config.rootdir),
+        inifile: config.inifile.as_deref().map(path),
+        confcutdir: path(&config.confcutdir),
+        pythonpath: config.pythonpath.iter().map(|p| path(p)).collect(),
+        python_files: config.python_files.value.clone(),
+        python_classes: config.python_classes.value.clone(),
+        python_functions: config.python_functions.value.clone(),
+        testpaths: config.testpaths.value.clone(),
+        norecursedirs: config.norecursedirs.value.clone(),
+        usefixtures: config.usefixtures.value.clone(),
+        markers: config.markers.value.clone(),
+        filterwarnings: ini.get("filterwarnings").map(ini_lines).unwrap_or_default(),
+        xfail_strict: flag(&["strict_xfail", "xfail_strict"]).unwrap_or(strict),
+        strict_markers: flag(&["strict_markers"]).unwrap_or(strict),
+        strict_parametrization_ids: config.strict_parametrization_ids.value,
+        disable_test_id_escaping: config.disable_test_id_escaping.value,
+        collect_imported_tests: config.collect_imported_tests.value,
+        consider_namespace_packages: config.consider_namespace_packages,
+        noconftest: config.noconftest,
+        import_mode: match config.import_mode {
             ImportMode::Prepend => "prepend",
             ImportMode::Append => "append",
             ImportMode::Importlib => "importlib",
         },
-        "empty_parameter_set_mark": config.empty_parameter_set_mark.value,
-        "plugins": config.plugins,
-        "env_plugins": config.env_plugins,
-        "ini": ini,
-        "args": args,
-        "options": parsed.values,
-        "unknown_options": parsed.unknown,
-        "modules_digest": modules_digest(),
-    })
+        empty_parameter_set_mark: config.empty_parameter_set_mark.value.clone(),
+        plugins: config.plugins.clone(),
+        env_plugins: config.env_plugins.clone(),
+        ini,
+        args,
+        options: parsed.values,
+        unknown_options: parsed.unknown,
+        modules_digest: modules_digest(),
+    }
 }
 
 /// A 64-bit FNV-1a digest of the executor's module names and sources, in
@@ -1127,7 +1154,7 @@ mod tests {
              python_functions = test check\ntimeout = 5\n",
         );
         let cli = strings(&["-o", "xfail_strict=true", "--runslow"]);
-        let context = recognizer(root, &cli).context();
+        let context = recognizer(root, &cli).context().into_value();
         // Nothing of what only fed a pytest session per batch.
         for key in [
             "addopts",
@@ -1188,7 +1215,7 @@ mod tests {
             "pyproject.toml",
             "[tool.pytest.ini_options]\nxfail_strict = true\nmarkers = [\"slow\", \"fast\"]\n",
         );
-        let native = &recognizer(root, &[]).context()["native"];
+        let native = &recognizer(root, &[]).context().into_value()["native"];
         assert_eq!(native["ini"]["xfail_strict"], json!("True"));
         assert_eq!(native["ini"]["markers"], json!(["slow", "fast"]));
         assert_eq!(native["xfail_strict"], json!(true));
@@ -1197,7 +1224,7 @@ mod tests {
             "pyproject.toml",
             "[tool.pytest]\nstrict = true\nminversion = \"9.0\"\n",
         );
-        let native = &recognizer(root, &[]).context()["native"];
+        let native = &recognizer(root, &[]).context().into_value()["native"];
         assert_eq!(native["ini"]["strict"], json!(true));
         assert_eq!(native["xfail_strict"], json!(true));
         assert_eq!(native["strict_markers"], json!(true));
@@ -1403,7 +1430,7 @@ mod tests {
         let written = |recognizer: &NativeRecognizer, root: &Path| {
             let root = serde_json::to_string(&root.to_string_lossy()).unwrap();
             let digest = serde_json::to_string(&modules_digest()).unwrap();
-            serde_json::to_string(&recognizer.context())
+            serde_json::to_string(&recognizer.context().into_value())
                 .unwrap()
                 .replace(root.trim_matches('"'), "<root>")
                 .replace(&digest, "\"<modules_digest>\"")

@@ -1152,7 +1152,7 @@ fn override_ini_and_options_after_the_separator() {
     );
     assert_eq!(recognizer.config().encoding.value, "utf-16");
     assert_eq!(recognizer.config().report, "ndiff");
-    let context = recognizer.context();
+    let context = recognizer.context().into_value();
     assert_eq!(context["report"], "ndiff");
     assert_eq!(context["optionflags"][0], "NUMBER");
     // `-o addopts=` from the command line replaces the file's.
@@ -1185,7 +1185,8 @@ fn deselect_prefixes_are_given_as_ayes_ids() {
         None,
     )
     .unwrap()
-    .context();
+    .context()
+    .into_value();
     assert_eq!(
         context["deselect"],
         serde_json::json!(["pkg/mod.py::pkg.mod.f", "pkg/other.py", "docs/test_x.txt"])
@@ -1201,7 +1202,8 @@ fn deselect_prefixes_are_given_as_ayes_ids() {
     let sub = [root.join("sub")];
     let context = DoctestRecognizer::with_env(&project(root, &sub, &[]), None, None)
         .unwrap()
-        .context();
+        .context()
+        .into_value();
     assert_eq!(context["deselect"], serde_json::json!(["sub/mod.py"]));
 }
 
@@ -1771,7 +1773,7 @@ fn warning_filters_come_from_pytests_configuration() {
         Some("-W once"),
     )
     .unwrap();
-    let context = recognizer.context();
+    let context = recognizer.context().into_value();
     assert_eq!(
         context["filterwarnings"],
         serde_json::json!(["error", "ignore::DeprecationWarning"])
@@ -1794,7 +1796,10 @@ fn warning_filters_come_from_pytests_configuration() {
         None,
     )
     .unwrap();
-    assert_eq!(toml.context()["filterwarnings"], serde_json::json!([]));
+    assert_eq!(
+        toml.context().into_value()["filterwarnings"],
+        serde_json::json!([])
+    );
     // `-W`'s value is no option: `-W -x` doesn't stop at the first failure.
     let valued = config(
         &[("pytest.ini", "[pytest]\naddopts = --doctest-modules\n")],
@@ -1802,7 +1807,10 @@ fn warning_filters_come_from_pytests_configuration() {
         None,
     )
     .unwrap();
-    assert_eq!(valued.context()["maxfail"], serde_json::Value::Null);
+    assert_eq!(
+        valued.context().into_value()["maxfail"],
+        serde_json::Value::Null
+    );
 }
 
 /// pytest's `-x`, `--maxfail` and JUnit options in its configuration are the
@@ -1818,7 +1826,8 @@ fn maxfail_and_the_junit_report_come_from_pytests_options() {
     );
     let context = DoctestRecognizer::with_env(&project(root, &[], &[]), None, None)
         .unwrap()
-        .context();
+        .context()
+        .into_value();
     assert_eq!(context["maxfail"], 1);
     assert_eq!(
         context["junitxml"],
@@ -1841,7 +1850,8 @@ fn maxfail_and_the_junit_report_come_from_pytests_options() {
         let args: Vec<String> = args.iter().map(ToString::to_string).collect();
         let context = DoctestRecognizer::with_env(&project(root, &[], &args), env, None)
             .unwrap()
-            .context();
+            .context()
+            .into_value();
         assert_eq!(context["maxfail"], maxfail, "{args:?} {env:?}");
     }
     let args = [
@@ -1851,7 +1861,8 @@ fn maxfail_and_the_junit_report_come_from_pytests_options() {
     ];
     let context = DoctestRecognizer::with_env(&project(root, &[], &args), None, None)
         .unwrap()
-        .context();
+        .context()
+        .into_value();
     assert_eq!(
         context["junitxml"],
         root.join("env.xml").to_string_lossy().as_ref()
@@ -1861,7 +1872,8 @@ fn maxfail_and_the_junit_report_come_from_pytests_options() {
     let args = ["--junitxml=".to_string()];
     let context = DoctestRecognizer::with_env(&project(root, &[], &args), None, None)
         .unwrap()
-        .context();
+        .context()
+        .into_value();
     assert_eq!(context["junitxml"], serde_json::Value::Null);
 }
 
@@ -1872,7 +1884,10 @@ fn continue_on_failure_reaches_the_executor() {
         &[],
         None,
     );
-    assert_eq!(plain.unwrap().context()["continue_on_failure"], false);
+    assert_eq!(
+        plain.unwrap().context().into_value()["continue_on_failure"],
+        false
+    );
     let on = config(
         &[(
             "pytest.ini",
@@ -1881,7 +1896,10 @@ fn continue_on_failure_reaches_the_executor() {
         &[],
         None,
     );
-    assert_eq!(on.unwrap().context()["continue_on_failure"], true);
+    assert_eq!(
+        on.unwrap().context().into_value()["continue_on_failure"],
+        true
+    );
 }
 
 /// The conftests pytest imports before collecting, for the executor to
@@ -1902,7 +1920,7 @@ fn the_executor_is_told_pytests_initial_conftests() {
     write(root, "app/mod.py", "");
     let outside = root.parent().unwrap().join("conftest.py");
     assert!(!outside.exists());
-    let context = recognizer(root).context();
+    let context = recognizer(root).context().into_value();
     let names = |context: &serde_json::Value| -> Vec<String> {
         context["conftests"]["initial"]
             .as_array()
@@ -1925,17 +1943,20 @@ fn the_executor_is_told_pytests_initial_conftests() {
     let args = [PathBuf::from("app/mod.py")];
     let context = DoctestRecognizer::with_env(&project(root, &args, &[]), None, None)
         .unwrap()
-        .context();
+        .context()
+        .into_value();
     assert_eq!(names(&context), ["conftest.py", "app/conftest.py"]);
     let off = ["--noconftest".to_string()];
     let context = DoctestRecognizer::with_env(&project(root, &[], &off), None, None)
         .unwrap()
-        .context();
+        .context()
+        .into_value();
     assert_eq!(context["conftests"], serde_json::Value::Null);
     let cut = ["--confcutdir=app".to_string()];
     let context = DoctestRecognizer::with_env(&project(root, &args, &cut), None, None)
         .unwrap()
-        .context();
+        .context()
+        .into_value();
     assert_eq!(names(&context), ["app/conftest.py"]);
 }
 
@@ -2356,7 +2377,7 @@ fn the_context_is_pinned_byte_for_byte() {
     let turned_off = recognizer(off.path());
     let written = |recognizer: &DoctestRecognizer, root: &Path| {
         let text = serde_json::to_string(&root.to_string_lossy()).unwrap();
-        serde_json::to_string(&recognizer.context())
+        serde_json::to_string(&recognizer.context().into_value())
             .unwrap()
             .replace(text.trim_matches('"'), "<root>")
     };

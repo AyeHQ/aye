@@ -452,6 +452,7 @@
 //! engine's now; their modules say how.
 
 mod config;
+mod context;
 mod fnmatch;
 mod ids;
 mod marks;
@@ -470,11 +471,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 use aye_adapter::{AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile};
 use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 use aye_fs::normalize_absolute;
+use aye_protocol::AdapterContext;
 use aye_static::EnvVars;
 
 pub use config::{PytestConfig, split_xdist};
 pub use native::{NAME, Pytest};
 
+use crate::context::PytestContext;
 use crate::ids::IdOptions;
 use crate::marks::EmptyMark;
 use crate::support::{Summary, Supports};
@@ -521,6 +524,8 @@ pub struct PytestRecognizer {
     /// The files claimed as named on the command line: those pytest
     /// collects as test modules whatever their names.
     explicit: Mutex<HashSet<String>>,
+    /// The context, built once (see [`Self::pytest_context`]).
+    context: OnceLock<PytestContext>,
 }
 
 /// What pytest's doctest plugin makes of a file.
@@ -844,6 +849,7 @@ impl PytestRecognizer {
             env_pythonpath,
             doctests: None,
             explicit: Mutex::new(HashSet::new()),
+            context: OnceLock::new(),
         };
         recognizer.collection_args = recognizer.roots(project);
         recognizer.initial_dirs = initial_dirs(project.cwd, &recognizer.collection_args);
@@ -1491,6 +1497,13 @@ impl PytestRecognizer {
         verdict
     }
 
+    /// The context ([`Recognizer::context`]), built the first time it is
+    /// asked for, which walks the project once for
+    /// [`PytestContext::colliding_modules`].
+    pub(crate) fn pytest_context(&self) -> &PytestContext {
+        self.context.get_or_init(|| PytestContext::new(self))
+    }
+
     /// `--deselect`'s prefixes as prefixes of aye's ids: relative to the
     /// project root, when the rootdir is inside it.
     fn deselect_ids(&self) -> Vec<String> {
@@ -2037,69 +2050,8 @@ impl Recognizer for PytestRecognizer {
 
     /// What the front-end needs to start as pytest would start itself (the
     /// rest is the native context's: see [`native::NativeRecognizer`]), and
-    /// what the runner takes from pytest's options. "The options" are
-    /// addopts, `PYTEST_ADDOPTS` and the arguments after `--`, in pytest's
-    /// order (the last one wins):
-    ///
-    /// - `rootdir`, `inifile`;
-    /// - `roots`: the absolute paths pytest would start collecting from in
-    ///   the user's run ([`Recognizer::roots`]): the front-end starts from
-    ///   them (their initial conftests, and their initial paths, which the
-    ///   ignore rules spare and whose files pytest collects whatever their
-    ///   names). When the command line also selects by dotted name or test
-    ///   key, the binary adds `selected_paths` to a batch's context (the
-    ///   path arguments and the files those selectors select), which the
-    ///   front-end starts from instead;
-    /// - `xdist_workers`: the `-n` value of the options, which the binary
-    ///   takes for the worker count when aye's own settings give none;
-    /// - `maxfail`: the effective `-x` / `--maxfail N` of the options
-    ///   (`null` when none sets a limit), which the runner counts across
-    ///   workers when aye's own command line gives none;
-    /// - `junitxml`: the absolute path of the report the options ask for
-    ///   (`null` when none does, or the last one is empty), and
-    ///   `junit_prefix`: their class name prefix. aye writes the report
-    ///   from the event stream;
-    /// - `junit_suite_name`, `junit_logging`, `junit_log_passing_tests` (a
-    ///   bool), `junit_duration_report`, `junit_family`: pytest's JUnit
-    ///   settings as `getini` gives them, with pytest's defaults, which the
-    ///   binary writes that report by;
-    /// - `keyword`, `tags`: the last `-k` and `-m` of the options (`null`
-    ///   when absent), which the binary applies statically when its own
-    ///   command line gives none, so the tests they drop are counted as
-    ///   deselected;
-    /// - `deselect`: the `--deselect` prefixes of the options, as prefixes
-    ///   of aye's ids (relative to the project root rather than the
-    ///   rootdir). The recognizer drops no case: the binary applies them
-    ///   in selection, which counts what they drop as deselected;
-    /// - `env_plugins`: the plugins `PYTEST_PLUGINS` names, as `-p NAME`
-    ///   arguments, so that the refinement cache's rule for plugins loaded
-    ///   by name covers them (the workers get the variable itself from the
-    ///   environment);
-    /// - `colliding_modules`: module names more than one test directory's
-    ///   `sys.path` entry holds, under the `prepend` and `append` import
-    ///   modes. A test module that imports one of them from its own
-    ///   directory gets `import:NAME` as its cases' first affinity key, so
-    ///   that those modules run in one batch, where Python keeps the first
-    ///   module of the name.
-    fn context(&self) -> serde_json::Value {
-        serde_json::json!({
-            "rootdir": self.config.rootdir.to_string_lossy(),
-            "inifile": self.config.inifile.as_ref().map(|p| p.to_string_lossy()),
-            "xdist_workers": self.config.xdist_workers,
-            "maxfail": self.config.maxfail,
-            "roots": self.collection_args.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
-            "junitxml": self.config.junitxml.as_ref().map(|p| p.to_string_lossy()),
-            "junit_prefix": self.config.junit_prefix,
-            "junit_suite_name": self.config.junit.suite_name,
-            "junit_logging": self.config.junit.logging,
-            "junit_log_passing_tests": self.config.junit.log_passing_tests,
-            "junit_duration_report": self.config.junit.duration_report,
-            "junit_family": self.config.junit.family,
-            "keyword": self.config.keyword,
-            "tags": self.config.tags,
-            "deselect": self.deselect_ids(),
-            "env_plugins": self.config.env_plugins.iter().flat_map(|name| ["-p", name.as_str()]).collect::<Vec<_>>(),
-            "colliding_modules": self.colliding(),
-        })
+    /// what the runner takes from pytest's options: [`PytestContext`].
+    fn context(&self) -> AdapterContext {
+        AdapterContext::of(self.pytest_context())
     }
 }

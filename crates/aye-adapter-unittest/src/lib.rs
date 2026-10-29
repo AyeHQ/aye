@@ -273,6 +273,7 @@
 //!   no test to the counts (unittest counts it among its errors).
 
 mod config;
+mod context;
 mod fnmatch;
 mod module;
 
@@ -281,19 +282,20 @@ mod tests;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_adapter::{
     Adapter, AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile,
 };
 use aye_events::{AdapterName, AffinityKey, Case, Certainty, ProjectPath, ProjectPathRef, Span};
 use aye_fs::normalize_absolute;
-use aye_protocol::{EmbeddedModule, Executor};
+use aye_protocol::{AdapterContext, EmbeddedModule, Executor};
 
 pub use config::UnittestConfig;
 pub use fnmatch::{fnmatch, valid_module_name};
 pub use module::may_define_load_tests;
 
+use crate::context::UnittestContext;
 use crate::module::Modules;
 
 /// The unittest adapter's executor module.
@@ -353,6 +355,8 @@ pub struct UnittestRecognizer {
     /// as `python -m unittest path.py` loads it, even below a package that
     /// may define `load_tests`.
     named: Vec<PathBuf>,
+    /// The context, built once.
+    context: OnceLock<UnittestContext>,
 }
 
 impl UnittestRecognizer {
@@ -394,6 +398,7 @@ impl UnittestRecognizer {
             modules,
             takes_over: Mutex::new(HashMap::new()),
             named,
+            context: OnceLock::new(),
         })
     }
 
@@ -693,31 +698,9 @@ impl Recognizer for UnittestRecognizer {
     }
 
     /// What the executor needs to discover as unittest would:
-    /// `start_directory`, `top_level_directory` and `pattern`, `starts`,
-    /// the directories named on the command line outside the start
-    /// directory (only when there are some), each its own start, and
-    /// `named`, the files named on the command line below a package that
-    /// may define `load_tests` (only when there are some), each loaded alone.
-    fn context(&self) -> serde_json::Value {
-        let mut context = serde_json::json!({
-            "start_directory": self.starts[0].0.to_string_lossy(),
-            "top_level_directory": self.starts[0].1.to_string_lossy(),
-            "pattern": self.config.pattern.value,
-        });
-        if self.starts.len() > 1 {
-            context["starts"] = self.starts[1..]
-                .iter()
-                .map(|(s, _)| serde_json::Value::from(s.to_string_lossy()))
-                .collect();
-        }
-        let named = self.named_below_load_tests();
-        if !named.is_empty() {
-            context["named"] = named
-                .iter()
-                .map(|path| serde_json::Value::from(path.to_string_lossy()))
-                .collect();
-        }
-        context
+    /// [`UnittestContext`].
+    fn context(&self) -> AdapterContext {
+        AdapterContext::of(self.context.get_or_init(|| UnittestContext::new(self)))
     }
 }
 

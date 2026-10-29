@@ -20,7 +20,7 @@ use aye_events::{
 };
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter, StoredRunId};
-use aye_protocol::{AdapterContext, Policy, Refiner};
+use aye_protocol::{Policy, Refiner};
 use aye_render::{
     ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
     JunitOptions, Reporter, Tally, Tee, Text, TextOptions,
@@ -178,6 +178,7 @@ impl Session {
 
         let from_framework = prepared.iter().find_map(|(_, r)| {
             r.context()
+                .as_value()
                 .get("xdist_workers")
                 .and_then(|w| w.as_str())
                 .map(str::to_string)
@@ -593,7 +594,7 @@ impl Session {
             contexts: self
                 .prepared
                 .iter()
-                .map(|(name, r)| (name.clone(), AdapterContext::from(r.context())))
+                .map(|(name, r)| (name.clone(), r.context()))
                 .collect(),
             requested_ids: requested_ids(&self.positionals),
             rerun_args: rerun_args.clone(),
@@ -1408,6 +1409,7 @@ fn maxfail(args: &Args, prepared: &[Prepared]) -> Option<u32> {
         Maxfail::Unset => prepared.iter().find_map(|(_, recognizer)| {
             recognizer
                 .context()
+                .as_value()
                 .get("maxfail")
                 .and_then(serde_json::Value::as_u64)
                 .and_then(|n| u32::try_from(n).ok())
@@ -1575,7 +1577,11 @@ fn junit_options(prepared: &[Prepared]) -> JunitOptions {
         options.family = JunitFamily::from(family.as_str());
     }
     let log_passing_tests = prepared.iter().find_map(|(_, recognizer)| {
-        match recognizer.context().get("junit_log_passing_tests")? {
+        match recognizer
+            .context()
+            .as_value()
+            .get("junit_log_passing_tests")?
+        {
             serde_json::Value::Bool(value) => Some(*value),
             // pytest's `bool` ini values, as `_strtobool` reads them.
             serde_json::Value::String(value) => match value.to_ascii_lowercase().as_str() {
@@ -1657,6 +1663,7 @@ fn selection<'s>(
     for (name, recognizer) in prepared {
         if let Some(prefixes) = recognizer
             .context()
+            .as_value()
             .get(keys::DESELECT)
             .and_then(serde_json::Value::as_array)
         {
@@ -1680,6 +1687,7 @@ fn context_strings<'p>(prepared: &'p [Prepared], key: &str) -> Vec<(&'p AdapterN
         .filter_map(|(name, recognizer)| {
             recognizer
                 .context()
+                .as_value()
                 .get(key)
                 .and_then(serde_json::Value::as_str)
                 .map(|value| (name, value.to_string()))

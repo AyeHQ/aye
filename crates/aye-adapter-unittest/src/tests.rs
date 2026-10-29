@@ -676,7 +676,7 @@ fn configuration_is_read_with_origins() {
             ),
         ]
     );
-    let context = recognizer.context();
+    let context = recognizer.context().into_value();
     assert_eq!(
         context["start_directory"],
         root.join("tests").to_string_lossy().as_ref()
@@ -792,7 +792,7 @@ fn explicit_paths_narrow_or_add_starts() {
     assert_eq!(ids(&found), ["examples/test_e.py::E::test_e"]);
     let recognizer = recognizer(root, &[PathBuf::from("examples")]).unwrap();
     assert_eq!(
-        recognizer.context()["starts"],
+        recognizer.context().into_value()["starts"],
         serde_json::json!([root.join("examples").to_string_lossy()])
     );
     // A file is a test module whatever the pattern.
@@ -862,6 +862,7 @@ fn a_named_file_is_loaded_alone() {
         recognizer(root, &[])
             .unwrap()
             .context()
+            .into_value()
             .get("named")
             .is_none(),
         "no file is named"
@@ -871,7 +872,7 @@ fn a_named_file_is_loaded_alone() {
     let found = collect(root, &args);
     assert_eq!(exact(&found), ["tests/pkg/test_slow.py::Slow::test_slow"]);
     assert_eq!(refined(&found), [] as [std::string::String; 0]);
-    let context = recognizer(root, &args).unwrap().context();
+    let context = recognizer(root, &args).unwrap().context().into_value();
     assert_eq!(
         context["named"],
         serde_json::json!([root
@@ -890,6 +891,7 @@ fn a_named_file_is_loaded_alone() {
         recognizer(dir.path(), &args)
             .unwrap()
             .context()
+            .into_value()
             .get("named")
             .is_none()
     );
@@ -925,7 +927,7 @@ fn the_context_is_pinned_byte_for_byte() {
     let unset = scratch(&[]);
     let written = |root: &Path, args: &[PathBuf]| {
         let text = serde_json::to_string(&root.to_string_lossy()).unwrap();
-        serde_json::to_string(&recognizer(root, args).unwrap().context())
+        serde_json::to_string(&recognizer(root, args).unwrap().context().into_value())
             .unwrap()
             .replace(text.trim_matches('"'), "<root>")
     };

@@ -17,7 +17,6 @@ ruff_python_ast = { workspace = true }
 ruff_source_file = { workspace = true }
 ruff_text_size = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

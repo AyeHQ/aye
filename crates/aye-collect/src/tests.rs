@@ -123,8 +123,8 @@ impl Recognizer for Fake {
         }]
     }
 
-    fn context(&self) -> serde_json::Value {
-        self.context.clone()
+    fn context(&self) -> AdapterContext {
+        self.context.clone().into()
     }
 }
 

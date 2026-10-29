@@ -307,6 +307,7 @@
 
 mod config;
 mod conftest;
+mod context;
 mod finder;
 mod fnmatch;
 mod parser;
@@ -323,10 +324,12 @@ use aye_adapter::{
 use aye_events::{
     AdapterName, AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity, Span,
 };
-use aye_protocol::{EmbeddedModule, Executor};
+use aye_protocol::{AdapterContext, EmbeddedModule, Executor};
 use aye_static::EnvVars;
 
 pub use config::{DoctestConfig, ImportMode};
+
+use crate::context::DoctestContext;
 
 /// The doctest adapter's executor module.
 pub const MODULE: EmbeddedModule = EmbeddedModule {
@@ -482,6 +485,8 @@ pub struct DoctestRecognizer {
     /// The project's conftests, and what each may do to doctest items
     /// (found once, when needed).
     project_conftests: OnceLock<Vec<ProjectConftest>>,
+    /// The context, built once (see [`Self::doctest_context`]).
+    context: OnceLock<DoctestContext>,
 }
 
 /// A `conftest.py` of the project, as the recognizer reads it.
@@ -813,6 +818,7 @@ impl DoctestRecognizer {
             conftests,
             scan: OnceLock::new(),
             project_conftests: OnceLock::new(),
+            context: OnceLock::new(),
         };
         recognizer.roots = recognizer.find_roots(project);
         Ok(recognizer)
@@ -1336,48 +1342,19 @@ impl Recognizer for DoctestRecognizer {
     /// What the executor needs: pytest's rootdir (for `importlib` mode),
     /// the option flags by name, the text files' encoding, the import mode,
     /// `pythonpath`, the `--doctest-report` choice and
-    /// `--doctest-ignore-import-errors`.
-    fn context(&self) -> serde_json::Value {
-        let conftests = (!self.conftests.disabled).then(|| {
-            serde_json::json!({
-                "initial": self
-                    .conftests
-                    .initial(&self.roots, &self.cwd)
-                    .iter()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>(),
-                "confcutdir": self.conftests.confcutdir.to_string_lossy(),
-            })
-        });
-        let mut context = serde_json::json!({
-            "rootdir": self.config.rootdir.to_string_lossy(),
-            "inifile": self.config.inifile.as_ref().map(|p| p.to_string_lossy()),
-            "optionflags": self.config.optionflags.value,
-            "encoding": self.config.encoding.value,
-            "import_mode": self.config.import_mode.as_str(),
-            "consider_namespace_packages": self.config.consider_namespace_packages,
-            "pythonpath": self.config.pythonpath.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
-            "report": self.config.report,
-            "ignore_import_errors": self.config.ignore_import_errors,
-            "continue_on_failure": self.config.continue_on_failure,
-            "filterwarnings": self.config.filterwarnings,
-            "pythonwarnings": self.config.pythonwarnings,
-            "conftests": conftests,
-            "deselect": self.deselect_ids(),
-            "maxfail": self.config.maxfail.filter(|n| *n > 0),
-            "junitxml": self.config.junitxml.as_ref().map(|p| p.to_string_lossy()),
-            "junit_prefix": self.config.junit_prefix,
-        });
-        if let Some(object) = context.as_object_mut() {
-            for (name, value) in &self.config.junit {
-                object.insert(name.clone(), value.clone().into());
-            }
-        }
-        context
+    /// `--doctest-ignore-import-errors`: [`DoctestContext`].
+    fn context(&self) -> AdapterContext {
+        AdapterContext::of(self.doctest_context())
     }
 }
 
 impl DoctestRecognizer {
+    /// The context ([`Recognizer::context`]), built the first time it is
+    /// asked for.
+    fn doctest_context(&self) -> &DoctestContext {
+        self.context.get_or_init(|| DoctestContext::new(self))
+    }
+
     /// pytest's `--deselect` prefixes as prefixes of aye's ids, which are
     /// relative to the project root rather than the rootdir; none when the
     /// rootdir is outside the root. The binary drops this adapter's cases

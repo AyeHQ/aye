@@ -9,7 +9,7 @@ use aye_adapter::Setting;
 use aye_events::{
     AdapterName, ContentDigest, Diagnostic, DiagnosticCode, Fnv128, ProjectPath, Severity,
 };
-use aye_protocol::{AdapterContext, RefineRequest, Refined, Refiner};
+use aye_protocol::{RefineRequest, Refined, Refiner};
 
 use crate::source::Source;
 use crate::standalone::{self, Scope};
@@ -79,7 +79,9 @@ impl Collector<'_> {
                     .flatten()
             });
             let cache = match (self.options.cache_dir.as_deref(), environment) {
-                (Some(dir), Some(environment)) if !self.loads_by_name(&context, &scope) => {
+                (Some(dir), Some(environment))
+                    if !self.loads_by_name(context.as_value(), &scope) =>
+                {
                     // The arguments after `--`, as adapters were given them.
                     let mut args = Fnv128::new();
                     for arg in self.project.framework_args {
@@ -96,7 +98,7 @@ impl Collector<'_> {
                             &args.finish().to_le_bytes(),
                         ],
                         adapter,
-                        &context,
+                        context.as_value(),
                         &recognizer.settings(),
                     ))
                 }
@@ -185,7 +187,7 @@ impl Collector<'_> {
                     .iter()
                     .map(|(at, _, _)| tree.entries[*at].rel.clone())
                     .collect(),
-                context: AdapterContext::from(context).into(),
+                context: context.into(),
                 digests_only: false,
             };
             match refiner.refine(&request) {
