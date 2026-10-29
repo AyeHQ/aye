@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::failure::Failure;
 use crate::id::TestId;
 use crate::lifetime::{LifetimeId, Scope};
-use crate::outcome::Outcome;
+use crate::outcome::{Outcome, OutcomeTrail};
 use crate::run::RunNumber;
 use crate::serde_ext::millis;
 
@@ -77,7 +77,7 @@ pub struct Previous {
     /// One letter per run, oldest first, at most 20: `p` passed, `f`
     /// failed, `e` error, `s` skipped, `x` expected failure, `u`
     /// unexpected pass.
-    pub outcomes: String,
+    pub outcomes: OutcomeTrail,
     /// The number of the run in which the test's current streak of bad
     /// outcomes began, when it began before this run.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,7 +1,7 @@
-//! Outcomes: of a test, the phase it happened in, and how a run ended and
-//! why it stopped early.
+//! Outcomes: of a test, of the runs before, the phase it happened in, and
+//! how a run ended and why it stopped early.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::serde_ext::string_enum;
 
@@ -54,6 +54,107 @@ impl Outcome {
             Self::ExpectedFailure => "expected_failure",
             Self::UnexpectedPass => "unexpected_pass",
         }
+    }
+
+    /// Its letter in an [`OutcomeTrail`]: `p` passed, `f` failed, `e`
+    /// error, `s` skipped, `x` expected failure, `u` unexpected pass.
+    pub const fn letter(self) -> char {
+        match self {
+            Self::Passed => 'p',
+            Self::Failed => 'f',
+            Self::Error => 'e',
+            Self::Skipped => 's',
+            Self::ExpectedFailure => 'x',
+            Self::UnexpectedPass => 'u',
+        }
+    }
+
+    /// The outcome whose [letter](Outcome::letter) `letter` is.
+    pub const fn from_letter(letter: char) -> Option<Self> {
+        Some(match letter {
+            'p' => Self::Passed,
+            'f' => Self::Failed,
+            'e' => Self::Error,
+            's' => Self::Skipped,
+            'x' => Self::ExpectedFailure,
+            'u' => Self::UnexpectedPass,
+            _ => return None,
+        })
+    }
+}
+
+/// A test's outcomes in the runs that recorded it, a [letter](Outcome::letter)
+/// per run, oldest first, the last [`OutcomeTrail::MAX`]: the history's
+/// `recent`, and a bad outcome's `history` (`outcomes`), which says how the
+/// test ended before.
+///
+/// It holds only letters it knows: what it reads keeps those, the last
+/// [`OutcomeTrail::MAX`] of them, as the history has always tidied what a
+/// hand left in its file. It serializes as its letters.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[serde(transparent)]
+pub struct OutcomeTrail(Box<str>);
+
+impl OutcomeTrail {
+    /// The most outcomes a trail keeps.
+    pub const MAX: usize = 20;
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// How many outcomes it holds.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Adds the outcome of the run after the last, keeping the last
+    /// [`OutcomeTrail::MAX`].
+    pub fn push(&mut self, outcome: Outcome) {
+        let mut letters = std::mem::take(&mut self.0).into_string();
+        letters.push(outcome.letter());
+        *self = Self::kept(letters);
+    }
+
+    /// Its outcomes, oldest first.
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = Outcome> + '_ {
+        self.0.chars().filter_map(Outcome::from_letter)
+    }
+
+    /// How many of its outcomes passed, and how many failed or errored.
+    pub fn counts(&self) -> (u32, u32) {
+        self.iter()
+            .fold((0, 0), |(passed, bad), outcome| match outcome {
+                Outcome::Passed => (passed + 1, bad),
+                _ if outcome.is_bad() => (passed, bad + 1),
+                _ => (passed, bad),
+            })
+    }
+
+    /// The letters of `letters` it knows, the last [`OutcomeTrail::MAX`].
+    fn kept(mut letters: String) -> Self {
+        letters.retain(|letter| Outcome::from_letter(letter).is_some());
+        let extra = letters.len().saturating_sub(Self::MAX);
+        letters.drain(..extra);
+        Self(letters.into_boxed_str())
+    }
+}
+
+/// The letters of `letters` it knows, the last [`OutcomeTrail::MAX`].
+impl From<&str> for OutcomeTrail {
+    fn from(letters: &str) -> Self {
+        Self::kept(letters.to_owned())
+    }
+}
+
+/// The letters it knows, the last [`OutcomeTrail::MAX`].
+impl<'de> Deserialize<'de> for OutcomeTrail {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Self::kept)
     }
 }
 
@@ -144,6 +245,58 @@ string_enum! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ALL: [Outcome; 6] = [
+        Outcome::Passed,
+        Outcome::Failed,
+        Outcome::Error,
+        Outcome::Skipped,
+        Outcome::ExpectedFailure,
+        Outcome::UnexpectedPass,
+    ];
+
+    #[test]
+    fn each_outcome_has_its_letter() {
+        let letters: String = ALL.iter().map(|outcome| outcome.letter()).collect();
+        assert_eq!(letters, "pfesxu");
+        for outcome in ALL {
+            assert_eq!(Outcome::from_letter(outcome.letter()), Some(outcome));
+        }
+        assert_eq!(Outcome::from_letter('z'), None);
+    }
+
+    /// A trail keeps the last 20 letters, oldest first; what it reads, the
+    /// letters it knows, the last 20; and it serializes as its letters.
+    #[test]
+    fn a_trail_keeps_the_last_twenty_outcomes() {
+        let mut trail = OutcomeTrail::default();
+        assert!(trail.is_empty());
+        for outcome in ALL {
+            trail.push(outcome);
+        }
+        assert_eq!(trail.as_str(), "pfesxu");
+        assert_eq!(trail.iter().collect::<Vec<_>>(), ALL);
+        for _ in 0..30 {
+            trail.push(Outcome::Passed);
+        }
+        trail.push(Outcome::Failed);
+        assert_eq!(trail.as_str(), format!("{}f", "p".repeat(19)));
+        assert_eq!(trail.len(), OutcomeTrail::MAX);
+        let read: OutcomeTrail =
+            serde_json::from_str(&format!("\"zz{}f\"", "p".repeat(30))).unwrap();
+        assert_eq!(read, trail);
+        assert_eq!(
+            serde_json::to_string(&trail).unwrap(),
+            format!("\"{}f\"", "p".repeat(19))
+        );
+        assert_eq!(OutcomeTrail::from("pfz"), OutcomeTrail::from("pf"));
+    }
+
+    #[test]
+    fn a_trail_counts_what_passed_and_what_failed() {
+        assert_eq!(OutcomeTrail::from("pfpes").counts(), (2, 2));
+        assert_eq!(OutcomeTrail::default().counts(), (0, 0));
+    }
 
     /// Each reason is written as `run_finished.stopped` spelled it, and
     /// one this aye doesn't know reads back as it was.

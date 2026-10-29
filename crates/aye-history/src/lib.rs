@@ -55,9 +55,9 @@
 //!   left without a `lifetime_finished` change nothing.
 //! - **`flips` is reserved** for flake rates and stays 0 until they land.
 //! - **Recent outcomes** (October 2026): each test keeps `recent`, a letter
-//!   per run that recorded it, oldest first, the last [`RECENT`] (`p`
-//!   passed, `f` failed, `e` error, `s` skipped, `x` expected failure, `u`
-//!   unexpected pass: [`letter`]), and `bad_since`, the number of the run
+//!   per run that recorded it, oldest first, the last 20 (`p` passed, `f`
+//!   failed, `e` error, `s` skipped, `x` expected failure, `u` unexpected
+//!   pass: an [`OutcomeTrail`]), and `bad_since`, the number of the run
 //!   (`r81`, from its `run_started`) in which its current streak of bad
 //!   outcomes began: kept while it stays bad, the run's own number when it
 //!   turns bad (none when the run has none: it isn't stored), cleared when
@@ -89,7 +89,9 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::Duration;
 
-use aye_events::{Event, Outcome, Previous, Record, RunId, RunNumber, TestId, TestResult};
+use aye_events::{
+    Event, Outcome, OutcomeTrail, Previous, Record, RunId, RunNumber, TestId, TestResult,
+};
 use aye_fs::{HISTORY_TEMPORARY, StateBucket, atomic_write, prepare_dir};
 use serde::{Deserialize, Serialize};
 
@@ -106,9 +108,6 @@ pub const VERSION: u32 = 1;
 
 /// The weight of the newest duration in the moving average.
 const ALPHA: f64 = 0.3;
-
-/// How many outcomes a test's `recent` keeps.
-pub const RECENT: usize = 20;
 
 /// What history knows about one test.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -129,10 +128,10 @@ pub struct TestStats {
     /// Reserved for flake rates; 0 until they land.
     #[serde(default)]
     pub flips: u32,
-    /// The test's outcomes in the runs that recorded it, a [`letter`] per
-    /// run, oldest first, the last [`RECENT`].
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub recent: String,
+    /// The test's outcomes in the runs that recorded it, a letter per run,
+    /// oldest first, the last [`OutcomeTrail::MAX`].
+    #[serde(default, skip_serializing_if = "OutcomeTrail::is_empty")]
+    pub recent: OutcomeTrail,
     /// The number of the run in which the test's current streak of bad
     /// outcomes began; `None` when its last outcome isn't bad, or when that
     /// run had no number.
@@ -150,7 +149,7 @@ impl TestStats {
             last_outcome: outcome,
             last_run: None,
             flips: 0,
-            recent: String::new(),
+            recent: OutcomeTrail::default(),
             bad_since: None,
         }
     }
@@ -206,7 +205,7 @@ struct Run {
 /// What history knew of a test's outcomes before the run being recorded.
 #[derive(Debug, Clone, Default)]
 struct Before {
-    recent: String,
+    recent: OutcomeTrail,
     bad_since: Option<RunNumber>,
     /// Whether its last outcome was bad.
     bad: bool,
@@ -228,26 +227,6 @@ impl Before {
             since: self.bad_since.filter(|_| self.bad),
         })
     }
-}
-
-/// An outcome's letter in a test's `recent`: `p` passed, `f` failed, `e`
-/// error, `s` skipped, `x` expected failure, `u` unexpected pass.
-pub const fn letter(outcome: Outcome) -> char {
-    match outcome {
-        Outcome::Passed => 'p',
-        Outcome::Failed => 'f',
-        Outcome::Error => 'e',
-        Outcome::Skipped => 's',
-        Outcome::ExpectedFailure => 'x',
-        Outcome::UnexpectedPass => 'u',
-    }
-}
-
-/// `recent` as history keeps it: letters only, the last [`RECENT`].
-fn tidy(recent: &mut String) {
-    recent.retain(|c| "pfesxu".contains(c));
-    let extra = recent.len().saturating_sub(RECENT);
-    recent.drain(..extra);
 }
 
 #[derive(Deserialize)]
@@ -277,12 +256,9 @@ impl History {
     }
 
     fn parse(bytes: &[u8]) -> Option<Self> {
-        let mut stored: Stored = serde_json::from_slice(bytes).ok()?;
+        let stored: Stored = serde_json::from_slice(bytes).ok()?;
         if stored.version != VERSION || !stored.tests.values().all(TestStats::is_valid) {
             return None;
-        }
-        for stats in stored.tests.values_mut() {
-            tidy(&mut stats.recent);
         }
         Some(Self {
             tests: stored.tests,
@@ -364,8 +340,7 @@ impl History {
         stats.last_outcome = result.outcome;
         stats.last_run = run;
         stats.recent.clone_from(&before.recent);
-        stats.recent.push(letter(result.outcome));
-        tidy(&mut stats.recent);
+        stats.recent.push(result.outcome);
         stats.bad_since = match (result.outcome.is_bad(), before.bad) {
             (false, _) => None,
             (true, true) => before.bad_since,

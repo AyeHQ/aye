@@ -894,8 +894,8 @@ impl<W: Write> JsonLines<W> {
                 })
                 .collect();
             detail.history = result.history.as_ref().and_then(|previous| {
-                let total = previous.outcomes.chars().count();
-                let (passed, failed) = shared::history_counts(previous);
+                let total = previous.outcomes.len();
+                let (passed, failed) = previous.outcomes.counts();
                 (total > 0).then(|| History {
                     previous: total,
                     passed,

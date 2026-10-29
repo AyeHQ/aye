@@ -307,8 +307,8 @@ pub(crate) fn sources(assertion: &Assertion) -> (Cow<'_, str>, Cow<'_, str>) {
 /// `failed the previous 3 runs too (since r78)`, `failed 2 of the last 10
 /// runs`, `didn't fail in the previous 4 runs`. None without any.
 pub(crate) fn history(previous: &Previous) -> Option<String> {
-    let letters: Vec<char> = previous.outcomes.chars().collect();
-    let total = letters.len();
+    let outcomes = &previous.outcomes;
+    let total = outcomes.len();
     let runs = |n: usize| {
         if n == 1 {
             "run".to_owned()
@@ -316,42 +316,24 @@ pub(crate) fn history(previous: &Previous) -> Option<String> {
             format!("{n} runs")
         }
     };
-    let bad = |letter: &char| matches!(letter, 'f' | 'e');
     if total == 0 {
         return None;
     }
-    if letters.iter().all(|letter| *letter == 'p') {
+    if outcomes.iter().all(|outcome| outcome == Outcome::Passed) {
         return Some(format!("passed the previous {}", runs(total)));
     }
-    if letters.last().is_some_and(bad) {
-        let streak = letters
-            .iter()
-            .rev()
-            .take_while(|letter| bad(letter))
-            .count();
+    if outcomes.iter().next_back().is_some_and(Outcome::is_bad) {
+        let streak = outcomes.iter().rev().take_while(|o| o.is_bad()).count();
         let since = previous
             .since
             .map(|since| format!(" (since {since})"))
             .unwrap_or_default();
         return Some(format!("failed the previous {} too{since}", runs(streak)));
     }
-    match letters.iter().filter(|letter| bad(letter)).count() {
+    match outcomes.iter().filter(|outcome| outcome.is_bad()).count() {
         0 => Some(format!("didn't fail in the previous {}", runs(total))),
         failed => Some(format!("failed {failed} of the last {}", runs(total))),
     }
-}
-
-/// How many of the earlier outcomes passed and how many failed (or
-/// errored).
-pub(crate) fn history_counts(previous: &Previous) -> (u32, u32) {
-    previous
-        .outcomes
-        .chars()
-        .fold((0, 0), |(passed, failed), letter| match letter {
-            'p' => (passed + 1, failed),
-            'f' | 'e' => (passed, failed + 1),
-            _ => (passed, failed),
-        })
 }
 
 /// The setup chain: `price_list (session) → cart (function)`.
@@ -1563,13 +1545,6 @@ mod tests {
         assert_eq!(
             words("psxp", None).unwrap(),
             "didn't fail in the previous 4 runs"
-        );
-        assert_eq!(
-            history_counts(&Previous {
-                outcomes: "pfpes".into(),
-                since: None,
-            }),
-            (2, 2)
         );
     }
 }

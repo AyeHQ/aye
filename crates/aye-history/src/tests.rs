@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use aye_events::{Counts, Envelope, ExitCode, Failure, RunId, RunNumber};
+use aye_events::{Counts, Envelope, ExitCode, Failure, OutcomeTrail, RunId, RunNumber};
 
 use super::*;
 
@@ -598,7 +598,10 @@ fn numbered_run(
 
 fn recent(history: &History, name: &str) -> (String, Option<u64>) {
     let stats = history.stats(&id(name)).unwrap();
-    (stats.recent.clone(), stats.bad_since.map(RunNumber::get))
+    (
+        stats.recent.as_str().to_owned(),
+        stats.bad_since.map(RunNumber::get),
+    )
 }
 
 #[test]
@@ -624,7 +627,10 @@ fn recent_has_a_letter_per_run_oldest_first_the_last_20() {
             &[("t.py::test_a", Outcome::Passed, 1)],
         );
     }
-    assert_eq!(recent(&history, "t.py::test_a").0, "p".repeat(RECENT));
+    assert_eq!(
+        recent(&history, "t.py::test_a").0,
+        "p".repeat(OutcomeTrail::MAX)
+    );
     numbered_run(
         &mut history,
         "x",
@@ -633,7 +639,7 @@ fn recent_has_a_letter_per_run_oldest_first_the_last_20() {
     );
     assert_eq!(
         recent(&history, "t.py::test_a").0,
-        format!("{}f", "p".repeat(RECENT - 1))
+        format!("{}f", "p".repeat(OutcomeTrail::MAX - 1))
     );
     // A test that didn't run gets no letter; one a lifetime kept from
     // running, a bad one.

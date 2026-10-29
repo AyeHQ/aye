@@ -51,7 +51,7 @@ pub use event::{Envelope, Event, Record};
 pub use failure::{Assertion, Columns, Compare, Difference, Failure, Frame, Local, Side};
 pub use id::{AdapterName, InvalidKey, KeyPrefix, TestId, TestIdParts, TestKey};
 pub use lifetime::{LifetimeId, Scope};
-pub use outcome::{ExitCode, Outcome, Phase, StopReason};
+pub use outcome::{ExitCode, Outcome, OutcomeTrail, Phase, StopReason};
 pub use path::{
     DiagnosticPath, FramePath, InvalidProjectPath, LineNumber, Location, ProjectPath,
     ProjectPathRef, Span,
