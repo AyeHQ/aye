@@ -894,3 +894,44 @@ fn a_named_file_is_loaded_alone() {
             .is_none()
     );
 }
+
+/// The context's bytes as aye 0.0.1 built them (`tests/contexts.jsonl`, one
+/// line each): with a start directory, a pattern and a top-level directory
+/// from `[tool.aye.unittest]`, a directory named outside the start and a
+/// file named below a package that may define `load_tests`; then with
+/// nothing set. The refinement cache's key hashes them, so a change here
+/// misses every cached entry. The project root is written `<root>`. Pinned
+/// where paths are written with `/`.
+#[cfg(unix)]
+#[test]
+fn the_context_is_pinned_byte_for_byte() {
+    let set = scratch(&[
+        (
+            "pyproject.toml",
+            "[tool.aye.unittest]\nstart-directory = \"tests\"\npattern = \"*_test.py\"\ntop-level-directory = \".\"\n",
+        ),
+        ("tests/__init__.py", ""),
+        (
+            "tests/pkg/__init__.py",
+            "def load_tests(loader, tests, pattern):\n    return tests\n",
+        ),
+        ("tests/pkg/x_test.py", ""),
+        ("examples/e_test.py", ""),
+    ]);
+    let args = [
+        PathBuf::from("examples"),
+        PathBuf::from("tests/pkg/x_test.py"),
+    ];
+    let unset = scratch(&[]);
+    let written = |root: &Path, args: &[PathBuf]| {
+        let text = serde_json::to_string(&root.to_string_lossy()).unwrap();
+        serde_json::to_string(&recognizer(root, args).unwrap().context())
+            .unwrap()
+            .replace(text.trim_matches('"'), "<root>")
+    };
+    let pinned: Vec<&str> = include_str!("tests/contexts.jsonl").lines().collect();
+    assert_eq!(
+        [written(set.path(), &args), written(unset.path(), &[])],
+        pinned[..]
+    );
+}

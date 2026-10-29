@@ -1350,4 +1350,68 @@ mod tests {
         assert_eq!(recognition.cases, []);
         assert_eq!(recognition.refine.as_deref(), Some(REFINE_REASON));
     }
+
+    /// The context's bytes as aye 0.0.1 built them (`tests/contexts.jsonl`,
+    /// one line each), for a project whose options and ini set every key
+    /// the binary reads, and for one that sets nothing. The refinement
+    /// cache's key hashes them, so a change here misses every cached entry.
+    /// The project root is written `<root>`, and the digest of the
+    /// executor's sources `<modules_digest>`, which changes with them.
+    /// Pinned where paths are written with `/`.
+    #[cfg(unix)]
+    #[test]
+    fn the_context_is_pinned_byte_for_byte() {
+        let everything = tempfile::tempdir().unwrap();
+        let root = everything.path();
+        write(
+            root,
+            "pytest.ini",
+            "[pytest]\naddopts = -ra -n 3 --maxfail=2 --junitxml=reports/out.xml \
+             --junitprefix=ci -k \"not slow\" -m db --deselect tests/a/test_x.py::test_skip \
+             -p no:cacheprovider\ntestpaths = tests\nmarkers =\n    slow: slow tests\n\
+             junit_family = xunit1\njunit_log_passing_tests = false\n\
+             junit_suite_name = suite\ntimeout = 5\n",
+        );
+        write(root, "tests/conftest.py", "");
+        write(
+            root,
+            "tests/a/test_x.py",
+            "import helpers\n\ndef test_x():\n    pass\n",
+        );
+        write(root, "tests/a/helpers.py", "");
+        write(root, "tests/b/test_y.py", "def test_y():\n    pass\n");
+        write(root, "tests/b/helpers.py", "");
+        let cli = strings(&["-o", "xfail_strict=true", "--runslow"]);
+        let project = Project {
+            root,
+            cwd: root,
+            args: &[],
+            config_file: None,
+            framework_args: &cli,
+        };
+        let env = crate::PytestEnv {
+            pytest_addopts: Some("-v"),
+            pytest_plugins: Some("myplugin"),
+            pythonpath: None,
+        };
+        let set = NativeRecognizer::new(
+            PytestRecognizer::with_environment(&project, env).unwrap(),
+            false,
+        );
+        let nothing = tempfile::tempdir().unwrap();
+        let unset = recognizer(nothing.path(), &[]);
+        let written = |recognizer: &NativeRecognizer, root: &Path| {
+            let root = serde_json::to_string(&root.to_string_lossy()).unwrap();
+            let digest = serde_json::to_string(&modules_digest()).unwrap();
+            serde_json::to_string(&recognizer.context())
+                .unwrap()
+                .replace(root.trim_matches('"'), "<root>")
+                .replace(&digest, "\"<modules_digest>\"")
+        };
+        let pinned: Vec<&str> = include_str!("tests/contexts.jsonl").lines().collect();
+        assert_eq!(
+            [written(&set, root), written(&unset, nothing.path())],
+            pinned[..]
+        );
+    }
 }

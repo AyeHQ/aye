@@ -2314,3 +2314,58 @@ fn a_conftest_another_one_replaced_is_an_import_file_mismatch() {
         );
     }
 }
+
+/// The context's bytes as aye 0.0.1 built them (`tests/contexts.jsonl`, one
+/// line each): with pytest's options and ini setting every key the
+/// executor and the binary read, `PYTEST_ADDOPTS` and two conftests; then
+/// with `--noconftest` and `--maxfail=0`. The refinement cache's key hashes
+/// them, so a change here misses every cached entry. The project root is
+/// written `<root>`. Pinned where paths are written with `/`.
+#[cfg(unix)]
+#[test]
+fn the_context_is_pinned_byte_for_byte() {
+    let set = tempfile::tempdir().unwrap();
+    write(
+        set.path(),
+        "pytest.ini",
+        "[pytest]\naddopts = --doctest-modules -x --junitxml=out.xml --junitprefix=pre \
+         --deselect pkg/mod.py::pkg.mod.f --doctest-report ndiff \
+         --doctest-continue-on-failure --doctest-ignore-import-errors\n\
+         doctest_optionflags = NUMBER ELLIPSIS\ndoctest_encoding = latin-1\n\
+         junit_family = xunit1\njunit_log_passing_tests = no\njunit_logging = all\n\
+         filterwarnings =\n    error\npythonpath = src\n",
+    );
+    write(set.path(), "conftest.py", "");
+    write(set.path(), "pkg/conftest.py", "");
+    write(
+        set.path(),
+        "pkg/mod.py",
+        "def f():\n    '''\n    >>> 1\n    1\n    '''\n",
+    );
+    let args = ["-p".to_string(), "someplugin".to_string()];
+    let set_up =
+        DoctestRecognizer::with_env(&project(set.path(), &[], &args), Some("-W once"), None)
+            .unwrap();
+    let off = tempfile::tempdir().unwrap();
+    write(
+        off.path(),
+        "pytest.ini",
+        "[pytest]\naddopts = --doctest-modules --noconftest --maxfail=0\n",
+    );
+    write(off.path(), "conftest.py", "");
+    let turned_off = recognizer(off.path());
+    let written = |recognizer: &DoctestRecognizer, root: &Path| {
+        let text = serde_json::to_string(&root.to_string_lossy()).unwrap();
+        serde_json::to_string(&recognizer.context())
+            .unwrap()
+            .replace(text.trim_matches('"'), "<root>")
+    };
+    let pinned: Vec<&str> = include_str!("tests/contexts.jsonl").lines().collect();
+    assert_eq!(
+        [
+            written(&set_up, set.path()),
+            written(&turned_off, off.path())
+        ],
+        pinned[..]
+    );
+}
