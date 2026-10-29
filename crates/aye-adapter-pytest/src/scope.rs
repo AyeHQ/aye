@@ -5342,7 +5342,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
-    use aye_adapter::{LineIndex, Project, Recognition, Recognizer, SourceFile};
+    use aye_adapter::{LineIndex, Project, Recognition, Recognizer, Requested, SourceFile};
     use aye_events::Certainty;
 
     use super::*;
@@ -5368,7 +5368,7 @@ mod tests {
             module: parsed.syntax(),
             lines: &lines,
         };
-        recognizer.recognize(&file, &[])
+        recognizer.recognize(&file, Requested::Found, &[])
     }
 
     /// The ids of a file read statically, or `None` when it is refined.

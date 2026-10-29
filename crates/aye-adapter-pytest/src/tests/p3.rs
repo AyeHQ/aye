@@ -207,7 +207,7 @@ fn recognize_text(recognizer: &PytestRecognizer, root: &Path, rel: &str) -> Reco
         module: empty.syntax(),
         lines: &lines,
     };
-    recognizer.recognize(&file, &[])
+    recognizer.recognize(&file, Requested::Found, &[])
 }
 
 #[test]
@@ -232,18 +232,18 @@ fn the_adapter_prepares_pytests_doctests_only_without_the_doctest_adapter() {
         args(&*alone),
         serde_json::json!(["--doctest-modules", "-ra"])
     );
-    assert!(alone.claim("m.py", false).has_tests());
+    assert!(alone.claim("m.py", Requested::Found).has_tests());
     let beside = Pytest::default()
         .prepare_among(&project, &["doctest".into(), crate::NAME])
         .unwrap()
         .unwrap();
     assert_eq!(args(&*beside), serde_json::json!(["-ra"]));
-    assert_eq!(beside.claim("m.py", false), Claim::Ignore);
-    assert_eq!(beside.claim("test_a.txt", false), Claim::Ignore);
+    assert_eq!(beside.claim("m.py", Requested::Found), Claim::Ignore);
+    assert_eq!(beside.claim("test_a.txt", Requested::Found), Claim::Ignore);
     // `prepare` alone keeps the doctest adapter's division.
     let plain = Pytest::default().prepare(&project).unwrap().unwrap();
     assert_eq!(args(&*plain), serde_json::json!(["-ra"]));
-    assert_eq!(plain.claim("m.py", false), Claim::Ignore);
+    assert_eq!(plain.claim("m.py", Requested::Found), Claim::Ignore);
 }
 
 #[test]
@@ -264,15 +264,20 @@ fn pytests_doctest_plugin_claims_what_it_collects() {
         ("docs/notes.md", true, false),
         ("test_x.py", false, true),
     ] {
+        let requested = if explicit {
+            Requested::Named
+        } else {
+            Requested::Found
+        };
         assert_eq!(
-            recognizer.claim(rel, explicit).has_tests(),
+            recognizer.claim(rel, requested).has_tests(),
             claimed,
             "{rel} (explicit: {explicit})"
         );
     }
     // A conftest is support and a doctest module.
     assert_eq!(
-        recognizer.claim("conftest.py", false),
+        recognizer.claim("conftest.py", Requested::Found),
         Claim::TestsAndSupport
     );
     // `--doctest-glob` replaces `test*.txt`; `--ignore` holds.
@@ -282,18 +287,22 @@ fn pytests_doctest_plugin_claims_what_it_collects() {
         &["--doctest-glob", "*.rst", "--ignore=m.py"],
         &["pytest"],
     );
-    assert!(!recognizer.claim("test_a.txt", false).has_tests());
-    assert!(recognizer.claim("docs/guide.rst", false).has_tests());
-    assert!(!recognizer.claim("m.py", false).has_tests());
-    assert!(recognizer.claim("m.py", true).has_tests());
+    assert!(!recognizer.claim("test_a.txt", Requested::Found).has_tests());
+    assert!(
+        recognizer
+            .claim("docs/guide.rst", Requested::Found)
+            .has_tests()
+    );
+    assert!(!recognizer.claim("m.py", Requested::Found).has_tests());
+    assert!(recognizer.claim("m.py", Requested::Named).has_tests());
     // Without `--doctest-modules`, pytest still collects `test*.txt`.
     write(root, "pyproject.toml", "[tool.pytest.ini_options]\n");
     let recognizer = prepared(root, &[], &[], &["pytest"]);
-    assert!(!recognizer.claim("m.py", false).has_tests());
-    assert!(recognizer.claim("test_a.txt", false).has_tests());
+    assert!(!recognizer.claim("m.py", Requested::Found).has_tests());
+    assert!(recognizer.claim("test_a.txt", Requested::Found).has_tests());
     // `-p no:doctest` blocks the plugin: it collects nothing.
     let recognizer = prepared(root, &[], &["-p", "no:doctest"], &["pytest"]);
-    assert!(!recognizer.claim("test_a.txt", false).has_tests());
+    assert!(!recognizer.claim("test_a.txt", Requested::Found).has_tests());
     assert!(recognizer.doctests.is_none());
 }
 
@@ -305,7 +314,7 @@ fn pytests_doctests_are_refined() {
     let recognizer = prepared(root, &[], &[], &["pytest"]);
     // Only pytest's doctest plugin collects `m.py`: none of its functions
     // is a test, and only the import tells its doctests.
-    recognizer.claim("m.py", false);
+    recognizer.claim("m.py", Requested::Found);
     let m = recognize_with(&recognizer, root, "m.py");
     assert!(m.cases.is_empty(), "{m:?}");
     assert!(
@@ -316,8 +325,8 @@ fn pytests_doctests_are_refined() {
     );
     // Named on the command line, it is a test module too.
     let named = prepared(root, &["m.py"], &[], &["pytest"]);
-    assert!(named.claim("m.py", true).has_tests());
-    let m = recognize_with(&named, root, "m.py");
+    assert!(named.claim("m.py", Requested::Named).has_tests());
+    let m = recognize_as(&named, root, "m.py", Requested::Named);
     assert_eq!(certainties(&m), [("m.py::test_helper", Certainty::Partial)]);
     assert!(m.refine.is_some());
     // A test module with a doctest prompt is refined, its tests `Partial`;
@@ -404,8 +413,8 @@ fn pytests_doctest_options_reach_the_front_end_without_the_doctest_adapter() {
             globs: vec!["*.rst".into(), "*.md".into()],
         }
     );
-    assert!(recognizer.claim("docs/a.md", false).has_tests());
-    assert!(!recognizer.claim("test_a.txt", false).has_tests());
+    assert!(recognizer.claim("docs/a.md", Requested::Found).has_tests());
+    assert!(!recognizer.claim("test_a.txt", Requested::Found).has_tests());
 }
 
 /// pytest itself, when at hand, collects what the recognizer claims, and
@@ -421,7 +430,7 @@ fn pytest_collects_the_doctests_the_recognizer_claims() {
     let recognizer = prepared(root, &[], &[], &["pytest"]);
     for id in &ids {
         let file = id.split("::").next().unwrap();
-        assert!(recognizer.claim(file, false).has_tests(), "{id}");
+        assert!(recognizer.claim(file, Requested::Found).has_tests(), "{id}");
     }
     assert!(ids.contains(&"m.py::m.f".to_string()), "{ids:?}");
     assert!(

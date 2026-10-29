@@ -118,9 +118,12 @@ fn walk(
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        if recognizer.claim(&rel, false).has_tests() {
+        if recognizer.claim(&rel, Requested::Found).has_tests() {
             let file = Parsed::read(root, &rel);
-            out.push((rel, recognizer.recognize(&file.file(), &[])));
+            out.push((
+                rel,
+                recognizer.recognize(&file.file(), Requested::Found, &[]),
+            ));
         }
     }
 }
@@ -137,7 +140,7 @@ fn recognize(source: &str) -> Recognition {
     write(dir.path(), "pkg/mod.py", source);
     let recognizer = recognizer(dir.path());
     let file = Parsed::read(dir.path(), "pkg/mod.py");
-    recognizer.recognize(&file.file(), &[])
+    recognizer.recognize(&file.file(), Requested::Found, &[])
 }
 
 /// The names of a module's tests, and whether it is refined.
@@ -919,12 +922,27 @@ fn a_pytest_configuration_collects_test_txt_files() {
     let recognizer = config(&[("pytest.ini", "[pytest]\n")], &[], None).unwrap();
     assert!(!recognizer.config().modules.value);
     assert_eq!(recognizer.config().globs.value, ["test*.txt"]);
-    assert_eq!(recognizer.claim("docs/test_guide.txt", false), Claim::Tests);
-    assert_eq!(recognizer.claim("docs/guide.txt", false), Claim::Ignore);
-    assert_eq!(recognizer.claim("docs/guide.txt", true), Claim::Tests);
-    assert_eq!(recognizer.claim("docs/guide.rst", true), Claim::Tests);
-    assert_eq!(recognizer.claim("docs/guide.md", true), Claim::Ignore);
-    assert_eq!(recognizer.claim("mod.py", false), Claim::Ignore);
+    assert_eq!(
+        recognizer.claim("docs/test_guide.txt", Requested::Found),
+        Claim::Tests
+    );
+    assert_eq!(
+        recognizer.claim("docs/guide.txt", Requested::Found),
+        Claim::Ignore
+    );
+    assert_eq!(
+        recognizer.claim("docs/guide.txt", Requested::Named),
+        Claim::Tests
+    );
+    assert_eq!(
+        recognizer.claim("docs/guide.rst", Requested::Named),
+        Claim::Tests
+    );
+    assert_eq!(
+        recognizer.claim("docs/guide.md", Requested::Named),
+        Claim::Ignore
+    );
+    assert_eq!(recognizer.claim("mod.py", Requested::Found), Claim::Ignore);
 }
 
 #[test]
@@ -945,9 +963,15 @@ fn beside_pytest_test_txt_files_need_no_pytest_configuration() {
     assert!(among(&["unittest", "doctest"], &[]).is_none());
     assert!(Doctest.prepare(&project(root, &[], &[])).unwrap().is_none());
     let recognizer = among(&["pytest", "doctest"], &[]).unwrap();
-    assert_eq!(recognizer.claim("docs/test_guide.txt", false), Claim::Tests);
-    assert_eq!(recognizer.claim("docs/guide.txt", false), Claim::Ignore);
-    assert_eq!(recognizer.claim("mod.py", false), Claim::Ignore);
+    assert_eq!(
+        recognizer.claim("docs/test_guide.txt", Requested::Found),
+        Claim::Tests
+    );
+    assert_eq!(
+        recognizer.claim("docs/guide.txt", Requested::Found),
+        Claim::Ignore
+    );
+    assert_eq!(recognizer.claim("mod.py", Requested::Found), Claim::Ignore);
     let settings = recognizer.settings();
     let glob = settings.iter().find(|s| s.name == "glob").unwrap();
     assert_eq!(
@@ -964,10 +988,13 @@ fn beside_pytest_test_txt_files_need_no_pytest_configuration() {
     );
     let configured = among(&["pytest", "doctest"], &[]).unwrap();
     assert_eq!(
-        configured.claim("docs/test_guide.txt", false),
+        configured.claim("docs/test_guide.txt", Requested::Found),
         Claim::Ignore
     );
-    assert_eq!(configured.claim("README.md", false), Claim::Tests);
+    assert_eq!(
+        configured.claim("README.md", Requested::Found),
+        Claim::Tests
+    );
     write(root, "pyproject.toml", "[project]\nname = 'x'\n");
     // What pytest itself collects there, text files without examples none.
     if let Some(python) = python() {
@@ -977,7 +1004,7 @@ fn beside_pytest_test_txt_files_need_no_pytest_configuration() {
             .iter()
             .flat_map(|rel| {
                 let file = Parsed::read(root, rel);
-                let recognition = recognizer.recognize(&file.file(), &[]);
+                let recognition = recognizer.recognize(&file.file(), Requested::Found, &[]);
                 assert!(recognition.refine.is_none());
                 recognition.cases.into_iter().map(|c| c.id.into_string())
             })
@@ -1047,9 +1074,18 @@ fn doctest_globs_replace_the_default() {
     )
     .unwrap();
     assert_eq!(recognizer.config().globs.value, ["*.md", "*.rst"]);
-    assert_eq!(recognizer.claim("README.md", false), Claim::Tests);
-    assert_eq!(recognizer.claim("docs/a.rst", false), Claim::Tests);
-    assert_eq!(recognizer.claim("test_a.txt", false), Claim::Ignore);
+    assert_eq!(
+        recognizer.claim("README.md", Requested::Found),
+        Claim::Tests
+    );
+    assert_eq!(
+        recognizer.claim("docs/a.rst", Requested::Found),
+        Claim::Tests
+    );
+    assert_eq!(
+        recognizer.claim("test_a.txt", Requested::Found),
+        Claim::Ignore
+    );
 }
 
 #[test]
@@ -1219,15 +1255,33 @@ fn claims_follow_pytests_collect_file() {
     write(root, "setup.py", "from setuptools import setup\n");
     write(root, "sub/setup.py", "print('a script')\n");
     let recognizer = recognizer(root);
-    assert_eq!(recognizer.claim("mod.py", false), Claim::Tests);
-    assert_eq!(recognizer.claim("pkg/test_x.py", false), Claim::Tests);
-    assert_eq!(recognizer.claim("conftest.py", false), Claim::Tests);
-    assert_eq!(recognizer.claim("__main__.py", false), Claim::Ignore);
-    assert_eq!(recognizer.claim("__main__.py", true), Claim::Ignore);
-    assert_eq!(recognizer.claim("setup.py", true), Claim::Ignore);
-    assert_eq!(recognizer.claim("sub/setup.py", false), Claim::Tests);
-    assert_eq!(recognizer.claim(".py", false), Claim::Ignore);
-    assert_eq!(recognizer.claim("mod.pyi", false), Claim::Ignore);
+    assert_eq!(recognizer.claim("mod.py", Requested::Found), Claim::Tests);
+    assert_eq!(
+        recognizer.claim("pkg/test_x.py", Requested::Found),
+        Claim::Tests
+    );
+    assert_eq!(
+        recognizer.claim("conftest.py", Requested::Found),
+        Claim::Tests
+    );
+    assert_eq!(
+        recognizer.claim("__main__.py", Requested::Found),
+        Claim::Ignore
+    );
+    assert_eq!(
+        recognizer.claim("__main__.py", Requested::Named),
+        Claim::Ignore
+    );
+    assert_eq!(
+        recognizer.claim("setup.py", Requested::Named),
+        Claim::Ignore
+    );
+    assert_eq!(
+        recognizer.claim("sub/setup.py", Requested::Found),
+        Claim::Tests
+    );
+    assert_eq!(recognizer.claim(".py", Requested::Found), Claim::Ignore);
+    assert_eq!(recognizer.claim("mod.pyi", Requested::Found), Claim::Ignore);
     assert!(!recognizer.descend(&root.join("skipped")));
     assert!(!recognizer.descend(&root.join("build")));
     assert!(!recognizer.descend(&root.join(".hidden")));
@@ -1245,7 +1299,7 @@ fn text_files_are_one_case_when_they_have_examples() {
     let recognize_text = |rel: &str, body: &str| {
         write(dir.path(), rel, body);
         let file = Parsed::read(dir.path(), rel);
-        recognizer.recognize(&file.file(), &[])
+        recognizer.recognize(&file.file(), Requested::Found, &[])
     };
     let recognition = recognize_text("docs/test_a.txt", "Prose.\r\n\r\n>>> 1\r\n1\r\n");
     assert!(recognition.refine.is_none());
@@ -1326,7 +1380,9 @@ fn modules_without_a_visible_doctest_are_refined() {
     .unwrap();
     let refine_of = |recognizer: &DoctestRecognizer, rel: &str| {
         let file = Parsed::read(dir.path(), rel);
-        recognizer.recognize(&file.file(), &[]).refine
+        recognizer
+            .recognize(&file.file(), Requested::Found, &[])
+            .refine
     };
     assert_eq!(refine_of(&beside, "tests/test_mod.py"), None);
     assert_eq!(refine_of(&beside, "tests/conftest.py"), None);
@@ -1356,7 +1412,9 @@ fn project_modules_that_set_module_refine_their_importers() {
     // so it is refined in any case: pytest imports it all the same).
     let check = |rel: &str| {
         let file = Parsed::read(root, rel);
-        let refine = recognizer(root).recognize(&file.file(), &[]).refine;
+        let refine = recognizer(root)
+            .recognize(&file.file(), Requested::Found, &[])
+            .refine;
         assert!(refine.is_some());
         refine.filter(|why| why.contains("__module__"))
     };
@@ -1429,7 +1487,7 @@ fn import_modes_and_optimization_refine_every_module() {
         "def f():\n    \"\"\"\n    >>> 1\n    1\n    \"\"\"\n",
     );
     let file = Parsed::read(root, "mod.py");
-    let recognition = recognizer(root).recognize(&file.file(), &[]);
+    let recognition = recognizer(root).recognize(&file.file(), Requested::Found, &[]);
     assert!(recognition.refine.unwrap().contains("importlib"));
     write(
         root,
@@ -1437,9 +1495,19 @@ fn import_modes_and_optimization_refine_every_module() {
         "[pytest]\naddopts = --doctest-modules\n",
     );
     let optimized = DoctestRecognizer::with_env(&project(root, &[], &[]), None, Some("2")).unwrap();
-    assert!(optimized.recognize(&file.file(), &[]).refine.is_some());
+    assert!(
+        optimized
+            .recognize(&file.file(), Requested::Found, &[])
+            .refine
+            .is_some()
+    );
     let plain = DoctestRecognizer::with_env(&project(root, &[], &[]), None, Some("1")).unwrap();
-    assert!(plain.recognize(&file.file(), &[]).refine.is_none());
+    assert!(
+        plain
+            .recognize(&file.file(), Requested::Found, &[])
+            .refine
+            .is_none()
+    );
 }
 
 #[test]
@@ -1979,9 +2047,15 @@ fn a_named_text_file_is_a_doctest_with_nothing_enabled() {
             .prepare_among(&project(root, &args, &[]), &adapters(names))
             .unwrap()
             .expect("a recognizer for the named file");
-        assert_eq!(recognizer.claim("guide.rst", true), Claim::Tests);
-        assert_eq!(recognizer.claim("other.rst", false), Claim::Ignore);
-        assert_eq!(recognizer.claim("mod.py", false), Claim::Ignore);
+        assert_eq!(
+            recognizer.claim("guide.rst", Requested::Named),
+            Claim::Tests
+        );
+        assert_eq!(
+            recognizer.claim("other.rst", Requested::Found),
+            Claim::Ignore
+        );
+        assert_eq!(recognizer.claim("mod.py", Requested::Found), Claim::Ignore);
     }
     // A name that isn't a file is no reason.
     let missing = [PathBuf::from("missing.rst")];
@@ -2012,7 +2086,7 @@ fn a_computed_module_refines_the_importers() {
     let check = || {
         let file = Parsed::read(root, "pkg/__init__.py");
         recognizer(root)
-            .recognize(&file.file(), &[])
+            .recognize(&file.file(), Requested::Found, &[])
             .refine
             .filter(|why| why.contains("__module__"))
     };
@@ -2096,7 +2170,7 @@ fn ignoring_import_mismatches_refines_modules() {
     let file = Parsed::read(root, "a/util.py");
     assert!(
         recognizer(root)
-            .recognize(&file.file(), &[])
+            .recognize(&file.file(), Requested::Found, &[])
             .refine
             .is_none()
     );
@@ -2106,7 +2180,7 @@ fn ignoring_import_mismatches_refines_modules() {
     };
     let ignoring =
         DoctestRecognizer::with_environment(&project(root, &[], &[]), &[], &env).unwrap();
-    let recognition = ignoring.recognize(&file.file(), &[]);
+    let recognition = ignoring.recognize(&file.file(), Requested::Found, &[]);
     assert!(
         recognition
             .refine
@@ -2138,7 +2212,7 @@ fn hooks_that_may_mark_items_make_the_cases_partial() {
             root.join(rel),
             std::fs::read_to_string(root.join(rel)).unwrap(),
         );
-        let recognition = recognizer.recognize(&file.file(), &[]);
+        let recognition = recognizer.recognize(&file.file(), Requested::Found, &[]);
         assert!(recognition.refine.is_none());
         recognition.cases[0].certainty
     };
@@ -2214,7 +2288,7 @@ fn doctests_below_a_conftest_that_may_skip_are_refined() {
     write(root, "other/o.py", doc);
     let refine = |recognizer: &DoctestRecognizer, rel: &str| {
         let file = Parsed::read(root, rel);
-        let recognition = recognizer.recognize(&file.file(), &[]);
+        let recognition = recognizer.recognize(&file.file(), Requested::Found, &[]);
         assert_eq!(recognition.cases.len(), 1, "{rel}");
         recognition.refine
     };
@@ -2291,7 +2365,7 @@ fn a_conftest_another_one_replaced_is_an_import_file_mismatch() {
     write(root, "x/test_x.py", "def test_x():\n    pass\n");
     let recognize = |rel: &str| {
         let file = Parsed::read(root, rel);
-        recognizer(root).recognize(&file.file(), &[])
+        recognizer(root).recognize(&file.file(), Requested::Found, &[])
     };
     // `x/` sorts after `conftest.py`: no mismatch.
     let root_conftest = recognize("conftest.py");

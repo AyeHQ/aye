@@ -34,8 +34,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use aye_adapter::{
-    Adapter, AdapterError, Claim, FrameworkDefaults, Project, Recognition, Recognizer, Setting,
-    SourceFile,
+    Adapter, AdapterError, Claim, FrameworkDefaults, Project, Recognition, Recognizer, Requested,
+    Setting, SourceFile,
 };
 use aye_engine::{MODEL_MODULE, NATIVE_ENGINE_MODULE, REWRITE_MODULE};
 use aye_events::{AdapterName, Diagnostic, DiagnosticCode, Fnv64, Severity};
@@ -189,8 +189,8 @@ impl Recognizer for NativeRecognizer {
         self.inner.descend(dir)
     }
 
-    fn claim(&self, rel: &str, explicit: bool) -> Claim {
-        self.inner.claim(rel, explicit)
+    fn claim(&self, rel: &str, requested: Requested) -> Claim {
+        self.inner.claim(rel, requested)
     }
 
     /// No static case: the file is refined, the front-end decides; for a
@@ -198,36 +198,34 @@ impl Recognizer for NativeRecognizer {
     /// own doctest plugin would collect (only in a run without the doctest
     /// adapter) is a `usage-error`: aye's engine runs doctests through the
     /// doctest adapter only.
-    fn recognize(&self, file: &SourceFile<'_>, support: &[SourceFile<'_>]) -> Recognition {
-        if self.inner.doctests.is_some() {
-            let explicit = self
+    fn recognize(
+        &self,
+        file: &SourceFile<'_>,
+        requested: Requested,
+        support: &[SourceFile<'_>],
+    ) -> Recognition {
+        if self.inner.doctests.is_some()
+            && self
                 .inner
-                .explicit
-                .lock()
-                .expect("lock")
-                .contains(file.rel.as_str());
-            if self
-                .inner
-                .doctest_file(file.rel.as_str(), explicit)
+                .doctest_file(file.rel.as_str(), requested.is_named())
                 .is_some()
-            {
-                return Recognition {
-                    diagnostics: vec![Diagnostic {
-                        severity: Severity::Error,
-                        code: DiagnosticCode::UsageError,
-                        path: file.rel.to_project_path().into(),
-                        span: None,
-                        message: "pytest's doctest plugin would collect doctests here, which \
-                                  aye runs only with its doctest adapter: add \"doctest\" to \
-                                  [tool.aye] adapters"
-                            .into(),
-                    }],
-                    ..Recognition::default()
-                };
-            }
+        {
+            return Recognition {
+                diagnostics: vec![Diagnostic {
+                    severity: Severity::Error,
+                    code: DiagnosticCode::UsageError,
+                    path: file.rel.to_project_path().into(),
+                    span: None,
+                    message: "pytest's doctest plugin would collect doctests here, which \
+                              aye runs only with its doctest adapter: add \"doctest\" to \
+                              [tool.aye] adapters"
+                        .into(),
+                }],
+                ..Recognition::default()
+            };
         }
         if self.static_listing {
-            return self.inner.recognize(file, support);
+            return self.inner.recognize(file, requested, support);
         }
         Recognition {
             refine: Some(REFINE_REASON.into()),
@@ -1242,7 +1240,10 @@ mod tests {
         let source = "def test_a():\n    pass\n";
         write(root, "test_a.py", source);
         let recognizer = recognizer(root, &[]);
-        assert_eq!(recognizer.claim("test_a.py", false), Claim::Tests);
+        assert_eq!(
+            recognizer.claim("test_a.py", Requested::Found),
+            Claim::Tests
+        );
         let parsed = ruff_python_parser::parse_module(source).unwrap();
         let lines = aye_adapter::LineIndex::from_source_text(source);
         let file = SourceFile {
@@ -1252,7 +1253,7 @@ mod tests {
             module: parsed.syntax(),
             lines: &lines,
         };
-        let recognition = recognizer.recognize(&file, &[]);
+        let recognition = recognizer.recognize(&file, Requested::Found, &[]);
         assert_eq!(recognition.cases, [] as [aye_events::Case; 0]);
         assert_eq!(recognition.refine.as_deref(), Some(REFINE_REASON));
     }
@@ -1276,7 +1277,10 @@ mod tests {
             .prepare_among(&project, &[NAME])
             .unwrap()
             .unwrap();
-        assert_eq!(recognizer.claim("test_notes.txt", false), Claim::Tests);
+        assert_eq!(
+            recognizer.claim("test_notes.txt", Requested::Found),
+            Claim::Tests
+        );
         let parsed = ruff_python_parser::parse_module("").unwrap();
         let lines = aye_adapter::LineIndex::from_source_text(source);
         let file = SourceFile {
@@ -1286,7 +1290,7 @@ mod tests {
             module: parsed.syntax(),
             lines: &lines,
         };
-        let recognition = recognizer.recognize(&file, &[]);
+        let recognition = recognizer.recognize(&file, Requested::Found, &[]);
         assert!(recognition.cases.is_empty() && recognition.refine.is_none());
         assert_eq!(recognition.diagnostics[0].code, DiagnosticCode::UsageError);
         assert!(
@@ -1300,7 +1304,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            listing.recognize(&file, &[]).diagnostics[0].code,
+            listing.recognize(&file, Requested::Found, &[]).diagnostics[0].code,
             DiagnosticCode::UsageError
         );
         // With the doctest adapter, the file is the doctest adapter's.
@@ -1308,7 +1312,10 @@ mod tests {
             .prepare_among(&project, &[DOCTEST, NAME])
             .unwrap()
             .unwrap();
-        assert_eq!(recognizer.claim("test_notes.txt", false), Claim::Ignore);
+        assert_eq!(
+            recognizer.claim("test_notes.txt", Requested::Found),
+            Claim::Ignore
+        );
     }
 
     /// `aye --co --no-refine` lists without importing: the static
@@ -1345,7 +1352,7 @@ mod tests {
                 module: parsed.syntax(),
                 lines: &lines,
             };
-            listing.recognize(&file, &[])
+            listing.recognize(&file, Requested::Found, &[])
         };
         let recognition = recognize("test_a.py", exact);
         assert_eq!(recognition.refine, None);
@@ -1378,7 +1385,7 @@ mod tests {
             module: parsed.syntax(),
             lines: &lines,
         };
-        let recognition = run.recognize(&file, &[]);
+        let recognition = run.recognize(&file, Requested::Found, &[]);
         assert_eq!(recognition.cases, []);
         assert_eq!(recognition.refine.as_deref(), Some(REFINE_REASON));
     }

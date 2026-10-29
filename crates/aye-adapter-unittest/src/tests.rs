@@ -91,7 +91,7 @@ fn collect(root: &Path, args: &[PathBuf]) -> Vec<(String, Recognition)> {
     for start in recognizer.roots(&project) {
         if start.is_file() {
             let rel = relative(root, &start);
-            if recognizer.claim(&rel, true).has_tests() {
+            if recognizer.claim(&rel, Requested::Named).has_tests() {
                 recognize(&recognizer, root, &rel, &mut out);
             }
         } else {
@@ -127,7 +127,7 @@ fn walk(
             continue;
         }
         let rel = relative(root, &path);
-        if recognizer.claim(&rel, false).has_tests() {
+        if recognizer.claim(&rel, Requested::Found).has_tests() {
             recognize(recognizer, root, &rel, out);
         }
     }
@@ -140,7 +140,10 @@ fn recognize(
     out: &mut Vec<(String, Recognition)>,
 ) {
     let parsed = Parsed::read(root, rel);
-    out.push((rel.to_string(), recognizer.recognize(&parsed.file(), &[])));
+    out.push((
+        rel.to_string(),
+        recognizer.recognize(&parsed.file(), Requested::Found, &[]),
+    ));
 }
 
 /// Every predicted id, in order.
@@ -800,7 +803,10 @@ fn explicit_paths_narrow_or_add_starts() {
         ids(&collect(root, &[PathBuf::from("examples/helper.py")])),
         ["examples/helper.py::H::test_h"]
     );
-    assert_eq!(recognizer.claim("examples/notes.txt", true), Claim::Ignore);
+    assert_eq!(
+        recognizer.claim("examples/notes.txt", Requested::Named),
+        Claim::Ignore
+    );
 }
 
 #[test]
@@ -812,24 +818,48 @@ fn claims_follow_discovery() {
     ]);
     let recognizer = recognizer(dir.path(), &[]).unwrap();
     let root = dir.path();
-    assert_eq!(recognizer.claim("test_x.py", false), Claim::Tests);
+    assert_eq!(
+        recognizer.claim("test_x.py", Requested::Found),
+        Claim::Tests
+    );
     // `fnmatch` folds case on Windows: there `test*.py` takes it.
     let upper = if cfg!(windows) {
         Claim::Tests
     } else {
         Claim::Ignore
     };
-    assert_eq!(recognizer.claim("Test_x.py", false), upper);
-    assert_eq!(recognizer.claim("test-x.py", false), Claim::Ignore);
-    assert_eq!(recognizer.claim("x_test.py", false), Claim::Ignore);
-    assert_eq!(recognizer.claim("test_x.txt", false), Claim::Ignore);
-    assert_eq!(recognizer.claim("pkg/__init__.py", false), Claim::Tests);
+    assert_eq!(recognizer.claim("Test_x.py", Requested::Found), upper);
+    assert_eq!(
+        recognizer.claim("test-x.py", Requested::Found),
+        Claim::Ignore
+    );
+    assert_eq!(
+        recognizer.claim("x_test.py", Requested::Found),
+        Claim::Ignore
+    );
+    assert_eq!(
+        recognizer.claim("test_x.txt", Requested::Found),
+        Claim::Ignore
+    );
+    assert_eq!(
+        recognizer.claim("pkg/__init__.py", Requested::Found),
+        Claim::Tests
+    );
     // An empty `__init__.py` binds nothing.
-    assert_eq!(recognizer.claim("empty/__init__.py", false), Claim::Ignore);
+    assert_eq!(
+        recognizer.claim("empty/__init__.py", Requested::Found),
+        Claim::Ignore
+    );
     assert!(recognizer.descend(&root.join("empty")));
     // The top-level directory isn't a package to discovery.
-    assert_eq!(recognizer.claim("__init__.py", false), Claim::Ignore);
-    assert_eq!(recognizer.claim("x_test.py", true), Claim::Tests);
+    assert_eq!(
+        recognizer.claim("__init__.py", Requested::Found),
+        Claim::Ignore
+    );
+    assert_eq!(
+        recognizer.claim("x_test.py", Requested::Named),
+        Claim::Tests
+    );
     assert!(recognizer.descend(&root.join("pkg")));
     assert!(!recognizer.descend(&root.join("plain")));
 }

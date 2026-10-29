@@ -285,7 +285,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_adapter::{
-    Adapter, AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile,
+    Adapter, AdapterError, Claim, Project, Recognition, Recognizer, Requested, Setting, SourceFile,
 };
 use aye_events::{AdapterName, AffinityKey, Case, Certainty, ProjectPath, ProjectPathRef, Span};
 use aye_fs::normalize_absolute;
@@ -594,12 +594,12 @@ impl Recognizer for UnittestRecognizer {
     /// A Python file named on the command line; else a module discovery
     /// would import: a valid module name matching the pattern below a start
     /// directory (or a named directory), or a package's `__init__.py`.
-    fn claim(&self, rel: &str, explicit: bool) -> Claim {
+    fn claim(&self, rel: &str, requested: Requested) -> Claim {
         let name = rel.rsplit('/').next().unwrap_or(rel);
         if Path::new(name).extension().is_none_or(|e| e != "py") {
             return Claim::Ignore;
         }
-        if explicit {
+        if requested.is_named() {
             return Claim::Tests;
         }
         let abs = normalize_absolute(&self.root.join(rel));
@@ -627,7 +627,12 @@ impl Recognizer for UnittestRecognizer {
         }
     }
 
-    fn recognize(&self, file: &SourceFile<'_>, _support: &[SourceFile<'_>]) -> Recognition {
+    fn recognize(
+        &self,
+        file: &SourceFile<'_>,
+        _requested: Requested,
+        _support: &[SourceFile<'_>],
+    ) -> Recognition {
         let abs = normalize_absolute(file.abs);
         if let Some(package) = self.unimportable(&abs) {
             // Its `__init__.py` is refined, to report the import error.

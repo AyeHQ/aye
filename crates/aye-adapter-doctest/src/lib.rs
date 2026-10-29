@@ -319,8 +319,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use aye_adapter::{
-    Adapter, AdapterError, Claim, FrameworkDefaults, Project, Recognition, Recognizer, Setting,
-    SourceFile,
+    Adapter, AdapterError, Claim, FrameworkDefaults, Project, Recognition, Recognizer, Requested,
+    Setting, SourceFile,
 };
 use aye_events::{
     AdapterName, AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity, Span,
@@ -1275,7 +1275,8 @@ impl Recognizer for DoctestRecognizer {
     /// `__main__.py`, nor a `setup.py` mentioning setuptools or distutils)
     /// when modules are on; another file when it matches a glob, or is a
     /// `.txt` or `.rst` named on the command line.
-    fn claim(&self, rel: &str, explicit: bool) -> Claim {
+    fn claim(&self, rel: &str, requested: Requested) -> Claim {
+        let explicit = requested.is_named();
         let name = rel.rsplit('/').next().unwrap_or(rel);
         let abs = self.root.join(rel);
         let extension = Path::new(name).extension().map(|e| e.to_string_lossy());
@@ -1320,7 +1321,12 @@ impl Recognizer for DoctestRecognizer {
     /// tags and keywords are `Partial` too where a hook or a plugin may
     /// mark doctest items, so that `-k` and `-m` keep them (Core decision
     /// 5).
-    fn recognize(&self, file: &SourceFile<'_>, _support: &[SourceFile<'_>]) -> Recognition {
+    fn recognize(
+        &self,
+        file: &SourceFile<'_>,
+        _requested: Requested,
+        _support: &[SourceFile<'_>],
+    ) -> Recognition {
         let mut recognition = if file.abs.extension().is_some_and(|e| e == "py") {
             self.recognize_module(file)
         } else {

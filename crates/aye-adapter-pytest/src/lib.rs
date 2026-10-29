@@ -469,7 +469,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_adapter::{
-    AdapterError, Claim, FrameworkDefaults, Project, Recognition, Recognizer, Setting, SourceFile,
+    AdapterError, Claim, FrameworkDefaults, Project, Recognition, Recognizer, Requested, Setting,
+    SourceFile,
 };
 use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 use aye_fs::normalize_absolute;
@@ -523,9 +524,6 @@ pub struct PytestRecognizer {
     /// in this run (no doctest adapter runs beside this one; see
     /// [`Self::with_pytest_doctests`]).
     doctests: Option<config::DoctestOptions>,
-    /// The files claimed as named on the command line: those pytest
-    /// collects as test modules whatever their names.
-    explicit: Mutex<HashSet<String>>,
     /// The context, built once (see [`Self::pytest_context`]).
     context: OnceLock<PytestContext>,
 }
@@ -850,7 +848,6 @@ impl PytestRecognizer {
             reported: Mutex::new(HashSet::new()),
             env_pythonpath,
             doctests: None,
-            explicit: Mutex::new(HashSet::new()),
             context: OnceLock::new(),
         };
         recognizer.collection_args = recognizer.roots(project);
@@ -1718,12 +1715,10 @@ impl Recognizer for PytestRecognizer {
     /// qualifies as one; with `--noconftest` it is only an ordinary file.
     /// When pytest's doctest plugin collects doctests in this run, the
     /// files it collects are test files too ([`Self::doctest_file`]).
-    fn claim(&self, rel: &str, explicit: bool) -> Claim {
+    fn claim(&self, rel: &str, requested: Requested) -> Claim {
         let name = rel.rsplit('/').next().unwrap_or(rel);
         let support = name == "conftest.py" && !self.config.noconftest;
-        if explicit && self.doctests.is_some() {
-            self.explicit.lock().expect("lock").insert(rel.to_string());
-        }
+        let explicit = requested.is_named();
         let tests =
             || self.python_module(rel, explicit) || self.doctest_file(rel, explicit).is_some();
         match (support, tests()) {
@@ -1734,14 +1729,13 @@ impl Recognizer for PytestRecognizer {
         }
     }
 
-    fn recognize(&self, file: &SourceFile<'_>, support: &[SourceFile<'_>]) -> Recognition {
-        // Recorded by `claim`, when pytest collects doctests.
-        let explicit = self.doctests.is_some()
-            && self
-                .explicit
-                .lock()
-                .expect("lock")
-                .contains(file.rel.as_str());
+    fn recognize(
+        &self,
+        file: &SourceFile<'_>,
+        requested: Requested,
+        support: &[SourceFile<'_>],
+    ) -> Recognition {
+        let explicit = requested.is_named();
         let doctest = self.doctest_file(file.rel.as_str(), explicit);
         if self.settings.python_blocked && doctest.is_none() {
             // `-p no:python`: nothing collects Python files.

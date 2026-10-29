@@ -187,8 +187,16 @@ fn conftest_ini_changes_refine_the_files_below_them() {
     write(root, "other/test_o.py", "def test_o():\n    pass\n");
     // The file a literal `python_files` pattern adds is a test module.
     let recognizer = recognizer(root);
-    assert!(recognizer.claim("tests/check_things.py", false).has_tests());
-    assert!(!recognizer.claim("other/check_things.py", false).has_tests());
+    assert!(
+        recognizer
+            .claim("tests/check_things.py", Requested::Found)
+            .has_tests()
+    );
+    assert!(
+        !recognizer
+            .claim("other/check_things.py", Requested::Found)
+            .has_tests()
+    );
     let (refined, cases) = verdict(root, "tests/test_cfg.py");
     assert!(refined);
     assert_eq!(

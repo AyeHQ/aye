@@ -101,7 +101,7 @@ fn walk(
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        recognize_file(recognizer, root, &rel, out);
+        recognize_file(recognizer, root, &rel, Requested::Found, out);
         return;
     }
     let mut entries: Vec<_> = std::fs::read_dir(dir)
@@ -121,8 +121,8 @@ fn walk(
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        if recognizer.claim(&rel, false).has_tests() {
-            recognize_file(recognizer, root, &rel, out);
+        if recognizer.claim(&rel, Requested::Found).has_tests() {
+            recognize_file(recognizer, root, &rel, Requested::Found, out);
         }
     }
 }
@@ -131,6 +131,7 @@ fn recognize_file(
     recognizer: &PytestRecognizer,
     root: &Path,
     rel: &str,
+    requested: Requested,
     out: &mut Vec<(String, Recognition)>,
 ) {
     let file = Parsed::read(root, rel);
@@ -155,7 +156,7 @@ fn recognize_file(
     let support: Vec<SourceFile<'_>> = conftests.iter().map(Parsed::file).collect();
     out.push((
         rel.to_string(),
-        recognizer.recognize(&file.file(), &support),
+        recognizer.recognize(&file.file(), requested, &support),
     ));
 }
 
@@ -177,7 +178,7 @@ fn recognize(source: &str) -> Recognition {
         dir.path().join("test_x.py"),
         source.to_string(),
     );
-    recognizer.recognize(&file.file(), &[])
+    recognizer.recognize(&file.file(), Requested::Found, &[])
 }
 
 /// The interpreter for differential tests: `AYE_TEST_PYTHON`, or the
@@ -852,7 +853,7 @@ fn ids_are_relative_to_the_project_root() {
         root.join("tests/test_a.py"),
         "import pytest\n@pytest.mark.parametrize('x', [1])\ndef test_a(x): pass\n".into(),
     );
-    let recognition = recognizer.recognize(&file.file(), &[]);
+    let recognition = recognizer.recognize(&file.file(), Requested::Found, &[]);
     let found = case(&recognition, "tests/test_a.py::test_a[1]");
     assert_eq!(found.keywords[..3], ["sub", "tests", "test_a.py"]);
     // The conftest above the project root is in scope.
@@ -984,7 +985,12 @@ fn descend_and_claim() {
         ("test_old_py2.py", false, Claim::Ignore),
         ("test_posix.py", false, Claim::Tests),
     ] {
-        assert_eq!(recognizer.claim(rel, explicit), expected, "{rel}");
+        let requested = if explicit {
+            Requested::Named
+        } else {
+            Requested::Found
+        };
+        assert_eq!(recognizer.claim(rel, requested), expected, "{rel}");
     }
     // A conditional collect_ignore entry: only pytest knows.
     let file = Parsed::new(
@@ -993,7 +999,7 @@ fn descend_and_claim() {
         "def test_p(): pass\n".into(),
     );
     let conftest = Parsed::read(root, "conftest.py");
-    let recognition = recognizer.recognize(&file.file(), &[conftest.file()]);
+    let recognition = recognizer.recognize(&file.file(), Requested::Found, &[conftest.file()]);
     assert!(recognition.refine.unwrap().contains("collect_ignore"));
 }
 
@@ -1016,7 +1022,7 @@ fn plugins_named_by_conftests_are_in_scope() {
         "def test_a(x): pass\n".into(),
     );
     let conftest = Parsed::read(root, "conftest.py");
-    let recognition = recognizer.recognize(&file.file(), &[conftest.file()]);
+    let recognition = recognizer.recognize(&file.file(), Requested::Found, &[conftest.file()]);
     assert!(
         recognition
             .refine
@@ -1065,7 +1071,7 @@ fn settings_and_context() {
 /// hands them over.
 fn recognize_at(root: &Path, rel: &str) -> Recognition {
     let mut out = Vec::new();
-    recognize_file(&recognizer(root), root, rel, &mut out);
+    recognize_file(&recognizer(root), root, rel, Requested::Found, &mut out);
     out.pop().unwrap().1
 }
 
@@ -1538,14 +1544,23 @@ fn python_files_are_nobodys_with_the_python_plugin_blocked() {
     write(root, "test_a.py", "def test_a(): pass\n");
     write(root, "conftest.py", "");
     let blocked = recognizer(root);
-    assert_eq!(blocked.claim("test_a.py", true), Claim::Ignore);
-    assert_eq!(blocked.claim("test_a.py", false), Claim::Ignore);
-    assert_eq!(blocked.claim("conftest.py", true), Claim::Support);
+    assert_eq!(blocked.claim("test_a.py", Requested::Named), Claim::Ignore);
+    assert_eq!(blocked.claim("test_a.py", Requested::Found), Claim::Ignore);
+    assert_eq!(
+        blocked.claim("conftest.py", Requested::Named),
+        Claim::Support
+    );
     let with_doctests =
         recognizer_with(root, &[], &["--doctest-modules"], None).with_pytest_doctests();
-    assert_eq!(with_doctests.claim("test_a.py", true), Claim::Tests);
+    assert_eq!(
+        with_doctests.claim("test_a.py", Requested::Named),
+        Claim::Tests
+    );
     write(root, "pytest.ini", "[pytest]\n");
-    assert_eq!(recognizer(root).claim("test_a.py", true), Claim::Tests);
+    assert_eq!(
+        recognizer(root).claim("test_a.py", Requested::Named),
+        Claim::Tests
+    );
 }
 
 #[test]
@@ -1724,7 +1739,11 @@ fn pytest_addopts_reach_static_collection() {
         "import pytest\n@pytest.mark.parametrize('s', ['\u{e9}'])\ndef test_s(s): pass\n".into(),
     );
     assert_eq!(
-        recognizer.recognize(&file.file(), &[]).cases[0].id.as_str(),
+        recognizer
+            .recognize(&file.file(), Requested::Found, &[])
+            .cases[0]
+            .id
+            .as_str(),
         "tests/test_e.py::test_s[\u{e9}]"
     );
 }
@@ -1814,8 +1833,18 @@ fn recognizer_with(
 }
 
 fn recognize_with(recognizer: &PytestRecognizer, root: &Path, rel: &str) -> Recognition {
+    recognize_as(recognizer, root, rel, Requested::Found)
+}
+
+/// [`recognize_with`], for a file claimed as `requested` says.
+fn recognize_as(
+    recognizer: &PytestRecognizer,
+    root: &Path,
+    rel: &str,
+    requested: Requested,
+) -> Recognition {
     let mut out = Vec::new();
-    recognize_file(recognizer, root, rel, &mut out);
+    recognize_file(recognizer, root, rel, requested, &mut out);
     out.pop().unwrap().1
 }
 
@@ -1984,9 +2013,18 @@ fn framework_args_reach_static_collection() {
         Some("-o python_files=env_*.py"),
     );
     assert!(!recognizer.descend(&root.join("tests/b")));
-    assert_eq!(recognizer.claim("tests/check_a.py", false), Claim::Tests);
-    assert_eq!(recognizer.claim("tests/t_a.py", false), Claim::Ignore);
-    assert_eq!(recognizer.claim("tests/env_a.py", false), Claim::Ignore);
+    assert_eq!(
+        recognizer.claim("tests/check_a.py", Requested::Found),
+        Claim::Tests
+    );
+    assert_eq!(
+        recognizer.claim("tests/t_a.py", Requested::Found),
+        Claim::Ignore
+    );
+    assert_eq!(
+        recognizer.claim("tests/env_a.py", Requested::Found),
+        Claim::Ignore
+    );
 }
 
 #[test]
@@ -2005,7 +2043,7 @@ fn conftests_matching_python_files_are_test_modules() {
     write(root, "tests/test_x.py", "def test_x(fx): pass\n");
     let configured = recognizer(root);
     assert_eq!(
-        configured.claim("tests/conftest.py", false),
+        configured.claim("tests/conftest.py", Requested::Found),
         Claim::TestsAndSupport
     );
     assert_eq!(
@@ -2017,13 +2055,19 @@ fn conftests_matching_python_files_are_test_modules() {
     }
 
     let ignoring = recognizer_with(root, &[], &["--ignore=tests/conftest.py"], None);
-    assert_eq!(ignoring.claim("tests/conftest.py", false), Claim::Support);
+    assert_eq!(
+        ignoring.claim("tests/conftest.py", Requested::Found),
+        Claim::Support
+    );
 
     write(root, "pytest.ini", "[pytest]\n");
     let default = recognizer(root);
-    assert_eq!(default.claim("tests/conftest.py", false), Claim::Support);
     assert_eq!(
-        default.claim("tests/conftest.py", true),
+        default.claim("tests/conftest.py", Requested::Found),
+        Claim::Support
+    );
+    assert_eq!(
+        default.claim("tests/conftest.py", Requested::Named),
         Claim::TestsAndSupport
     );
 }
@@ -2043,9 +2087,15 @@ fn noconftest_loads_no_conftest() {
     );
     write(root, "test_skipped.py", "def test_s(): pass\n");
     let without = recognizer(root);
-    assert_eq!(without.claim("conftest.py", false), Claim::Ignore);
-    assert_eq!(without.claim("conftest.py", true), Claim::Tests);
-    assert_eq!(without.claim("test_skipped.py", false), Claim::Tests);
+    assert_eq!(
+        without.claim("conftest.py", Requested::Found),
+        Claim::Ignore
+    );
+    assert_eq!(without.claim("conftest.py", Requested::Named), Claim::Tests);
+    assert_eq!(
+        without.claim("test_skipped.py", Requested::Found),
+        Claim::Tests
+    );
     let recognition = recognize_with(&without, root, "test_skipped.py");
     assert_eq!(recognition.refine, None);
     assert_eq!(
@@ -2058,7 +2108,7 @@ fn noconftest_loads_no_conftest() {
     // Without it, the conftest's `collect_ignore` applies.
     write(root, "pytest.ini", "[pytest]\n");
     assert_eq!(
-        recognizer(root).claim("test_skipped.py", false),
+        recognizer(root).claim("test_skipped.py", Requested::Found),
         Claim::Ignore
     );
 }

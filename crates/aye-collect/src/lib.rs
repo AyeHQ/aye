@@ -35,9 +35,9 @@
 //!   dropped, so the files keep the order of the path that subsumes them.
 //!   A root is always entered, whatever `descend` says. A missing explicit
 //!   path is a `not-found` error; a missing recognizer root is skipped. A file
-//!   given as a root is claimed with `explicit` set; an explicit file no
-//!   recognizer claims is an `unclaimed` error, as pytest's "found no
-//!   collectors" is.
+//!   given as a root is claimed, and recognized, as `Requested::Named`; an
+//!   explicit file no recognizer claims is an `unclaimed` error, as
+//!   pytest's "found no collectors" is.
 //! - **The walk** is depth-first and sorted by file name, directories and
 //!   files interleaved, as pytest's `scandir` is, except that a package's
 //!   `__init__.py` comes first in its directory, as pytest's `Package`
@@ -182,7 +182,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use aye_adapter::{Project, Recognition, Recognizer, SourceFile};
+use aye_adapter::{Project, Recognition, Recognizer, Requested, SourceFile};
 use aye_events::{
     AdapterName, Case, ContentDigest, Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPathRef,
     Severity, TestId,
@@ -641,7 +641,10 @@ impl<'a> Collector<'a> {
                     support.get(at)?.file(&entry.rel, &entry.abs)
                 })
                 .collect();
-            let mut recognition = self.recognizers[*i].1.recognize(&file, &support);
+            let mut recognition =
+                self.recognizers[*i]
+                    .1
+                    .recognize(&file, entry.requested(), &support);
             if source.is_lossy() && recognition.refine.is_none() {
                 recognition.refine = Some("the file is not valid UTF-8".to_string());
             }
@@ -969,7 +972,7 @@ fn claims_any_name(
                 probe.push('.');
                 probe.push_str(extension);
             }
-            recognizer.1.claim(&probe, false).has_tests()
+            recognizer.1.claim(&probe, Requested::Found).has_tests()
         })
 }
 

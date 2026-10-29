@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use aye_adapter::{Claim, Ranged, Setting, ast};
+use aye_adapter::{Claim, Ranged, Requested, Setting, ast};
 use aye_events::{Certainty, DiagnosticCode, ProjectPath};
 use aye_protocol::{AdapterContext, RefineError, RefineRequest, Refined};
 
@@ -12,7 +12,7 @@ fn extension(rel: &str) -> Option<&str> {
     Path::new(rel).extension()?.to_str()
 }
 
-/// Claims `*_check.py` (any `.py` when explicit), `helpers.py` as support,
+/// Claims `*_check.py` (any `.py` when named), `helpers.py` as support,
 /// and `both.py` as tests and support. One case per top-level function,
 /// carrying the support files it was handed as keywords; a function named
 /// `dynamic` asks for refinement, and one named `broken` too, with a static
@@ -24,8 +24,10 @@ struct Fake {
     any_name: bool,
     /// The adapter its cases name.
     adapter: &'static str,
-    /// Every `claim` call: the path and `explicit`.
-    claims: Arc<Mutex<Vec<(String, bool)>>>,
+    /// Every `claim` call: the path and how it was asked about.
+    claims: Arc<Mutex<Vec<(String, Requested)>>>,
+    /// Every `recognize` call, likewise.
+    recognized: Arc<Mutex<Vec<(String, Requested)>>>,
     setting: String,
     context: serde_json::Value,
 }
@@ -37,6 +39,7 @@ impl Fake {
             any_name: false,
             adapter: "fake",
             claims: Arc::default(),
+            recognized: Arc::default(),
             setting: "1".to_string(),
             context: serde_json::json!({"rootdir": "/fake"}),
         }
@@ -64,18 +67,18 @@ impl Recognizer for Fake {
         !name.starts_with('.') && name != "skip"
     }
 
-    fn claim(&self, rel: &str, explicit: bool) -> Claim {
+    fn claim(&self, rel: &str, requested: Requested) -> Claim {
         self.claims
             .lock()
             .unwrap()
-            .push((rel.to_string(), explicit));
+            .push((rel.to_string(), requested));
         let name = rel.rsplit('/').next().unwrap();
         if name == "helpers.py" {
             Claim::Support
         } else if name == "both.py" {
             Claim::TestsAndSupport
         } else if name.ends_with("_check.py")
-            || ((explicit || self.any_name) && extension(name) == Some("py"))
+            || ((requested.is_named() || self.any_name) && extension(name) == Some("py"))
         {
             Claim::Tests
         } else {
@@ -83,7 +86,16 @@ impl Recognizer for Fake {
         }
     }
 
-    fn recognize(&self, file: &SourceFile<'_>, support: &[SourceFile<'_>]) -> Recognition {
+    fn recognize(
+        &self,
+        file: &SourceFile<'_>,
+        requested: Requested,
+        support: &[SourceFile<'_>],
+    ) -> Recognition {
+        self.recognized
+            .lock()
+            .unwrap()
+            .push((file.rel.to_string(), requested));
         let mut recognition = Recognition::default();
         for stmt in &file.module.body {
             if let ast::Stmt::FunctionDef(def) = stmt {
@@ -140,7 +152,7 @@ impl Recognizer for Lines {
         true
     }
 
-    fn claim(&self, rel: &str, _: bool) -> Claim {
+    fn claim(&self, rel: &str, _: Requested) -> Claim {
         if extension(rel) == Some("txt") {
             Claim::Tests
         } else {
@@ -148,7 +160,7 @@ impl Recognizer for Lines {
         }
     }
 
-    fn recognize(&self, file: &SourceFile<'_>, _: &[SourceFile<'_>]) -> Recognition {
+    fn recognize(&self, file: &SourceFile<'_>, _: Requested, _: &[SourceFile<'_>]) -> Recognition {
         assert!(file.module.body.is_empty());
         let cases = file
             .source
@@ -351,14 +363,17 @@ fn walks_sorted_and_honours_descend() {
     assert_eq!((span.path.as_str(), span.line), ("a_check.py", Some(2)));
 }
 
+/// A file named on the command line is claimed, and recognized, as named;
+/// one its directory's walk finds, as found.
 #[test]
-fn explicit_files_are_claimed_as_explicit() {
+fn explicit_files_are_claimed_and_recognized_as_named() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     write(root, "plain.py", "def test_p(): pass\n");
     write(root, "tests/one_check.py", "def test_one(): pass\n");
     let recognizer = Fake::new();
     let claims = recognizer.claims.clone();
+    let recognitions = recognizer.recognized.clone();
     let recognizers: Vec<Prepared> = vec![("fake".into(), Box::new(recognizer))];
 
     let targets = [PathBuf::from("plain.py"), root.join("tests/./../tests")];
@@ -368,8 +383,17 @@ fn explicit_files_are_claimed_as_explicit() {
         ["plain.py::test_p", "tests/one_check.py::test_one"]
     );
     let claims = claims.lock().unwrap();
-    assert!(claims.contains(&("plain.py".to_string(), true)));
-    assert!(claims.contains(&("tests/one_check.py".to_string(), false)));
+    assert!(claims.contains(&("plain.py".to_string(), Requested::Named)));
+    assert!(claims.contains(&("tests/one_check.py".to_string(), Requested::Found)));
+    let mut recognitions = recognitions.lock().unwrap().clone();
+    recognitions.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        recognitions,
+        [
+            ("plain.py".to_string(), Requested::Named),
+            ("tests/one_check.py".to_string(), Requested::Found),
+        ]
+    );
 }
 
 /// pytest's `normalize_collection_arguments` drops an explicit file below
@@ -1151,11 +1175,16 @@ fn refinement_only_replaces_the_adapter_that_asked() {
         fn descend(&self, dir: &Path) -> bool {
             self.0.descend(dir)
         }
-        fn claim(&self, rel: &str, explicit: bool) -> Claim {
-            self.0.claim(rel, explicit)
+        fn claim(&self, rel: &str, requested: Requested) -> Claim {
+            self.0.claim(rel, requested)
         }
-        fn recognize(&self, file: &SourceFile<'_>, support: &[SourceFile<'_>]) -> Recognition {
-            let mut recognition = self.0.recognize(file, support);
+        fn recognize(
+            &self,
+            file: &SourceFile<'_>,
+            requested: Requested,
+            support: &[SourceFile<'_>],
+        ) -> Recognition {
+            let mut recognition = self.0.recognize(file, requested, support);
             recognition.refine = None;
             for case in &mut recognition.cases {
                 case.id = TestId::new(format!("{}::static", case.id));
@@ -1234,7 +1263,7 @@ fn stray_refined_cases_in_a_requested_package_keep_their_place() {
         fn descend(&self, _: &Path) -> bool {
             true
         }
-        fn claim(&self, rel: &str, _: bool) -> Claim {
+        fn claim(&self, rel: &str, _: Requested) -> Claim {
             let name = rel.rsplit('/').next().unwrap();
             if name == "__init__.py" || name.ends_with("_check.py") {
                 Claim::Tests
@@ -1242,7 +1271,12 @@ fn stray_refined_cases_in_a_requested_package_keep_their_place() {
                 Claim::Ignore
             }
         }
-        fn recognize(&self, file: &SourceFile<'_>, _: &[SourceFile<'_>]) -> Recognition {
+        fn recognize(
+            &self,
+            file: &SourceFile<'_>,
+            _: Requested,
+            _: &[SourceFile<'_>],
+        ) -> Recognition {
             let mut recognition = Recognition::default();
             for stmt in &file.module.body {
                 if let ast::Stmt::FunctionDef(def) = stmt {

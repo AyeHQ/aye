@@ -2,7 +2,8 @@
 //! engine: it prepares a [`Recognizer`] for a [`Project`] (or fails with an
 //! [`AdapterError`]), and gives the runtime face a worker installs
 //! ([`Executor`]). The recognizer is its static face: it [`Claim`]s paths,
-//! predicts the tests of a parsed [`SourceFile`] (a [`Recognition`]),
+//! named or found ([`Requested`]), predicts the tests of a parsed
+//! [`SourceFile`] (a [`Recognition`]),
 //! reports the [`Setting`]s it resolved, for `aye config`, says what the
 //! framework's own configuration says about the run ([`FrameworkDefaults`],
 //! with [`JunitDefaults`]), and gives the context its executor gets. Ruff's
@@ -135,6 +136,24 @@ impl Claim {
     }
 }
 
+/// How collection came to ask about a path: a framework's rules for names
+/// and ignores apply only to what the walk found, as pytest collects a
+/// file on its command line whatever its name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Requested {
+    /// Named as a path to collect: on the command line, or a recognizer's
+    /// root that is a file (pytest's `testpaths`).
+    Named,
+    /// Found walking a directory, or listing one for support files.
+    Found,
+}
+
+impl Requested {
+    pub const fn is_named(self) -> bool {
+        matches!(self, Self::Named)
+    }
+}
+
 /// A parsed source file, as handed to recognizers.
 #[derive(Clone, Copy)]
 pub struct SourceFile<'a> {
@@ -249,14 +268,18 @@ pub trait Recognizer: Send + Sync {
     /// Whether to walk into a directory. `dir` is absolute.
     fn descend(&self, dir: &Path) -> bool;
 
-    /// What `rel` is to this adapter. `explicit` is true when the user named
-    /// the file on the command line.
-    fn claim(&self, rel: &str, explicit: bool) -> Claim;
+    /// What `rel` is to this adapter, asked about as `requested` says.
+    fn claim(&self, rel: &str, requested: Requested) -> Claim;
 
-    /// Predict the tests in `file`. `support` holds the support files that
-    /// apply to it (pytest's `conftest.py` files in its directory and above),
-    /// outermost first.
-    fn recognize(&self, file: &SourceFile<'_>, support: &[SourceFile<'_>]) -> Recognition;
+    /// Predict the tests in `file`, which was claimed as `requested` says.
+    /// `support` holds the support files that apply to it (pytest's
+    /// `conftest.py` files in its directory and above), outermost first.
+    fn recognize(
+        &self,
+        file: &SourceFile<'_>,
+        requested: Requested,
+        support: &[SourceFile<'_>],
+    ) -> Recognition;
 
     /// The settings this recognizer resolved, with origins.
     fn settings(&self) -> Vec<Setting> {

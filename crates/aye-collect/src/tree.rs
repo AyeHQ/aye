@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use aye_adapter::Claim;
+use aye_adapter::{Claim, Requested};
 use aye_events::{Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPath, Severity};
 use walkdir::WalkDir;
 
@@ -24,7 +24,7 @@ pub(crate) struct Entry {
     /// Found by the walk, rather than while looking for support files above
     /// it. Only walked files yield tests.
     pub walked: bool,
-    /// Named on the command line (or as a root).
+    /// Named on the command line (or as a root): see [`Entry::requested`].
     pub explicit: bool,
     /// The recognizers asked about this file, and their answers.
     pub asked: Mask,
@@ -144,7 +144,7 @@ impl<'r> Tree<'r> {
 
     /// Show the file `abs` to the recognizers in `mask`. A file seen again
     /// keeps its first place; a file named explicitly after being walked is
-    /// asked about again with `explicit` set.
+    /// asked about again, as [`Requested::Named`].
     pub(crate) fn visit(&mut self, abs: PathBuf, mask: Mask, explicit: bool) -> usize {
         let at = self.insert(abs);
         let recognizers = self.recognizers;
@@ -160,7 +160,9 @@ impl<'r> Tree<'r> {
         for i in bits(mask & !entry.asked) {
             entry.claim(
                 i,
-                recognizers[i].1.claim(entry.rel.as_str(), entry.explicit),
+                recognizers[i]
+                    .1
+                    .claim(entry.rel.as_str(), entry.requested()),
             );
         }
         entry.asked |= mask;
@@ -207,7 +209,8 @@ impl<'r> Tree<'r> {
     /// project root, outermost first. A file that is itself a support file
     /// is in its own list (in its place by name), as the framework loads it
     /// as support before collecting it. Directories above the walked roots
-    /// are listed here, and their files asked about with `explicit` unset.
+    /// are listed here, and their files asked about as found unless they
+    /// were named.
     pub(crate) fn support(&mut self, at: usize, recognizer: usize) -> Vec<usize> {
         let Some(dir) = self.entries[at].abs.parent() else {
             return Vec::new();
@@ -236,7 +239,7 @@ impl<'r> Tree<'r> {
             if entry.asked & bit == 0 {
                 let claim = self.recognizers[recognizer]
                     .1
-                    .claim(entry.rel.as_str(), entry.explicit);
+                    .claim(entry.rel.as_str(), entry.requested());
                 // Asked here, a file is only support: its tests belong to
                 // the recognizers whose walk reached it.
                 if claim.is_support() {
@@ -284,6 +287,16 @@ pub(crate) fn walk_order(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> std::cmp::
 }
 
 impl Entry {
+    /// How the recognizers are asked about the file, and told about it when
+    /// they recognize it: named once, always named.
+    pub(crate) const fn requested(&self) -> Requested {
+        if self.explicit {
+            Requested::Named
+        } else {
+            Requested::Found
+        }
+    }
+
     /// Record `recognizer`'s answer. A file claimed as both tests and
     /// support is in both sets: its tests are collected when it is walked,
     /// and it is support for the files in its directory and below, itself
