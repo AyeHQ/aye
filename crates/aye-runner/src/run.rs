@@ -12,8 +12,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use aye_engine::{
-    Batch, Executor, Policy, RefineError, RefineRequest, Refined, Refiner, Reply, Request,
-    WorkerLine,
+    Batch, Executor, ListingDigest, Policy, RefineError, RefineRequest, Refined, Refiner, Reply,
+    Request, WorkerLine,
 };
 use aye_events::{
     AdapterName, BatchIndex, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, Event,
@@ -37,7 +37,7 @@ const INTERRUPT_GRACE: Duration = Duration::from_secs(10);
 const RAN_IDS: &str = "ran_ids";
 
 /// By file, a digest of its tests' ids in order ([`Refined::digests`]).
-type Digests = BTreeMap<ProjectPath, String>;
+type Digests = BTreeMap<ProjectPath, ListingDigest>;
 
 /// What a [`Runner`] needs to start workers.
 #[derive(Debug, Clone, Default)]

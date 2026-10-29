@@ -127,7 +127,7 @@ fn session_listing_fields_are_left_out_when_unused_and_default_to_off() {
     };
     let digests = refined.digests.unwrap();
     assert_eq!(digests.keys().collect::<Vec<_>>(), ["a.py", "b.py"]);
-    assert_eq!(digests["a.py"], "da39");
+    assert_eq!(digests["a.py"].as_str(), "da39");
 }
 
 #[test]

@@ -455,11 +455,25 @@ pub struct Refined {
     #[serde(default)]
     pub diagnostics: Vec<Diagnostic>,
     /// For an executor that [lists the session](Executor::lists_session):
-    /// by requested file, a digest of its tests' ids in order (the worker's
-    /// own is the SHA-1 of the ids joined by newlines), so that two workers'
-    /// listings can be compared without the cases.
+    /// by requested file, a digest of its tests' ids in order, so that two
+    /// workers' listings can be compared without the cases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub digests: Option<BTreeMap<ProjectPath, String>>,
+    pub digests: Option<BTreeMap<ProjectPath, ListingDigest>>,
+}
+
+/// A digest of the tests a worker lists in a file, their ids in order: the
+/// executor's own, or the worker's, the SHA-1 of the ids joined by
+/// newlines. Two workers that list a file alike give it the same digest,
+/// and the runner only compares them; it is kept as written, and
+/// serializes as its text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ListingDigest(Box<str>);
+
+impl ListingDigest {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
