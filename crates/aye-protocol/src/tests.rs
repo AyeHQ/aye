@@ -17,8 +17,8 @@ fn requests_round_trip() {
             modules: vec![MODULE],
             executors: vec![ExecutorSpec {
                 adapter: "pytest".into(),
-                entry: "aye_engine_pytest:PytestExecutor".into(),
-                lists_session: true,
+                entry: EntryPoint::new("aye_engine_pytest", "PytestExecutor"),
+                session: SessionMode::ListsSession,
             }],
             services: vec![ServiceName::Context],
         },
@@ -147,7 +147,7 @@ fn session_listing_fields_are_left_out_when_unused_and_default_to_off() {
     assert!(listed.contains(r#""digests_only":true"#), "{listed}");
 
     let spec: ExecutorSpec = serde_json::from_str(r#"{"adapter":"a","entry":"m:C"}"#).unwrap();
-    assert!(!spec.lists_session);
+    assert_eq!(spec.session, SessionMode::PerBatch);
     assert!(
         !serde_json::to_string(&spec)
             .unwrap()
@@ -217,6 +217,42 @@ fn a_service_is_written_as_its_name() {
         ServiceName::DEFAULT,
         [ServiceName::Context, ServiceName::Cleanup]
     );
+}
+
+/// An executor's entry is written `module:Class`, and read back split at
+/// the first colon, as the worker splits it; whether it lists the session
+/// is the handshake's `lists_session`.
+#[test]
+fn a_runtime_is_named_to_the_worker_by_its_spec() {
+    const RUNTIME: Runtime = Runtime {
+        adapter: AdapterName::new_static("listing"),
+        modules: ModuleSet::new(const { &[ModuleSource::embedded("listing", "")] }),
+        entry: EntryPoint::new("listing", "ListingExecutor"),
+        session: SessionMode::ListsSession,
+    };
+    let spec = RUNTIME.spec();
+    assert_eq!(RUNTIME.entry.to_string(), "listing:ListingExecutor");
+    assert_eq!(
+        (RUNTIME.entry.module(), RUNTIME.entry.class()),
+        ("listing", "ListingExecutor")
+    );
+    let line = serde_json::to_string(&spec).unwrap();
+    assert_eq!(
+        line,
+        r#"{"adapter":"listing","entry":"listing:ListingExecutor","lists_session":true}"#
+    );
+    assert_eq!(serde_json::from_str::<ExecutorSpec>(&line).unwrap(), spec);
+    let per_batch = Runtime {
+        session: SessionMode::PerBatch,
+        ..RUNTIME
+    };
+    assert_eq!(
+        serde_json::to_string(&per_batch.spec()).unwrap(),
+        r#"{"adapter":"listing","entry":"listing:ListingExecutor"}"#
+    );
+    let read: EntryPoint = serde_json::from_str(r#""m:C:D""#).unwrap();
+    assert_eq!((read.module(), read.class()), ("m", "C:D"));
+    assert!(serde_json::from_str::<EntryPoint>(r#""m""#).is_err());
 }
 
 #[test]

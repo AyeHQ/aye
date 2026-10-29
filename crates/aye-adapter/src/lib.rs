@@ -2,7 +2,7 @@
 //! engine: it prepares a [`Recognizer`] for a [`Project`] (with the
 //! environment and `[tool.aye]` as the binary read them), or fails with an
 //! [`AdapterError`], and gives the runtime face a worker installs
-//! ([`Executor`]). The recognizer is its static face: it [`Claim`]s paths,
+//! ([`Runtime`]). The recognizer is its static face: it [`Claim`]s paths,
 //! named or found ([`Requested`]), predicts the tests of a parsed
 //! [`SourceFile`] (a [`Recognition`], with a [`RefineReason`] when only an
 //! import can tell), reports the [`Setting`]s it resolved, for `aye
@@ -56,7 +56,7 @@ use std::path::{Path, PathBuf};
 
 use aye_config::{AyeSettings, ValueSource, WorkerCount};
 use aye_events::{AdapterName, Case, Diagnostic, IdPrefix, LineNumber, ProjectPathRef, Span};
-use aye_protocol::{AdapterContext, Executor, MaxFail};
+use aye_protocol::{AdapterContext, MaxFail, Runtime};
 use aye_static::ProcessEnv;
 
 pub use ruff_python_ast as ast;
@@ -141,8 +141,9 @@ pub trait Adapter: Send + Sync {
         self.prepare(project)
     }
 
-    /// The runtime face, run inside workers.
-    fn executor(&self) -> Executor;
+    /// The runtime face: what a worker installs and builds to refine the
+    /// adapter's files and run its batches.
+    fn runtime(&self) -> Runtime;
 }
 
 /// What a recognizer says about a path.

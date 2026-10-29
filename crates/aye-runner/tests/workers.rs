@@ -19,8 +19,8 @@ use aye_events::{
     ProjectPath, Record, Stamper, StopReason, TestId, TestResult, WorkerIndex,
 };
 use aye_protocol::{
-    AdapterContext, BatchContext, Executor, ModuleSet, ModuleSource, Policy, RefineRequest,
-    Refiner, Reply, Request,
+    AdapterContext, BatchContext, EntryPoint, ModuleSet, ModuleSource, Policy, RefineRequest,
+    Refiner, Reply, Request, Runtime, SessionMode,
 };
 #[cfg(unix)]
 use aye_runner::Worker;
@@ -266,25 +266,25 @@ class ListingExecutor(FakeExecutor):
 const FAKE_MODULES: ModuleSet =
     ModuleSet::new(const { &[ModuleSource::embedded("fake_executor", FAKE_SOURCE)] });
 
-const FAKE: Executor = Executor {
+const FAKE: Runtime = Runtime {
     adapter: AdapterName::new_static("fake"),
     modules: FAKE_MODULES,
-    entry: "fake_executor:FakeExecutor",
-    lists_session: false,
+    entry: EntryPoint::new("fake_executor", "FakeExecutor"),
+    session: SessionMode::PerBatch,
 };
 
-const OTHER: Executor = Executor {
+const OTHER: Runtime = Runtime {
     adapter: AdapterName::new_static("other"),
     modules: FAKE_MODULES,
-    entry: "fake_executor:OtherExecutor",
-    lists_session: false,
+    entry: EntryPoint::new("fake_executor", "OtherExecutor"),
+    session: SessionMode::PerBatch,
 };
 
-const LISTING: Executor = Executor {
+const LISTING: Runtime = Runtime {
     adapter: AdapterName::new_static("listing"),
     modules: FAKE_MODULES,
-    entry: "fake_executor:ListingExecutor",
-    lists_session: true,
+    entry: EntryPoint::new("fake_executor", "ListingExecutor"),
+    session: SessionMode::ListsSession,
 };
 
 #[expect(
@@ -328,7 +328,7 @@ fn fixture_echoing(python: PathBuf, workers: u32, echo: Echo) -> Fixture {
         root: root.clone(),
         cwd: root.clone(),
         workers,
-        executors: vec![FAKE, OTHER, LISTING],
+        runtimes: vec![FAKE, OTHER, LISTING],
         env: vec![("FAKE_DIR".into(), root.into_os_string())],
         echo,
         collect_only: false,
@@ -427,7 +427,7 @@ fn the_handshake_reports_the_interpreter() {
     let python = python_or_skip!();
     let dir = tempfile::tempdir().unwrap();
     let mut spec = WorkerSpec::new(&python, dir.path(), dir.path());
-    spec.executors = vec![FAKE];
+    spec.runtimes = vec![FAKE];
     let worker = spawn(&spec).unwrap();
     assert!(worker.pid() > 0);
     assert_ne!(worker.python(), "");
@@ -481,7 +481,7 @@ fn a_worker_that_cannot_start_is_reported_once_per_lane() {
         root: dir.path().into(),
         cwd: dir.path().into(),
         workers: 2,
-        executors: vec![FAKE],
+        runtimes: vec![FAKE],
         ..RunnerOptions::default()
     });
     let plan = Plan {
@@ -2525,7 +2525,7 @@ fn collecting_only_starts_no_worker_for_the_other_lanes() {
         root: root.clone(),
         cwd: root.clone(),
         workers: 3,
-        executors: vec![LISTING],
+        runtimes: vec![LISTING],
         env: vec![("FAKE_DIR".into(), root.into_os_string())],
         collect_only: true,
         ..RunnerOptions::default()

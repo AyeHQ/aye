@@ -1523,10 +1523,14 @@ fn import_modes_and_optimization_refine_every_module() {
 
 #[test]
 fn the_executor_is_embedded() {
-    let executor = Doctest.executor();
-    assert_eq!(executor.adapter, "doctest");
-    assert_eq!(executor.entry, "aye_engine_doctest:DoctestExecutor");
-    assert_eq!(executor.modules.modules(), [MODULE]);
+    let runtime = Doctest.runtime();
+    assert_eq!(runtime.adapter, "doctest");
+    assert_eq!(
+        runtime.entry.to_string(),
+        "aye_engine_doctest:DoctestExecutor"
+    );
+    assert_eq!(runtime.modules.modules(), [MODULE]);
+    assert_eq!(runtime.session, SessionMode::PerBatch);
     assert_eq!(MODULE.name, "aye_engine_doctest");
     assert!(MODULE.source.contains("class DoctestExecutor"));
     assert_eq!(Doctest.name(), "doctest");

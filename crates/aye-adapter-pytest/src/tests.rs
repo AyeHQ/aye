@@ -450,12 +450,15 @@ fn diff_dir() {
 fn adapter_faces() {
     let adapter = Pytest::default();
     assert_eq!(adapter.name(), "pytest");
-    let executor = adapter.executor();
-    assert_eq!(executor.adapter, "pytest");
+    let runtime = adapter.runtime();
+    assert_eq!(runtime.adapter, "pytest");
     // aye's engine, with the pytest front-end: no module drives pytest.
-    assert_eq!(executor.entry, "aye_pytest_native:NativeExecutor");
+    assert_eq!(
+        runtime.entry.to_string(),
+        "aye_pytest_native:NativeExecutor"
+    );
     assert!(
-        executor
+        runtime
             .modules
             .iter()
             .all(|module| module.name != "aye_engine_pytest")

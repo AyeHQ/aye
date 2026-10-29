@@ -6,8 +6,9 @@
 //! answers with [`WorkerLine`]s, each a control [`Reply`] or an event
 //! [`Record`]. Beside the messages: a `maxfail` limit ([`MaxFail`]), the
 //! protocol's version ([`PROTOCOL_VERSION`]), the services a worker may
-//! provide ([`ServiceName`]), an adapter's runtime face ([`Executor`], with
-//! the [`ModuleSet`] it installs, of [`ModuleSource`]s), and the
+//! provide ([`ServiceName`]), an adapter's runtime face ([`Runtime`]: the
+//! [`ModuleSet`] it installs, of [`ModuleSource`]s, the executor class it
+//! builds, an [`EntryPoint`], and its [`SessionMode`]), and the
 //! [`Refiner`] trait, which the runner implements and collection calls.
 //! `docs/protocol.md` describes the protocol on the wire.
 //!
@@ -34,7 +35,7 @@
 //!   stdout, versioned by [`PROTOCOL_VERSION`] and checked at the handshake.
 //!   Requests are [`Request`]s; worker lines are [`WorkerLine`]s: either a
 //!   control [`Reply`] or an event [`Record`].
-//! - **An executor may list the session** ([`Executor::lists_session`],
+//! - **An executor may list the session** ([`SessionMode::ListsSession`],
 //!   protocol 2): it keeps what a refinement listed (its imported files, its
 //!   model) for the batches it runs later, as pytest-xdist's workers each
 //!   collect the whole session. The runner then keeps the worker that
@@ -56,35 +57,20 @@ use serde::{Deserialize, Serialize};
 
 mod context;
 mod module;
+mod runtime;
 mod service;
 
 pub use aye_events::FrameworkStatus;
 pub use context::{AdapterContext, BatchContext, context_keys};
 pub use module::{ModuleSet, ModuleSource};
+pub use runtime::{EntryPoint, Runtime, SessionMode};
 pub use service::ServiceName;
 
 /// Version of the runner ↔ worker protocol. Checked at the handshake.
-/// 2: [`Executor::lists_session`], [`RefineRequest::digests_only`],
+/// 2: [`SessionMode::ListsSession`], [`RefineRequest::digests_only`],
 /// [`Refined::digests`] and the executors' `close()` at shutdown.
 /// 3: [`Batch::ends_session`].
 pub const PROTOCOL_VERSION: u32 = 3;
-
-/// An adapter's runtime face: modules the worker installs, and the executor
-/// class it instantiates.
-#[derive(Debug, Clone)]
-pub struct Executor {
-    pub adapter: AdapterName,
-    /// Installed in order, after aye's engine (`aye_engine::ENGINE`).
-    pub modules: ModuleSet,
-    /// `module:Class` of the `aye_engine.Executor` subclass.
-    pub entry: &'static str,
-    /// The executor keeps what it lists for the batches it runs later (its
-    /// imported files, its model), so a worker lists the session once: the
-    /// runner keeps the worker that refined as its first lane, and every
-    /// other lane lists the session's files before its first batch. The
-    /// native pytest executor's; the others list nothing they keep.
-    pub lists_session: bool,
-}
 
 /// Imports files in a worker and reports their real tests. Implemented by
 /// the runner; used by collection.
@@ -103,7 +89,7 @@ pub struct RefineRequest {
     pub context: BatchContext,
     /// List the files for the batches to come, and answer with their
     /// [`Refined::digests`] only, no case: what a lane sends an executor
-    /// that [lists the session](Executor::lists_session) before its first
+    /// that [lists the session](SessionMode::ListsSession) before its first
     /// batch. The executor's `refine` gets `digests_only=True`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub digests_only: bool,
@@ -116,7 +102,7 @@ pub struct Refined {
     pub cases: Vec<Case>,
     #[serde(default)]
     pub diagnostics: Vec<Diagnostic>,
-    /// For an executor that [lists the session](Executor::lists_session):
+    /// For an executor that [lists the session](SessionMode::ListsSession):
     /// by requested file, a digest of its tests' ids in order, so that two
     /// workers' listings can be compared without the cases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,7 +205,7 @@ pub struct Batch {
     #[serde(default)]
     pub context: BatchContext,
     /// The worker's last batch for its adapter (protocol 3): an executor
-    /// that [lists the session](Executor::lists_session) ends it with this
+    /// that [lists the session](SessionMode::ListsSession) ends it with this
     /// batch, as a pytest-xdist worker ends its session with its last
     /// test: what lives as long as the session closes in the last test's
     /// teardown, then the framework's end of session runs, and what fails
@@ -231,15 +217,29 @@ pub struct Batch {
     pub ends_session: bool,
 }
 
+/// An executor the worker builds, as the handshake names it
+/// ([`Runtime::spec`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutorSpec {
     pub adapter: AdapterName,
-    /// `module:Class`.
-    pub entry: String,
-    /// [`Executor::lists_session`]: the worker gives every refinement's
-    /// answer [`Refined::digests`].
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub lists_session: bool,
+    pub entry: EntryPoint,
+    /// `lists_session`: for [`SessionMode::ListsSession`], the worker
+    /// gives every refinement's answer [`Refined::digests`].
+    #[serde(
+        rename = "lists_session",
+        default,
+        skip_serializing_if = "is_per_batch"
+    )]
+    pub session: SessionMode,
+}
+
+/// For `skip_serializing_if`.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde passes a reference"
+)]
+const fn is_per_batch(session: &SessionMode) -> bool {
+    !session.lists_session()
 }
 
 /// Runner → worker.

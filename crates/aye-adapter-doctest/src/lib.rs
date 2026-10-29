@@ -325,7 +325,7 @@ use aye_adapter::{
 use aye_events::{
     AdapterName, AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity, Span,
 };
-use aye_protocol::{AdapterContext, Executor, ModuleSet, ModuleSource};
+use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
 use aye_static::{EnvVars, ProcessEnv};
 
 pub use config::{DoctestConfig, ImportMode};
@@ -379,12 +379,12 @@ impl Adapter for Doctest {
         }
     }
 
-    fn executor(&self) -> Executor {
-        Executor {
+    fn runtime(&self) -> Runtime {
+        Runtime {
             adapter: NAME,
             modules: MODULES,
-            entry: "aye_engine_doctest:DoctestExecutor",
-            lists_session: false,
+            entry: EntryPoint::new("aye_engine_doctest", "DoctestExecutor"),
+            session: SessionMode::PerBatch,
         }
     }
 }

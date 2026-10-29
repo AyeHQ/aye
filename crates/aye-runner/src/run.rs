@@ -1,6 +1,6 @@
 //! Running a plan: workers pulling batches, the run's log, `maxfail` across
 //! workers, crash recovery, stopping, and the session listing of executors
-//! that [list the session](aye_protocol::Executor::lists_session).
+//! that [list the session](aye_protocol::SessionMode::ListsSession).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
@@ -17,8 +17,8 @@ use aye_events::{
     StopReason, TestId, TestResult, WorkerIndex,
 };
 use aye_protocol::{
-    AdapterContext, Batch, BatchContext, Executor, ListingDigest, Policy, RefineError,
-    RefineRequest, Refined, Refiner, Reply, Request, WorkerLine,
+    AdapterContext, Batch, BatchContext, ListingDigest, Policy, RefineError, RefineRequest,
+    Refined, Refiner, Reply, Request, Runtime, WorkerLine,
 };
 use aye_static::EnvVars;
 
@@ -49,7 +49,7 @@ pub struct RunnerOptions {
     pub workers: u32,
     /// Every adapter's runtime face. Workers get only those the cases at
     /// hand need.
-    pub executors: Vec<Executor>,
+    pub runtimes: Vec<Runtime>,
     /// Environment variables for every worker.
     pub env: Vec<(OsString, OsString)>,
     /// Where workers' output is echoed when the plan doesn't capture it
@@ -387,7 +387,7 @@ impl Runner {
         let mut cases = Vec::with_capacity(plan.cases.len());
         let mut orphans: Vec<(&AdapterName, &str, u32)> = Vec::new();
         for case in &plan.cases {
-            if self.executor(&case.adapter).is_some() {
+            if self.runtime(&case.adapter).is_some() {
                 cases.push(case.clone());
                 continue;
             }
@@ -424,10 +424,10 @@ impl Runner {
         // each lane, as each pytest-xdist worker runs its tests in order.
         let ordered: HashSet<&AdapterName> = self
             .options
-            .executors
+            .runtimes
             .iter()
-            .filter(|e| e.lists_session)
-            .map(|e| &e.adapter)
+            .filter(|runtime| runtime.session.lists_session())
+            .map(|runtime| &runtime.adapter)
             .collect();
         let batches = schedule::plan(
             &cases,
@@ -445,14 +445,14 @@ impl Runner {
             .max(1)
             .min(u32::try_from(batches.len()).unwrap_or(u32::MAX));
         let adapters: HashSet<&AdapterName> = batches.iter().map(|b| &b.adapter).collect();
-        let executors = self
+        let runtimes = self
             .options
-            .executors
+            .runtimes
             .iter()
-            .filter(|e| adapters.contains(&e.adapter))
+            .filter(|runtime| adapters.contains(&runtime.adapter))
             .cloned()
             .collect();
-        let mut spec = self.spec(executors);
+        let mut spec = self.spec(runtimes);
         spec.echo = (!policy.capture).then_some(self.options.echo);
 
         // The worker kept from refinement is the first lane's, if the run
@@ -477,7 +477,8 @@ impl Runner {
                     .iter()
                     .map(|batch| &batch.adapter)
                     .find(|adapter| {
-                        self.executor(adapter).is_some_and(|e| e.lists_session)
+                        self.runtime(adapter)
+                            .is_some_and(|runtime| runtime.session.lists_session())
                             && plan
                                 .session_files
                                 .get(*adapter)
@@ -559,17 +560,17 @@ impl Runner {
         log.summary
     }
 
-    fn executor(&self, adapter: &AdapterName) -> Option<Executor> {
+    fn runtime(&self, adapter: &AdapterName) -> Option<Runtime> {
         self.options
-            .executors
+            .runtimes
             .iter()
-            .find(|e| e.adapter == *adapter)
+            .find(|runtime| runtime.adapter == *adapter)
             .cloned()
     }
 
-    fn spec(&self, executors: Vec<Executor>) -> WorkerSpec {
+    fn spec(&self, runtimes: Vec<Runtime>) -> WorkerSpec {
         let mut spec = WorkerSpec::new(&self.options.python, &self.options.root, &self.options.cwd);
-        spec.executors = executors;
+        spec.runtimes = runtimes;
         spec.env.clone_from(&self.options.env);
         spec.registry = Some(self.stop.workers.clone());
         spec
@@ -580,7 +581,7 @@ impl Runner {
     /// refines them: started in the background, with its lane's
     /// environment, or the one started for an earlier refinement of the
     /// adapter. Those started for another adapter or other lanes shut down.
-    fn prelist(&self, executor: &Executor, request: &RefineRequest, lanes: u32) {
+    fn prelist(&self, runtime: &Runtime, request: &RefineRequest, lanes: u32) {
         let mut prelisting = lock(&self.prelisting);
         let (mut kept, other): (Vec<Prelisting>, Vec<Prelisting>) =
             std::mem::take(&mut *prelisting)
@@ -606,7 +607,7 @@ impl Runner {
                 });
                 (listed, earlier.pending + 1)
             } else {
-                let mut spec = self.spec(vec![executor.clone()]);
+                let mut spec = self.spec(vec![runtime.clone()]);
                 spec.env.extend(lane_env(lane, lanes));
                 let listed = thread::spawn(move || {
                     let mut worker = spawn(&spec).map_err(|e| e.to_string())?;
@@ -636,16 +637,16 @@ impl Refiner for Runner {
     /// one started for each other lane lists the same files meanwhile
     /// (unless [`RunnerOptions::collect_only`]).
     fn refine(&self, request: &RefineRequest) -> Result<Refined, RefineError> {
-        let executor = self.executor(&request.adapter).ok_or_else(|| {
+        let runtime = self.runtime(&request.adapter).ok_or_else(|| {
             RefineError(format!("no executor for the {} adapter", request.adapter))
         })?;
         if self.stop.is_stopped() {
             return Err(RefineError("interrupted".into()));
         }
         let stopped = || self.stop.is_stopped();
-        if !executor.lists_session {
+        if !runtime.session.lists_session() {
             let mut worker =
-                spawn(&self.spec(vec![executor])).map_err(|e| RefineError(e.to_string()))?;
+                spawn(&self.spec(vec![runtime])).map_err(|e| RefineError(e.to_string()))?;
             return match refine_on(&mut worker, request.clone(), &stopped) {
                 Ok(refined) => {
                     worker.shutdown();
@@ -656,7 +657,7 @@ impl Refiner for Runner {
         }
         let lanes = self.options.workers.max(1);
         if !self.options.collect_only {
-            self.prelist(&executor, request, lanes);
+            self.prelist(&runtime, request, lanes);
         }
         let mut warm = lock(&self.warm);
         let mut kept = match warm.take() {
@@ -665,7 +666,7 @@ impl Refiner for Runner {
                 if let Some(other) = other {
                     other.worker.shutdown();
                 }
-                let mut spec = self.spec(vec![executor]);
+                let mut spec = self.spec(vec![runtime]);
                 spec.env.extend(lane_env(WorkerIndex::FIRST, lanes));
                 Warm {
                     adapter: request.adapter.clone(),
@@ -1578,9 +1579,9 @@ impl Shared<'_> {
     /// Whether `adapter`'s executor lists the session.
     fn lists_session(&self, adapter: &AdapterName) -> bool {
         self.spec
-            .executors
+            .runtimes
             .iter()
-            .any(|e| e.adapter == *adapter && e.lists_session)
+            .any(|runtime| runtime.adapter == *adapter && runtime.session.lists_session())
     }
 
     /// End the session of the lane's `worker`, of `adapter`, whose last
@@ -1638,8 +1639,7 @@ impl Shared<'_> {
             return self.take_prelisted(lane, prelisted);
         }
         let mut spec = self.spec.clone();
-        spec.executors
-            .retain(|executor| executor.adapter == *adapter);
+        spec.runtimes.retain(|runtime| runtime.adapter == *adapter);
         spec.env.extend(lane_env(lane, self.lanes));
         let mut worker = Worker::launch(&spec).map_err(|e| e.to_string())?;
         if !self.busy(lane, worker.killer()) {
@@ -1760,9 +1760,9 @@ impl Shared<'_> {
     ) -> Result<(Worker, Option<Digests>), String> {
         let lists = self
             .spec
-            .executors
+            .runtimes
             .iter()
-            .any(|e| e.adapter == *adapter && e.lists_session);
+            .any(|runtime| runtime.adapter == *adapter && runtime.session.lists_session());
         let Some(session) = self.sessions.get(adapter).filter(|_| lists) else {
             return Ok((worker, None));
         };

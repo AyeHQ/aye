@@ -13,7 +13,7 @@ use aye_adapter::{Adapter, AdapterError, Project, Recognizer};
 use aye_adapter_pytest::native::SHIM_MODULE;
 use aye_engine::{MODEL_MODULE, NATIVE_ENGINE_MODULE, REWRITE_MODULE};
 use aye_events::AdapterName;
-use aye_protocol::{Executor, ModuleSet};
+use aye_protocol::{ModuleSet, Runtime};
 
 /// Every adapter the binary links, in priority order: the pytest adapter
 /// (for a static listing, `aye --co --no-refine`, the one that predicts
@@ -94,10 +94,10 @@ impl<A: Adapter> Adapter for WithAyePytest<A> {
         self.inner.prepare_among(project, adapters)
     }
 
-    fn executor(&self) -> Executor {
-        Executor {
+    fn runtime(&self) -> Runtime {
+        Runtime {
             modules: self.modules,
-            ..self.inner.executor()
+            ..self.inner.runtime()
         }
     }
 }
@@ -207,7 +207,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use aye_config::AyeSettings;
-    use aye_protocol::Request;
+    use aye_protocol::{Request, SessionMode};
     use aye_static::EnvVars;
 
     use super::*;
@@ -295,28 +295,28 @@ mod tests {
     #[test]
     fn every_adapter_runs_on_ayes_engine_without_pytest() {
         let adapters = known(false);
-        let pytest = adapters[0].executor();
+        let pytest = adapters[0].runtime();
         assert_eq!(pytest.adapter, "pytest");
-        assert_eq!(pytest.entry, "aye_pytest_native:NativeExecutor");
-        assert!(pytest.lists_session);
-        assert_eq!(known(true)[0].executor().entry, pytest.entry);
+        assert_eq!(pytest.entry.to_string(), "aye_pytest_native:NativeExecutor");
+        assert_eq!(pytest.session, SessionMode::ListsSession);
+        assert_eq!(known(true)[0].runtime().entry, pytest.entry);
         for (adapter, own) in adapters.iter().skip(1).zip([
-            (aye_adapter_unittest::Unittest.executor()),
-            (aye_adapter_doctest::Doctest.executor()),
+            (aye_adapter_unittest::Unittest.runtime()),
+            (aye_adapter_doctest::Doctest.runtime()),
         ]) {
-            let executor = adapter.executor();
-            let names: Vec<&str> = executor.modules.names().collect();
+            let runtime = adapter.runtime();
+            let names: Vec<&str> = runtime.modules.names().collect();
             assert_eq!(
                 names[..4],
                 ["aye_model", "aye_rewrite", "aye_native_engine", "pytest"]
             );
             assert_eq!(
-                executor.modules.modules()[4..],
+                runtime.modules.modules()[4..],
                 *own.modules.modules(),
                 "{}",
                 own.adapter
             );
-            assert_eq!((executor.adapter, executor.entry), (own.adapter, own.entry));
+            assert_eq!((runtime.adapter, runtime.entry), (own.adapter, own.entry));
         }
     }
 
@@ -359,7 +359,7 @@ mod tests {
     fn hello(adapters: &[usize]) -> String {
         let known = known(false);
         let mut spec = aye_runner::WorkerSpec::new("python", "/repo", "/repo");
-        spec.executors = adapters.iter().map(|&at| known[at].executor()).collect();
+        spec.runtimes = adapters.iter().map(|&at| known[at].runtime()).collect();
         let hello = spec.hello();
         let mut line = serde_json::to_string(&hello).unwrap();
         let Request::Hello { modules, .. } = hello else {
@@ -468,7 +468,7 @@ mod tests {
         for adapter in known(false) {
             sources.extend(
                 adapter
-                    .executor()
+                    .runtime()
                     .modules
                     .iter()
                     .map(|m| (&*m.name, &*m.source)),

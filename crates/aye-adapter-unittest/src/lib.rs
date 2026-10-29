@@ -290,7 +290,7 @@ use aye_adapter::{
 };
 use aye_events::{AdapterName, AffinityKey, Case, Certainty, ProjectPath, ProjectPathRef, Span};
 use aye_fs::normalize_absolute;
-use aye_protocol::{AdapterContext, Executor, ModuleSet, ModuleSource};
+use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
 
 pub use config::UnittestConfig;
 pub use fnmatch::{fnmatch, valid_module_name};
@@ -330,12 +330,12 @@ impl Adapter for Unittest {
         Ok(Some(Box::new(UnittestRecognizer::new(project)?)))
     }
 
-    fn executor(&self) -> Executor {
-        Executor {
+    fn runtime(&self) -> Runtime {
+        Runtime {
             adapter: NAME,
             modules: MODULES,
-            entry: "aye_engine_unittest:UnittestExecutor",
-            lists_session: false,
+            entry: EntryPoint::new("aye_engine_unittest", "UnittestExecutor"),
+            session: SessionMode::PerBatch,
         }
     }
 }

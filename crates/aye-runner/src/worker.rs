@@ -23,9 +23,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use aye_engine::ENGINE;
-use aye_protocol::{
-    Executor, ExecutorSpec, PROTOCOL_VERSION, Reply, Request, ServiceName, WorkerLine,
-};
+use aye_protocol::{PROTOCOL_VERSION, Reply, Request, Runtime, ServiceName, WorkerLine};
 
 use aye_static::EnvVars;
 
@@ -84,9 +82,9 @@ pub struct WorkerSpec {
     pub root: PathBuf,
     /// The directory the worker starts in.
     pub cwd: PathBuf,
-    /// The executors the worker instantiates. Their modules are installed
-    /// after aye's engine, in order, each name once.
-    pub executors: Vec<Executor>,
+    /// The runtimes whose executors the worker builds. Their modules are
+    /// installed after aye's engine, in order, each name once.
+    pub runtimes: Vec<Runtime>,
     /// Services to provide: [`ServiceName::DEFAULT`] unless told
     /// otherwise.
     pub services: Vec<ServiceName>,
@@ -110,7 +108,7 @@ impl WorkerSpec {
             python: python.into(),
             root: root.into(),
             cwd: cwd.into(),
-            executors: Vec::new(),
+            runtimes: Vec::new(),
             services: ServiceName::DEFAULT.to_vec(),
             env: Vec::new(),
             echo: None,
@@ -123,7 +121,7 @@ impl WorkerSpec {
         let mut seen = HashSet::new();
         let modules = ENGINE
             .iter()
-            .chain(self.executors.iter().flat_map(|e| e.modules))
+            .chain(self.runtimes.iter().flat_map(|runtime| runtime.modules))
             .filter(|module| seen.insert(&*module.name))
             .cloned()
             .collect();
@@ -131,15 +129,7 @@ impl WorkerSpec {
             protocol: PROTOCOL_VERSION,
             root: self.root.to_string_lossy().into_owned(),
             modules,
-            executors: self
-                .executors
-                .iter()
-                .map(|e| ExecutorSpec {
-                    adapter: e.adapter.clone(),
-                    entry: e.entry.to_string(),
-                    lists_session: e.lists_session,
-                })
-                .collect(),
+            executors: self.runtimes.iter().map(Runtime::spec).collect(),
             services: self.services.clone(),
         }
     }
@@ -916,7 +906,7 @@ mod tests {
 
     use aye_engine::ENGINE_MODULE;
     use aye_events::{AdapterName, BatchIndex, Event};
-    use aye_protocol::{ModuleSet, ModuleSource};
+    use aye_protocol::{EntryPoint, ModuleSet, ModuleSource, SessionMode};
 
     use super::*;
 
@@ -926,18 +916,18 @@ mod tests {
     #[test]
     fn hello_installs_the_engine_then_each_module_once() {
         let mut spec = WorkerSpec::new("python", "/repo", "/repo");
-        spec.executors = vec![
-            Executor {
+        spec.runtimes = vec![
+            Runtime {
                 adapter: AdapterName::new_static("a"),
                 modules: ModuleSet::new(const { &[ONE, TWO] }),
-                entry: "two:A",
-                lists_session: false,
+                entry: EntryPoint::new("two", "A"),
+                session: SessionMode::PerBatch,
             },
-            Executor {
+            Runtime {
                 adapter: AdapterName::new_static("b"),
                 modules: ModuleSet::new(const { &[TWO, ENGINE_MODULE] }),
-                entry: "two:B",
-                lists_session: true,
+                entry: EntryPoint::new("two", "B"),
+                session: SessionMode::ListsSession,
             },
         ];
         let Request::Hello {
@@ -955,13 +945,10 @@ mod tests {
         let names: Vec<&str> = modules.iter().map(|m| &*m.name).collect();
         assert_eq!(names, ["aye_engine", "one", "two"]);
         assert_eq!(executors.len(), 2);
-        assert_eq!(executors[1].entry, "two:B");
+        assert_eq!(executors[1].entry.to_string(), "two:B");
         assert_eq!(
-            executors
-                .iter()
-                .map(|e| e.lists_session)
-                .collect::<Vec<_>>(),
-            [false, true]
+            executors.iter().map(|e| e.session).collect::<Vec<_>>(),
+            [SessionMode::PerBatch, SessionMode::ListsSession]
         );
         assert_eq!(services, ServiceName::DEFAULT);
     }

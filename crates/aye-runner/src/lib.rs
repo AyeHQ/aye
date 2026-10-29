@@ -192,7 +192,7 @@
 //! - **Refinement** ([`Runner`] implements [`aye_protocol::Refiner`]) starts a
 //!   fresh worker holding only that adapter's executor, and shuts it down,
 //!   unless the executor lists the session.
-//! - **Session listing** ([`aye_protocol::Executor::lists_session`]). The
+//! - **Session listing** ([`aye_protocol::SessionMode::ListsSession`]). The
 //!   worker that refined is kept, with the first lane's environment, for the
 //!   next refinement of its adapter and then as the next run's first lane
 //!   (shut down when the runner is dropped, or when the run gives that lane

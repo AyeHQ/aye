@@ -9,7 +9,7 @@
 //! engine (`aye_native_engine`, with `aye_rewrite` rewriting asserts) runs
 //! the model and knows no framework; `aye_pytest_native` is the glue, the
 //! executor the worker instantiates. It [lists the
-//! session](aye_protocol::Executor::lists_session): the worker that refined
+//! session](aye_protocol::SessionMode::ListsSession): the worker that refined
 //! runs batches too, and every other worker lists the session's files
 //! before its first batch.
 //!
@@ -39,7 +39,7 @@ use aye_adapter::{
 };
 use aye_engine::{MODEL_MODULE, NATIVE_ENGINE_MODULE, REWRITE_MODULE};
 use aye_events::{AdapterName, Diagnostic, DiagnosticCode, Fnv64, Severity};
-use aye_protocol::{AdapterContext, Executor, ModuleSet, ModuleSource};
+use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -83,8 +83,8 @@ pub const MODULES: ModuleSet = ModuleSet::new(
     },
 );
 
-/// `module:Class` of the native executor.
-pub const ENTRY: &str = "aye_pytest_native:NativeExecutor";
+/// The native executor.
+pub const ENTRY: EntryPoint = EntryPoint::new("aye_pytest_native", "NativeExecutor");
 
 /// Why every test file is refined.
 const REFINE_REASON: &str = "aye's pytest front-end reads every test file";
@@ -152,12 +152,12 @@ impl Adapter for Pytest {
         ))))
     }
 
-    fn executor(&self) -> Executor {
-        Executor {
+    fn runtime(&self) -> Runtime {
+        Runtime {
             adapter: NAME,
             modules: MODULES,
             entry: ENTRY,
-            lists_session: true,
+            session: SessionMode::ListsSession,
         }
     }
 }
@@ -1070,10 +1070,13 @@ mod tests {
 
     #[test]
     fn the_executor_installs_the_native_modules_in_order() {
-        let executor = Pytest::default().executor();
-        assert_eq!(executor.adapter, "pytest");
-        assert_eq!(executor.entry, "aye_pytest_native:NativeExecutor");
-        let names: Vec<&str> = executor.modules.names().collect();
+        let runtime = Pytest::default().runtime();
+        assert_eq!(runtime.adapter, "pytest");
+        assert_eq!(
+            runtime.entry.to_string(),
+            "aye_pytest_native:NativeExecutor"
+        );
+        let names: Vec<&str> = runtime.modules.names().collect();
         assert_eq!(
             names,
             [
@@ -1085,9 +1088,9 @@ mod tests {
                 "aye_pytest_native"
             ]
         );
-        assert!(executor.lists_session);
+        assert_eq!(runtime.session, SessionMode::ListsSession);
         assert_eq!(Pytest::default().name(), NAME);
-        assert_eq!(Pytest::static_listing().executor().entry, executor.entry);
+        assert_eq!(Pytest::static_listing().runtime(), runtime);
     }
 
     #[test]

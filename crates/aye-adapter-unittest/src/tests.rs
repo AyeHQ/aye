@@ -398,11 +398,15 @@ fn pinned_ids_are_unittests() {
 
 #[test]
 fn the_adapter_names_its_executor() {
-    let executor = Unittest.executor();
+    let runtime = Unittest.runtime();
     assert_eq!(Unittest.name(), "unittest");
-    assert_eq!(executor.adapter, "unittest");
-    assert_eq!(executor.entry, "aye_engine_unittest:UnittestExecutor");
-    assert_eq!(executor.modules, MODULES);
+    assert_eq!(runtime.adapter, "unittest");
+    assert_eq!(
+        runtime.entry.to_string(),
+        "aye_engine_unittest:UnittestExecutor"
+    );
+    assert_eq!(runtime.modules, MODULES);
+    assert_eq!(runtime.session, SessionMode::PerBatch);
     assert_eq!(MODULES.modules(), [MODULE]);
     assert!(
         MODULE
