@@ -27,6 +27,8 @@ use aye_engine::{
     WorkerLine, services,
 };
 
+use aye_static::EnvVars;
+
 use crate::WORKER_SOURCE;
 
 /// How long a worker may take to exit after `shutdown` before it is killed.
@@ -386,7 +388,7 @@ impl Worker {
             .arg("-c")
             .arg(WORKER_SOURCE)
             .current_dir(&spec.cwd)
-            .env("PYTHONIOENCODING", "utf-8")
+            .env(EnvVars::PYTHONIOENCODING, "utf-8")
             .envs(spec.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

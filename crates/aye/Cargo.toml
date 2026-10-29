@@ -34,6 +34,7 @@ aye-provision = { workspace = true }
 aye-render = { workspace = true }
 aye-runner = { workspace = true }
 aye-select = { workspace = true }
+aye-static = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

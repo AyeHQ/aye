@@ -198,8 +198,11 @@ pub fn choose(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    use aye_static::EnvVars;
 
     use super::*;
 
@@ -342,6 +345,51 @@ mod tests {
         assert_eq!(
             choose(&good, &project(root, &[]), false).unwrap().names(),
             ["pytest"]
+        );
+    }
+
+    /// The Python every worker runs names environment variables itself (it
+    /// imports only the standard library): each one it reads or sets by
+    /// name is in aye's catalogue.
+    #[test]
+    fn the_python_sent_to_workers_names_only_catalogued_variables() {
+        let mut sources = vec![("aye_worker", aye_runner::WORKER_SOURCE)];
+        for adapter in known(false) {
+            sources.extend(
+                adapter
+                    .executor()
+                    .modules
+                    .iter()
+                    .map(|m| (m.name, m.source)),
+            );
+        }
+        let mut named = BTreeSet::new();
+        for (module, source) in sources {
+            let lines = source
+                .lines()
+                .filter(|line| line.contains("environ") || line.contains("_env="));
+            for name in lines.flat_map(|line| line.split('"').skip(1).step_by(2)) {
+                if name.len() > 1
+                    && name
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+                {
+                    named.insert((name, module));
+                }
+            }
+        }
+        let missing: Vec<_> = named
+            .iter()
+            .filter(|(name, _)| !EnvVars::ALL.contains(name))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "not in aye_static::EnvVars: {missing:?}"
+        );
+        assert!(
+            named
+                .iter()
+                .any(|(name, _)| *name == EnvVars::PYTEST_CURRENT_TEST)
         );
     }
 }

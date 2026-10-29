@@ -13,6 +13,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use aye_static::EnvVars;
+
 use crate::refine::Fnv;
 
 /// What refinement depends on outside the project's files. Every part goes
@@ -298,9 +300,9 @@ impl Environment {
         let pythonpath = match &self.variables {
             Some(variables) => variables
                 .iter()
-                .find(|(name, _)| name == "PYTHONPATH")
+                .find(|(name, _)| name == EnvVars::PYTHONPATH)
                 .map(|(_, value)| value.clone()),
-            None => std::env::var_os("PYTHONPATH"),
+            None => std::env::var_os(EnvVars::PYTHONPATH),
         };
         for dir in pythonpath.iter().flat_map(std::env::split_paths) {
             modules_in(&aye_config::absolute(cwd, &dir), &mut names);
@@ -370,7 +372,9 @@ fn site_packages(prefix: &Path) -> Vec<PathBuf> {
 /// The user's own `site-packages`, which interpreters outside a venv also
 /// import from.
 fn user_site_packages() -> Vec<PathBuf> {
-    let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) else {
+    let Some(home) =
+        std::env::var_os(EnvVars::HOME).or_else(|| std::env::var_os(EnvVars::USERPROFILE))
+    else {
         return Vec::new();
     };
     let home = PathBuf::from(home);

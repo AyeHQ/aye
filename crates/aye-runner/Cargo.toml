@@ -13,6 +13,7 @@ authors.workspace = true
 aye-engine = { workspace = true }
 aye-events = { workspace = true }
 aye-provision = { workspace = true }
+aye-static = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 

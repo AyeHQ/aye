@@ -467,6 +467,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_engine::{AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile};
 use aye_events::{Certainty, Diagnostic, Severity};
+use aye_static::EnvVars;
 
 pub use config::{PytestConfig, split_xdist};
 pub use native::{NAME, Pytest};
@@ -730,9 +731,9 @@ fn module_name(root: &Path, file: &Path) -> Option<String> {
 
 impl PytestRecognizer {
     pub fn new(project: &Project<'_>) -> Result<Self, AdapterError> {
-        let addopts = std::env::var("PYTEST_ADDOPTS").ok();
-        let plugins = std::env::var("PYTEST_PLUGINS").ok();
-        let pythonpath = std::env::var("PYTHONPATH").ok();
+        let addopts = std::env::var(EnvVars::PYTEST_ADDOPTS).ok();
+        let plugins = std::env::var(EnvVars::PYTEST_PLUGINS).ok();
+        let pythonpath = std::env::var(EnvVars::PYTHONPATH).ok();
         Self::with_environment(
             project,
             PytestEnv {

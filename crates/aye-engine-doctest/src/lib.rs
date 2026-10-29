@@ -321,6 +321,7 @@ use aye_engine::{
     Setting, SourceFile,
 };
 use aye_events::{Case, Certainty, Diagnostic, Severity, Span};
+use aye_static::EnvVars;
 
 pub use config::{DoctestConfig, ImportMode};
 
@@ -438,11 +439,11 @@ impl Env {
     /// The variables, from the process's environment.
     pub fn from_process() -> Self {
         Self {
-            pytest_addopts: std::env::var("PYTEST_ADDOPTS").ok(),
-            python_optimize: std::env::var("PYTHONOPTIMIZE").ok(),
-            ignore_import_mismatch: std::env::var("PY_IGNORE_IMPORTMISMATCH")
+            pytest_addopts: std::env::var(EnvVars::PYTEST_ADDOPTS).ok(),
+            python_optimize: std::env::var(EnvVars::PYTHONOPTIMIZE).ok(),
+            ignore_import_mismatch: std::env::var(EnvVars::PY_IGNORE_IMPORTMISMATCH)
                 .is_ok_and(|v| v == "1"),
-            pytest_plugins: std::env::var("PYTEST_PLUGINS")
+            pytest_plugins: std::env::var(EnvVars::PYTEST_PLUGINS)
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
         }

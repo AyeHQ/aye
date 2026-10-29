@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use aye_config::{Origin, Sourced};
 use aye_engine::{AdapterError, Project, Setting};
+use aye_static::EnvVars;
 
 use crate::parser::known_option;
 
@@ -630,7 +631,7 @@ impl DoctestConfig {
         let env_args = pytest_addopts
             .map(aye_config::split_args)
             .unwrap_or_default();
-        let env_origin = Origin::Env("PYTEST_ADDOPTS".into());
+        let env_origin = Origin::Env(EnvVars::PYTEST_ADDOPTS.into());
         let args_origin = Origin::Flag("--".into());
         // `-c`, `--rootdir` and `-o` from the environment and the command
         // line take part in finding the configuration.

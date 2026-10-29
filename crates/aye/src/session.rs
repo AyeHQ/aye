@@ -21,6 +21,7 @@ use aye_render::{
 };
 use aye_runner::{Echo, Plan, Runner, RunnerOptions, Stamper, new_run_id};
 use aye_select::Selection;
+use aye_static::EnvVars;
 
 use crate::args::{Args, Color, Maxfail, Output, Passed, Workers, passed, passed_maxfail};
 use crate::busy::Busy;
@@ -28,9 +29,6 @@ use crate::registry;
 
 /// Where aye keeps history and caches, under the project root.
 pub const STATE_DIR: &str = ".aye";
-
-/// What pytest-xdist's `testrun_uid` fixture reads in a worker.
-const TESTRUN_UID: &str = "PYTEST_XDIST_TESTRUNUID";
 
 /// Diagnostic codes the binary acts on. Collection's are in
 /// `aye_collect::codes`; the rest come from adapters and the runner.
@@ -311,7 +309,10 @@ impl Session {
             executors: self.adapters.iter().map(|a| a.executor()).collect(),
             // pytest-xdist's `testrun_uid`, which its workers share: one per
             // run, the run's id.
-            env: vec![(TESTRUN_UID.into(), run_id.clone().into())],
+            env: vec![(
+                EnvVars::PYTEST_XDIST_TESTRUNUID.into(),
+                run_id.clone().into(),
+            )],
             // `-s` output stays off a machine-readable stdout.
             echo: match self.output() {
                 Output::Text => Echo::Stdout,
@@ -374,8 +375,8 @@ impl Session {
         };
         // The refinement cache is keyed on what refining depends on: the
         // interpreter and its packages, the arguments after `--`, and the
-        // environment workers inherit (aye's own; `TESTRUN_UID` changes
-        // every run and refinement has no use for it).
+        // environment workers inherit (aye's own; `PYTEST_XDIST_TESTRUNUID`
+        // changes every run and refinement has no use for it).
         let collector = Collector::new(
             project,
             &self.prepared,
@@ -739,7 +740,7 @@ impl Session {
                     },
                 )));
                 if aye_render::github_actions_enabled() {
-                    let workspace = std::env::var_os("GITHUB_WORKSPACE").map(PathBuf::from);
+                    let workspace = std::env::var_os(EnvVars::GITHUB_WORKSPACE).map(PathBuf::from);
                     let prefix = repository_prefix(&self.root, workspace.as_deref());
                     tee.push(Stdout::new(
                         GithubAnnotations::new(io::stdout()).with_path_prefix(prefix),
