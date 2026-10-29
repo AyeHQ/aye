@@ -1,7 +1,12 @@
-//! Digests: FNV-1a, 64 and 128 bits, the one hash aye computes itself. It
-//! is stable across builds and platforms, unlike `std`'s hasher, which is
-//! all a key, a cache's or a test's, needs; and it tells whether bytes
-//! changed, nothing more.
+//! Digests: FNV-1a, 64 and 128 bits, the one hash aye computes itself, and
+//! the digest of a file's content it gives. It is stable across builds and
+//! platforms, unlike `std`'s hasher, which is all a key, a cache's or a
+//! test's, needs; and it tells whether bytes changed, nothing more.
+
+use std::fmt;
+use std::str::FromStr;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// FNV-1a, 64 bits: a test's key (before it is mixed), the pytest
 /// adapter's digest of its modules.
@@ -85,6 +90,76 @@ impl Default for Fnv128 {
     }
 }
 
+/// The digest of a file's content: its [`Fnv128`] hash. A stored run keeps
+/// one for each of its files (`RunMeta.files`), and `aye show` says a file
+/// changed since when its digest differs; the refinement cache's key holds
+/// the digests of the file and its support files.
+///
+/// It prints and serializes as 32 lower-case hex digits, and reads 32 hex
+/// digits in either case. Any other text is not a digest: aye has always
+/// written them so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ContentDigest(u128);
+
+impl ContentDigest {
+    /// Its hex digits.
+    pub const DIGITS: usize = 32;
+
+    pub fn of(bytes: &[u8]) -> Self {
+        Self(Fnv128::hash(bytes))
+    }
+
+    /// Its 16 bytes, little-endian, as a key that holds it hashes them.
+    pub const fn to_le_bytes(self) -> [u8; 16] {
+        self.0.to_le_bytes()
+    }
+}
+
+impl fmt::Display for ContentDigest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:032x}", self.0)
+    }
+}
+
+/// Its 32 hex digits, in either case.
+impl FromStr for ContentDigest {
+    type Err = InvalidDigest;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        if text.len() != Self::DIGITS || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(InvalidDigest(text.into()));
+        }
+        u128::from_str_radix(text, 16)
+            .map(Self)
+            .map_err(|_| InvalidDigest(text.into()))
+    }
+}
+
+impl Serialize for ContentDigest {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for ContentDigest {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = Box::<str>::deserialize(deserializer)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+/// A text that is not a [`ContentDigest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidDigest(Box<str>);
+
+impl fmt::Display for InvalidDigest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "`{}` is not a content digest", self.0)
+    }
+}
+
+impl std::error::Error for InvalidDigest {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +198,41 @@ mod tests {
         other.part(b"a");
         other.part(b"bc");
         assert_ne!(parts.finish(), other.finish());
+    }
+
+    /// A digest is the FNV-1a 128 of the bytes, 32 hex digits on the wire,
+    /// read in either case; nothing else reads.
+    #[test]
+    fn a_content_digest_is_32_hex_digits() {
+        let digest = ContentDigest::of(b"a");
+        assert_eq!(digest.to_string(), "d228cb696f1a8caf78912b704e4a8964");
+        assert_eq!(
+            ContentDigest::of(b"").to_string(),
+            "6c62272e07bb014262b821756295c58d"
+        );
+        assert_eq!(digest.to_le_bytes(), Fnv128::hash(b"a").to_le_bytes());
+        let json = serde_json::to_string(&digest).unwrap();
+        assert_eq!(json, "\"d228cb696f1a8caf78912b704e4a8964\"");
+        assert_eq!(
+            serde_json::from_str::<ContentDigest>(&json).unwrap(),
+            digest
+        );
+        assert_eq!(
+            "D228CB696F1A8CAF78912B704E4A8964".parse::<ContentDigest>(),
+            Ok(digest)
+        );
+        for text in [
+            "",
+            "d228cb696f1a8caf78912b704e4a896",
+            "+228cb696f1a8caf78912b704e4a8964",
+            "edited",
+        ] {
+            assert_eq!(
+                text.parse::<ContentDigest>(),
+                Err(InvalidDigest(text.into())),
+                "{text}"
+            );
+        }
+        assert!(serde_json::from_str::<ContentDigest>("\"edited\"").is_err());
     }
 }

@@ -182,7 +182,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_engine::{Project, Recognition, Recognizer, Refiner, SourceFile};
 use aye_events::{
-    AdapterName, Case, Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPathRef, Severity, TestId,
+    AdapterName, Case, ContentDigest, Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPathRef,
+    Severity, TestId,
 };
 
 mod environment;
@@ -285,7 +286,7 @@ pub(crate) struct Recognized {
     /// By recognizer, in priority order.
     by: Vec<(usize, Recognition)>,
     /// The content digest, when the cache needs it.
-    digest: Option<u128>,
+    digest: Option<ContentDigest>,
     /// By recognizer asking for refinement, why the file's refinement may
     /// depend on something the cache's key leaves out (`None`: it can't).
     /// Empty when the cache is off.
@@ -645,7 +646,7 @@ impl<'a> Collector<'a> {
         }
         let refine = recognized.by.iter().any(|(_, r)| r.refine.is_some());
         if refine && self.caching() {
-            recognized.digest = Some(refine::digest(source.bytes()));
+            recognized.digest = Some(ContentDigest::of(source.bytes()));
             for (i, recognition) in &recognized.by {
                 if recognition.refine.is_none() {
                     continue;

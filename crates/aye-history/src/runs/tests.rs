@@ -315,9 +315,8 @@ fn each_file_with_a_test_has_its_digest_and_changes_are_told() {
     );
     assert_eq!(
         meta.files["tests/test_a.py"],
-        digest(b"def test_a(): pass\n")
+        ContentDigest::of(b"def test_a(): pass\n")
     );
-    assert_eq!(meta.files["tests/test_a.py"].len(), 32);
     let root = project.path();
     assert_eq!(meta.change(root, "tests/test_a.py"), None);
     fs::write(root.join("tests/test_a.py"), "def test_a(): assert 0\n").unwrap();
@@ -326,12 +325,6 @@ fn each_file_with_a_test_has_its_digest_and_changes_are_told() {
     assert_eq!(meta.change(root, "tests/test_b.py"), Some(Change::Gone));
     // A file the run has no digest of is not said to have changed.
     assert_eq!(meta.change(root, "tests/test_c.py"), None);
-}
-
-#[test]
-fn digests_are_fnv_1a_128() {
-    assert_eq!(digest(b""), "6c62272e07bb014262b821756295c58d");
-    assert_ne!(digest(b"a"), digest(b"b"));
 }
 
 #[test]

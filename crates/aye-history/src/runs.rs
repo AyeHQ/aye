@@ -60,8 +60,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aye_events::{
-    Counts, DiagnosticCode, DiagnosticOrigin, ErrorClass, Event, ExitCode, Fnv128, ProjectPath,
-    Record, RunId, RunNumber, Severity, StopReason,
+    ContentDigest, Counts, DiagnosticCode, DiagnosticOrigin, ErrorClass, Event, ExitCode,
+    ProjectPath, Record, RunId, RunNumber, Severity, StopReason,
 };
 use flate2::Compression;
 use flate2::read::GzDecoder;
@@ -123,10 +123,11 @@ pub struct RunMeta {
     pub extra: BTreeMap<String, u32>,
     /// Each file holding a test the run collected, or that collection
     /// reported an error on or skipped, relative to the root as ids spell
-    /// it, and the digest of its content ([`digest`]) when collection
-    /// finished. A file that couldn't be read (a directory) is left out.
+    /// it, and the digest of its content when collection finished. A file
+    /// that couldn't be read (a directory) is left out. A summary holding a
+    /// digest that isn't 32 hex digits doesn't read; aye never wrote one.
     #[serde(default)]
-    pub files: BTreeMap<ProjectPath, String>,
+    pub files: BTreeMap<ProjectPath, ContentDigest>,
 }
 
 /// How a file differs from what a stored run read.
@@ -145,7 +146,7 @@ impl RunMeta {
     pub fn change(&self, root: &Path, path: &str) -> Option<Change> {
         let recorded = self.files.get(path)?;
         match fs::read(root.join(path)) {
-            Ok(bytes) => (digest(&bytes) != *recorded).then_some(Change::Edited),
+            Ok(bytes) => (ContentDigest::of(&bytes) != *recorded).then_some(Change::Edited),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Some(Change::Gone),
             Err(_) => None,
         }
@@ -235,13 +236,6 @@ impl<'de> Deserialize<'de> for StoredRunId {
     }
 }
 
-/// The digest of a file's content: FNV-1a, 128 bits, as 32 hex digits.
-/// Stable across builds and platforms; it tells whether a file changed,
-/// and nothing more.
-pub fn digest(bytes: &[u8]) -> String {
-    format!("{:032x}", Fnv128::hash(bytes))
-}
-
 /// Keeps the log of the run fed to it, as a consumer of the stream: each
 /// record is serialized as it arrives, into a buffer handed in chunks to a
 /// thread that compresses them into the log and reads the digests of the
@@ -280,7 +274,7 @@ struct Run {
     /// Records serialized, not yet handed to the thread.
     lines: Vec<u8>,
     sender: Option<mpsc::Sender<Chunk>>,
-    thread: thread::JoinHandle<io::Result<BTreeMap<ProjectPath, String>>>,
+    thread: thread::JoinHandle<io::Result<BTreeMap<ProjectPath, ContentDigest>>>,
     meta: RunMeta,
     /// The files of the tests collected so far, each once.
     files: Vec<ProjectPath>,
@@ -597,7 +591,7 @@ fn write_log(
     path: &Path,
     root: &Path,
     chunks: &mpsc::Receiver<Chunk>,
-) -> io::Result<BTreeMap<ProjectPath, String>> {
+) -> io::Result<BTreeMap<ProjectPath, ContentDigest>> {
     let mut digests = BTreeMap::new();
     let written = (|| {
         let mut out = GzEncoder::new(file, Compression::fast());
@@ -607,7 +601,7 @@ fn write_log(
                 Chunk::Digests(files) => {
                     for file in files {
                         if let Ok(bytes) = fs::read(root.join(file.as_str())) {
-                            digests.insert(file, digest(&bytes));
+                            digests.insert(file, ContentDigest::of(&bytes));
                         }
                     }
                 }

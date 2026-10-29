@@ -52,7 +52,7 @@ pub use case::{Case, Certainty};
 pub use diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticOrigin, ErrorClass, Severity, SummaryKind,
 };
-pub use digest::{Fnv64, Fnv128};
+pub use digest::{ContentDigest, Fnv64, Fnv128, InvalidDigest};
 pub use event::{Envelope, Event, Record};
 pub use failure::{
     Assertion, Columns, Compare, CompareKind, ComparisonOp, Difference, Failure, FailureSignature,

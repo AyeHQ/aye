@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use aye_engine::{RefineRequest, Refined, Refiner, Setting};
-use aye_events::{AdapterName, Diagnostic, DiagnosticCode, Fnv128, ProjectPath, Severity};
+use aye_events::{
+    AdapterName, ContentDigest, Diagnostic, DiagnosticCode, Fnv128, ProjectPath, Severity,
+};
 
 use crate::source::Source;
 use crate::standalone::{self, Scope};
@@ -49,13 +51,13 @@ impl Collector<'_> {
         seen: &Mutex<HashMap<PathBuf, bool>>,
     ) -> Refinement {
         let mut out = Refinement::default();
-        let mut digests: HashMap<usize, u128> = HashMap::new();
+        let mut digests: HashMap<usize, ContentDigest> = HashMap::new();
         // Computed once, when a file first needs it.
         let mut environment: Option<Option<u128>> = None;
         // By support file and recognizer: whether it is standalone.
         let mut supports_standalone: HashMap<(usize, usize), bool> = HashMap::new();
         // By package `__init__.py` and recognizer: its digest when standalone.
-        let mut inits: HashMap<(PathBuf, usize), Option<u128>> = HashMap::new();
+        let mut inits: HashMap<(PathBuf, usize), Option<ContentDigest>> = HashMap::new();
         for (i, (adapter, recognizer)) in self.recognizers.iter().enumerate() {
             let pending: Vec<(&Job, &Recognized, &str)> = jobs
                 .iter()
@@ -126,21 +128,22 @@ impl Collector<'_> {
                 };
                 let key = cache.as_ref().zip(found.digest).zip(packages).map(
                     |((cache, content), packages)| {
-                        let chain: Vec<(ProjectPath, u128)> = job
+                        let chain: Vec<(ProjectPath, ContentDigest)> = job
                             .chain(i)
                             .iter()
                             .filter_map(|&at| {
                                 let source = support.get(&at)?;
-                                let hash =
-                                    *digests.entry(at).or_insert_with(|| digest(source.bytes()));
-                                Some((tree.entries[at].rel.clone(), hash))
+                                let digest = *digests
+                                    .entry(at)
+                                    .or_insert_with(|| ContentDigest::of(source.bytes()));
+                                Some((tree.entries[at].rel.clone(), digest))
                             })
                             .chain(packages)
                             .collect();
                         cache.key(
                             tree.entries[job.at].rel.as_str(),
                             content,
-                            chain.iter().map(|(rel, hash)| (rel.as_str(), *hash)),
+                            chain.iter().map(|(rel, digest)| (rel.as_str(), *digest)),
                         )
                     },
                 );
@@ -259,8 +262,8 @@ impl Collector<'_> {
         abs: &Path,
         recognizer: usize,
         scope: &Scope<'_>,
-        memo: &mut HashMap<(PathBuf, usize), Option<u128>>,
-    ) -> Option<Vec<(ProjectPath, u128)>> {
+        memo: &mut HashMap<(PathBuf, usize), Option<ContentDigest>>,
+    ) -> Option<Vec<(ProjectPath, ContentDigest)>> {
         let root = self.project.root;
         let mut out = Vec::new();
         for dir in abs
@@ -273,15 +276,15 @@ impl Collector<'_> {
                 continue;
             }
             let rel = ProjectPath::as_written(aye_fs::relative_through_root(&init, root));
-            let hash = *memo.entry((init.clone(), recognizer)).or_insert_with(|| {
+            let digest = *memo.entry((init.clone(), recognizer)).or_insert_with(|| {
                 let (source, _) = crate::source::load(&init, &rel);
                 let source = source.filter(|s| !s.is_lossy())?;
                 let file = source.file(&rel, &init)?;
                 standalone::dependence(file.module, &init, scope)
                     .is_none()
-                    .then(|| digest(source.bytes()))
+                    .then(|| ContentDigest::of(source.bytes()))
             });
-            out.push((rel, hash?));
+            out.push((rel, digest?));
         }
         out.reverse();
         Some(out)
@@ -359,8 +362,8 @@ impl Cache {
     fn key<'a>(
         &self,
         rel: &str,
-        digest: u128,
-        support: impl Iterator<Item = (&'a str, u128)>,
+        digest: ContentDigest,
+        support: impl Iterator<Item = (&'a str, ContentDigest)>,
     ) -> String {
         let mut hash = Fnv128::new();
         hash.part(&self.base.to_le_bytes());
@@ -445,19 +448,14 @@ impl Collector<'_> {
     }
 }
 
-/// The content digest of a file.
-pub(crate) fn digest(bytes: &[u8]) -> u128 {
-    Fnv128::hash(bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
     use aye_engine::Setting;
-    use aye_events::AdapterName;
+    use aye_events::{AdapterName, ContentDigest};
 
-    use super::{Cache, FORMAT, digest};
+    use super::{Cache, FORMAT};
 
     /// A cache entry's key, from the run's inputs, the adapter's, the file
     /// and its support files, pinned: entries written by another aye of
@@ -483,8 +481,8 @@ mod tests {
             &serde_json::json!({"native": {"rootdir": "relative", "args": ["-x"]}}),
             &settings,
         );
-        let file = digest(b"def test_a(): pass\n");
-        let support = [("conftest.py", digest(b"import pytest\n"))];
+        let file = ContentDigest::of(b"def test_a(): pass\n");
+        let support = [("conftest.py", ContentDigest::of(b"import pytest\n"))];
         assert_eq!(
             cache.key("tests/test_a.py", file, support.into_iter()),
             "2b8d189545df6dd813e51e0ff1f3a71b"
