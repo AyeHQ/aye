@@ -1,0 +1,1 @@
+{"version":1,"run":"r2","root":"/project","started_ms":1793266962953,"finished_ms":1793266963154,"exit_code":1,"counts":{"passed":6,"failed":7,"error":2,"skipped":3,"expected_failure":1,"unexpected_pass":1,"deselected":0},"ms":199,"files":{"tests/test_outcomes.py":"7308cd3ec608fd8de716c860fa6d4ef1","tests/test_subtests.py":"7aef44fe0bddeefaff23d9f70a44a9f8"}}

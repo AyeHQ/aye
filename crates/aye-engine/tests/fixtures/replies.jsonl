@@ -1,0 +1,8 @@
+{"reply":"ready","protocol":3,"pid":70162,"python":"/usr/bin/python3","version":"3.13.1 (main, Dec 19 2024, 14:22:59) [Clang 18.1.8 ]"}
+{"reply":"refined","cases":[{"id":"tests/test_dynamic.py::test_x[1]","adapter":"pytest","span":{"path":"tests/test_dynamic.py","start":0,"end":0,"line":4},"tags":["parametrize"],"keywords":["test_x[1]","test_dynamic.py","tests"],"affinity":["tests/test_dynamic.py"],"certainty":"refined"},{"id":"tests/test_dynamic.py::test_y","adapter":"pytest","certainty":"exact"}],"diagnostics":[{"severity":"info","code":"skipped","path":"tests/test_skip.py","message":"skipped by pytest"},{"severity":"error","code":"collection-error","path":"tests/test_bad.py","span":{"path":"tests/test_bad.py","start":3,"end":9,"line":1},"message":"ImportError: No module named 'nope'"}],"digests":{"tests/test_dynamic.py":"da39a3ee5e6b4b0d3255bfef95601890afd80709","tests/test_skip.py":"0000000000000000000000000000000000000000"}}
+{"reply":"refined","cases":[],"diagnostics":[]}
+{"reply":"refined","cases":[],"diagnostics":[],"digests":{}}
+{"reply":"batch_done","batch":3,"status":1}
+{"reply":"batch_done","batch":4,"status":-1}
+{"reply":"batch_done","batch":0}
+{"reply":"failed","message":"[… truncated]\nTraceback (most recent call last):\n  File \"<aye:aye_worker>\", line 3\nRuntimeError: \"boom\"\n"}
