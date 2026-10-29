@@ -581,6 +581,52 @@ fn error(code: &str, path: &str) -> Event {
     })
 }
 
+/// Every diagnostic code aye 0.0.1 knows, and one it doesn't, with whether
+/// an error with it gives a run something to show, before any batch and
+/// from one.
+const SHOWS: [(&str, bool, bool); 26] = [
+    ("syntax-error", true, true),
+    ("unreadable", true, true),
+    ("not-found", false, true),
+    ("unclaimed", false, false),
+    ("duplicate-id", true, true),
+    ("no-tests", true, true),
+    ("not-refined", true, true),
+    ("refine-failed", true, true),
+    ("class-has-init", true, true),
+    ("duplicate-definition", true, true),
+    ("collection-error", true, true),
+    ("usage-error", true, true),
+    ("unknown-option", true, true),
+    ("plugin-not-loaded", true, true),
+    ("internal-error", true, true),
+    ("skipped", true, true),
+    ("ignored", true, true),
+    ("batch-stopped", true, true),
+    ("session-failed", true, true),
+    ("protocol-error", true, true),
+    ("batch-failed", true, true),
+    ("no-executor", true, true),
+    ("listing-differs", true, true),
+    ("stand-in", true, true),
+    ("adapter-error", true, true),
+    ("some-other-code", true, true),
+];
+
+#[test]
+fn every_code_shows_as_before() {
+    for (code, before, from_batch) in SHOWS {
+        let mut record = Record::new(error(code, "tests/t.py"));
+        let before_batches = shows(&record);
+        record.envelope.batch = Some(0);
+        assert_eq!(
+            (before_batches, shows(&record)),
+            (before, from_batch),
+            "{code}"
+        );
+    }
+}
+
 #[test]
 fn a_run_with_nothing_to_show_leaves_no_trace() {
     let project = project();

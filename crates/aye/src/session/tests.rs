@@ -424,6 +424,74 @@ fn diagnostic_codes_choose_the_exit_code() {
     assert!(errors.not_found);
 }
 
+/// Every diagnostic code aye 0.0.1 knows, and one it doesn't, with what an
+/// error with it decides of the exit code, as 0.0.1 decides it, before any
+/// batch and from one: `usage` (4), `internal` (3), or `error`, which fails
+/// the run as the rest of it says (2, or 1). Collection's diagnostics come
+/// before any batch.
+const EXIT: [(&str, &str, &str); 26] = [
+    ("syntax-error", "error", "error"),
+    ("unreadable", "error", "error"),
+    ("not-found", "usage", "error"),
+    ("unclaimed", "usage", "usage"),
+    ("duplicate-id", "error", "error"),
+    ("no-tests", "error", "error"),
+    ("not-refined", "error", "error"),
+    ("refine-failed", "error", "error"),
+    ("class-has-init", "error", "error"),
+    ("duplicate-definition", "error", "error"),
+    ("collection-error", "error", "error"),
+    ("usage-error", "usage", "usage"),
+    ("unknown-option", "error", "error"),
+    ("plugin-not-loaded", "error", "error"),
+    ("internal-error", "internal", "internal"),
+    ("skipped", "error", "error"),
+    ("ignored", "error", "error"),
+    ("batch-stopped", "error", "error"),
+    ("session-failed", "error", "error"),
+    ("protocol-error", "error", "error"),
+    ("batch-failed", "error", "error"),
+    ("no-executor", "error", "error"),
+    ("listing-differs", "error", "error"),
+    ("stand-in", "error", "error"),
+    ("adapter-error", "error", "error"),
+    ("some-other-code", "error", "error"),
+];
+
+/// An error diagnostic with each code decides the exit code as in 0.0.1:
+/// collection's (before any batch, where a `not-found` names what the
+/// command line asked for) as `run` decides on them before the run, and
+/// a batch's as `run_exit_code` does after it.
+#[test]
+fn every_code_decides_the_exit_code_as_before() {
+    for (code, before, from_batch) in EXIT {
+        let mut errors = Errors::default();
+        errors.see(&Diagnostic {
+            severity: Severity::Error,
+            code: code.into(),
+            path: DiagnosticPath::Nowhere,
+            span: None,
+            message: String::new(),
+        });
+        assert!(errors.any, "{code}");
+        let collecting = if errors.internal {
+            "internal"
+        } else if errors.not_found || errors.usage {
+            "usage"
+        } else {
+            "error"
+        };
+        let running = if errors.internal {
+            "internal"
+        } else if errors.usage {
+            "usage"
+        } else {
+            "error"
+        };
+        assert_eq!((collecting, running), (before, from_batch), "{code}");
+    }
+}
+
 /// A recognizer that collects nothing and hands out `context`.
 struct Context(serde_json::Value);
 
