@@ -2,9 +2,11 @@
 //! engine: it prepares a [`Recognizer`] for a [`Project`] (or fails with an
 //! [`AdapterError`]), and gives the runtime face a worker installs
 //! ([`Executor`]). The recognizer is its static face: it [`Claim`]s paths,
-//! predicts the tests of a parsed [`SourceFile`] (a [`Recognition`]), and
-//! reports the [`Setting`]s it resolved, for `aye config`. Ruff's syntax
-//! tree, line index and text ranges are re-exported ([`ast`],
+//! predicts the tests of a parsed [`SourceFile`] (a [`Recognition`]),
+//! reports the [`Setting`]s it resolved, for `aye config`, says what the
+//! framework's own configuration says about the run ([`FrameworkDefaults`],
+//! with [`JunitDefaults`]), and gives the context its executor gets. Ruff's
+//! syntax tree, line index and text ranges are re-exported ([`ast`],
 //! [`LineIndex`], [`TextRange`], [`TextSize`], [`Ranged`]), so collection
 //! and every adapter name the one version of them aye pins.
 //!
@@ -19,10 +21,10 @@
 //! `aye-adapter-*` crates; the worker protocol (`aye-protocol`); aye's
 //! engine (`aye-engine`).
 //!
-//! Depends on: aye-events, aye-protocol, and Ruff's `ruff_python_ast`,
-//! `ruff_source_file` and `ruff_text_size`, with the `get-size2` pin that
-//! goes with them (see the workspace `Cargo.toml`). Must not depend on the
-//! runner or any adapter.
+//! Depends on: aye-events, aye-protocol, aye-config (for the worker
+//! count), and Ruff's `ruff_python_ast`, `ruff_source_file` and
+//! `ruff_text_size`, with the `get-size2` pin that goes with them (see the
+//! workspace `Cargo.toml`). Must not depend on the runner or any adapter.
 //!
 //! Open: how rich affinity/scope declarations must be to carry pytest's five
 //! fixture scopes and unittest's class/module setup.
@@ -46,8 +48,9 @@
 
 use std::path::{Path, PathBuf};
 
-use aye_events::{AdapterName, Case, Diagnostic, LineNumber, ProjectPathRef, Span};
-use aye_protocol::{AdapterContext, Executor};
+use aye_config::WorkerCount;
+use aye_events::{AdapterName, Case, Diagnostic, IdPrefix, LineNumber, ProjectPathRef, Span};
+use aye_protocol::{AdapterContext, Executor, MaxFail};
 use serde::{Deserialize, Serialize};
 
 pub use ruff_python_ast as ast;
@@ -186,6 +189,57 @@ pub struct Setting {
     pub origin: String,
 }
 
+/// What a framework's own configuration says about the run as a whole
+/// (pytest's options: addopts, `PYTEST_ADDOPTS`, the arguments after
+/// `--`), for the binary to go by where aye's own settings say nothing.
+/// Of those that hold one value for the run, the binary takes each from
+/// the first adapter, in priority order, that gives it; the expressions
+/// and the prefixes apply to the adapter's own cases.
+///
+/// Its adapter's context carries the same, under the keys it always had
+/// (`xdist_workers`, `maxfail`, `keyword`, `tags`, `deselect`, `junitxml`,
+/// `junit_prefix`, `junit_*`), since the refinement cache's key hashes the
+/// context.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FrameworkDefaults {
+    /// The worker count (pytest-xdist's `-n`).
+    pub workers: Option<WorkerCount>,
+    /// The `maxfail` (pytest's `-x` or `--maxfail N`).
+    pub maxfail: Option<MaxFail>,
+    /// The `-k` expression selection applies to the adapter's cases when
+    /// the command line gives none, so that the tests it drops are counted
+    /// as deselected.
+    pub keyword: Option<String>,
+    /// The `-m` expression, likewise.
+    pub tags: Option<String>,
+    /// The prefixes of aye's ids selection drops from the adapter's cases,
+    /// counting them as deselected (pytest's `--deselect`).
+    pub deselect: Vec<IdPrefix>,
+    /// How the JUnit report is written, and where.
+    pub junit: JunitDefaults,
+}
+
+/// What a framework's configuration says about the JUnit report aye
+/// writes, in pytest's spellings.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JunitDefaults {
+    /// Where it goes (pytest's `--junitxml`), absolute; empty for no
+    /// report.
+    pub path: Option<PathBuf>,
+    /// What goes before its classnames (`--junitprefix`).
+    pub prefix: Option<String>,
+    /// `junit_suite_name`.
+    pub suite_name: Option<String>,
+    /// `junit_logging`.
+    pub logging: Option<String>,
+    /// `junit_log_passing_tests`.
+    pub log_passing_tests: Option<bool>,
+    /// `junit_duration_report`.
+    pub duration_report: Option<String>,
+    /// `junit_family`.
+    pub family: Option<String>,
+}
+
 /// An adapter's static face, configured for one project.
 pub trait Recognizer: Send + Sync {
     /// Where to look when no paths are given (pytest's `testpaths`, or the
@@ -207,6 +261,12 @@ pub trait Recognizer: Send + Sync {
     /// The settings this recognizer resolved, with origins.
     fn settings(&self) -> Vec<Setting> {
         Vec::new()
+    }
+
+    /// What the framework's own configuration says about the run. None by
+    /// default.
+    fn defaults(&self) -> FrameworkDefaults {
+        FrameworkDefaults::default()
     }
 
     /// Adapter-specific context sent with every batch and refinement

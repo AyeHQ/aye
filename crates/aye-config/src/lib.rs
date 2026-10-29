@@ -3,8 +3,9 @@
 //! upward search) that engines use to read their own framework's settings. Every
 //! resolved value remembers its origin for `aye config`.
 //!
-//! Owns: loading and origins. Does not own: the meaning of any framework's
-//! options; `python_files` means something to the pytest engine, not here.
+//! Owns: loading and origins, and the worker count a run asks for
+//! ([`WorkerCount`]). Does not own: the meaning of any framework's options;
+//! `python_files` means something to the pytest engine, not here.
 //!
 //! Depends on: aye-fs, for the lexical path algebra the root is found
 //! with.
@@ -36,6 +37,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use serde::Deserialize;
 
@@ -323,6 +325,41 @@ impl AyeSettings {
             "unittest" => self.unittest.as_ref(),
             "doctest" => self.doctest.as_ref(),
             _ => None,
+        }
+    }
+}
+
+/// How many workers a run asks for, as `-n` and pytest-xdist's `-n` read
+/// it: a number, or `auto` (and pytest-xdist's `logical`) for one per CPU.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerCount {
+    Auto,
+    /// A number of workers; 0 is one, as `-n 0` is.
+    Count(u32),
+}
+
+impl WorkerCount {
+    /// The number of workers: a count as given, 0 being one; for `Auto`,
+    /// the CPUs the process may use, else one.
+    pub fn resolve(self) -> u32 {
+        match self {
+            Self::Count(n) => n.max(1),
+            Self::Auto => std::thread::available_parallelism()
+                .map_or(1, |n| u32::try_from(n.get()).unwrap_or(1)),
+        }
+    }
+}
+
+impl FromStr for WorkerCount {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "auto" | "logical" => Ok(Self::Auto),
+            n => n
+                .parse()
+                .map(Self::Count)
+                .map_err(|_| format!("expected a number or `auto`, got `{n}`")),
         }
     }
 }

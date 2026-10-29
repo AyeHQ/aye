@@ -511,45 +511,65 @@ fn every_code_decides_the_exit_code_as_before() {
     }
 }
 
-/// A recognizer that collects nothing and hands out `context`.
-struct Context(serde_json::Value);
-
-impl aye_adapter::Recognizer for Context {
-    fn roots(&self, _: &Project<'_>) -> Vec<PathBuf> {
-        Vec::new()
-    }
-
-    fn descend(&self, _: &Path) -> bool {
-        false
-    }
-
-    fn claim(&self, _: &str, _: bool) -> aye_adapter::Claim {
-        aye_adapter::Claim::Ignore
-    }
-
-    fn recognize(
-        &self,
-        _: &aye_adapter::SourceFile<'_>,
-        _: &[aye_adapter::SourceFile<'_>],
-    ) -> aye_adapter::Recognition {
-        aye_adapter::Recognition::default()
-    }
-
-    fn context(&self) -> aye_protocol::AdapterContext {
-        self.0.clone().into()
+/// What aye 0.0.1's binary read from an adapter's context, each key as it
+/// read it: its text (a worker count it couldn't read was one), a limit
+/// above 0, the strings of `deselect`, and `junit_log_passing_tests` as a
+/// bool, or as text pytest's `_strtobool` reads, but for spaces. The
+/// adapters' contexts still carry these keys; their [`FrameworkDefaults`]
+/// must say the same.
+fn hints(context: &serde_json::Value) -> FrameworkDefaults {
+    let text = |key: &str| {
+        context
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    FrameworkDefaults {
+        workers: text("xdist_workers").map(|n| n.parse().unwrap_or(WorkerCount::Count(1))),
+        maxfail: context
+            .get("maxfail")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .and_then(MaxFail::new),
+        keyword: text("keyword"),
+        tags: text("tags"),
+        deselect: context
+            .get("deselect")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(aye_events::IdPrefix::from)
+            .collect(),
+        junit: aye_adapter::JunitDefaults {
+            path: text("junitxml").map(PathBuf::from),
+            prefix: text("junit_prefix"),
+            suite_name: text("junit_suite_name"),
+            logging: text("junit_logging"),
+            log_passing_tests: match context.get("junit_log_passing_tests") {
+                Some(serde_json::Value::Bool(value)) => Some(*value),
+                Some(serde_json::Value::String(value)) => {
+                    match value.to_ascii_lowercase().as_str() {
+                        "y" | "yes" | "t" | "true" | "on" | "1" => Some(true),
+                        "n" | "no" | "f" | "false" | "off" | "0" => Some(false),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            },
+            duration_report: text("junit_duration_report"),
+            family: text("junit_family"),
+        },
     }
 }
 
-/// Adapters with these contexts, named `pytest`, `doctest` and `unittest`
-/// in turn.
-fn prepared(contexts: &[serde_json::Value]) -> Vec<Prepared> {
+/// Adapters whose frameworks say what these contexts' keys say ([`hints`]),
+/// named `pytest`, `doctest` and `unittest` in turn.
+fn from_contexts(contexts: &[serde_json::Value]) -> Vec<(AdapterName, FrameworkDefaults)> {
     contexts
         .iter()
         .zip(["pytest", "doctest", "unittest"])
-        .map(|(context, name)| {
-            let recognizer: Box<dyn aye_adapter::Recognizer> = Box::new(Context(context.clone()));
-            (name.into(), recognizer)
-        })
+        .map(|(context, name)| (name.into(), hints(context)))
         .collect()
 }
 
@@ -570,7 +590,7 @@ fn expressions_for(
     argv: &[&str],
     contexts: &[serde_json::Value],
 ) -> (Option<String>, Option<String>) {
-    let selection = selection(&args(argv), [], &prepared(contexts)).unwrap();
+    let selection = selection(&args(argv), [], &from_contexts(contexts)).unwrap();
     let text = |e: Option<&aye_select::Expression>| e.map(|e| e.as_str().to_string());
     (
         text(
@@ -670,7 +690,7 @@ fn only_the_command_lines_malformed_expressions_are_usage_errors() {
         &["-k", "not (", "--", "-k", "x"],
     ] {
         assert!(
-            selection(&args(argv), [], &prepared(&[])).is_err(),
+            selection(&args(argv), [], &from_contexts(&[])).is_err(),
             "{argv:?}"
         );
     }
@@ -679,7 +699,7 @@ fn only_the_command_lines_malformed_expressions_are_usage_errors() {
 #[test]
 fn the_junit_report_can_come_from_the_framework() {
     let cwd = Path::new("/work/sub");
-    let context = |path: &str| prepared(&[serde_json::json!({ "junitxml": path })]);
+    let context = |path: &str| from_contexts(&[serde_json::json!({ "junitxml": path })]);
     assert_eq!(
         junit_path(cwd, None, &context("reports/out.xml")),
         Some(PathBuf::from("/work/sub/reports/out.xml"))
@@ -700,7 +720,7 @@ fn the_junit_report_can_come_from_the_framework() {
     // pytest writes no report for an empty path.
     assert_eq!(junit_path(cwd, None, &context("")), None);
     assert_eq!(
-        junit_path(cwd, None, &prepared(&[serde_json::Value::Null])),
+        junit_path(cwd, None, &from_contexts(&[serde_json::Value::Null])),
         None
     );
     assert_eq!(junit_path(cwd, None, &[]), None);
@@ -722,7 +742,7 @@ fn the_junit_report_can_come_from_the_framework() {
     );
     // pytest's `--junitprefix` comes with it.
     assert_eq!(
-        junit_prefix(&prepared(&[
+        junit_prefix(&from_contexts(&[
             serde_json::Value::Null,
             serde_json::json!({ "junit_prefix": "ci" })
         ])),
@@ -910,7 +930,7 @@ fn a_framework_that_failed_a_clean_batch_fails_the_run() {
 fn the_junit_report_follows_the_frameworks_settings() {
     assert_eq!(junit_options(&[]), JunitOptions::default());
     assert_eq!(
-        junit_options(&prepared(&[serde_json::json!({ "rootdir": "/repo" })])),
+        junit_options(&from_contexts(&[serde_json::json!({ "rootdir": "/repo" })])),
         JunitOptions::default()
     );
     let pytest = serde_json::json!({
@@ -921,7 +941,7 @@ fn the_junit_report_follows_the_frameworks_settings() {
         "junit_family": "legacy",
     });
     assert_eq!(
-        junit_options(&prepared(&[serde_json::json!({}), pytest])),
+        junit_options(&from_contexts(&[serde_json::json!({}), pytest])),
         JunitOptions {
             suite_name: "mysuite".into(),
             logging: JunitLogging::OutErr,
@@ -939,7 +959,7 @@ fn the_junit_report_follows_the_frameworks_settings() {
         "junit_family": "xunit2",
     });
     assert_eq!(
-        junit_options(&prepared(&[defaults])),
+        junit_options(&from_contexts(&[defaults])),
         JunitOptions {
             suite_name: "pytest".into(),
             logging: JunitLogging::No,
@@ -958,11 +978,110 @@ fn the_junit_report_follows_the_frameworks_settings() {
     ] {
         let context = serde_json::json!({ "junit_log_passing_tests": value });
         assert_eq!(
-            junit_options(&prepared(&[context])).log_passing_tests,
+            junit_options(&from_contexts(&[context])).log_passing_tests,
             expected,
             "{value}"
         );
     }
+}
+
+/// Each adapter's [`FrameworkDefaults`] say what its context's keys say, as
+/// aye 0.0.1's binary read them ([`hints`]): with pytest's options and ini
+/// setting every one, a `-n` aye can't read, `-n logical`, `--maxfail=0`,
+/// and `junit_log_passing_tests` as text pytest reads and doesn't.
+#[test]
+fn the_adapters_defaults_are_what_their_contexts_say() {
+    let names = [
+        aye_adapter_pytest::NAME,
+        aye_adapter_doctest::NAME,
+        aye_adapter_unittest::NAME,
+    ];
+    let adapters: [Box<dyn Adapter>; 3] = [
+        Box::new(aye_adapter_pytest::Pytest::default()),
+        Box::new(aye_adapter_doctest::Doctest),
+        Box::new(aye_adapter_unittest::Unittest),
+    ];
+    let projects: [(&str, &str); 6] = [
+        ("pyproject.toml", "[project]\nname = \"x\"\n"),
+        (
+            "pytest.ini",
+            "[pytest]\naddopts = -n 3 --maxfail=2 --junitxml=out.xml --junitprefix=ci \
+             -k \"not slow\" -m db --deselect t.py::x --doctest-modules\n\
+             junit_family = xunit1\njunit_log_passing_tests = no\njunit_suite_name = s\n\
+             junit_logging = all\njunit_duration_report = call\n",
+        ),
+        (
+            "pytest.ini",
+            "[pytest]\naddopts = -n many -x --doctest-modules\n",
+        ),
+        (
+            "pytest.ini",
+            "[pytest]\naddopts = -n logical --maxfail=0 --doctest-modules\n\
+             junit_log_passing_tests = maybe\n",
+        ),
+        (
+            "pyproject.toml",
+            "[tool.pytest.ini_options]\naddopts = \"-n auto --doctest-modules\"\n\
+             junit_log_passing_tests = \" false\"\n",
+        ),
+        (
+            "pyproject.toml",
+            "[tool.pytest.ini_options]\naddopts = \"--doctest-modules\"\n\
+             junit_log_passing_tests = false\n",
+        ),
+    ];
+    let mut seen = Vec::new();
+    for (at, (name, body)) in projects.into_iter().enumerate() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join(name), body).unwrap();
+        let project = Project {
+            root,
+            cwd: root,
+            args: &[],
+            config_file: None,
+            framework_args: &[],
+        };
+        for adapter in &adapters {
+            let Some(recognizer) = adapter.prepare_among(&project, &names).unwrap() else {
+                continue;
+            };
+            let defaults = recognizer.defaults();
+            assert_eq!(
+                defaults,
+                hints(recognizer.context().as_value()),
+                "{} with {body}",
+                adapter.name()
+            );
+            seen.push((at, adapter.name(), defaults));
+        }
+    }
+    let of = |name: AdapterName, at: usize| {
+        &seen
+            .iter()
+            .find(|(seen_at, seen_name, _)| *seen_at == at && *seen_name == name)
+            .unwrap()
+            .2
+    };
+    let pytest = |at: usize| of(aye_adapter_pytest::NAME, at);
+    assert_eq!(pytest(1).workers, Some(WorkerCount::Count(3)));
+    assert_eq!(pytest(1).maxfail, MaxFail::new(2));
+    assert_eq!(pytest(1).keyword.as_deref(), Some("not slow"));
+    assert_eq!(pytest(1).junit.log_passing_tests, Some(false));
+    assert_eq!(pytest(2).workers, Some(WorkerCount::Count(1)));
+    assert_eq!(pytest(3).workers, Some(WorkerCount::Auto));
+    assert_eq!(pytest(3).maxfail, None);
+    let doctest = |at: usize| of(aye_adapter_doctest::NAME, at);
+    assert_eq!(doctest(1).deselect, [aye_events::IdPrefix::from("t.py::x")]);
+    assert_eq!(doctest(1).junit.log_passing_tests, Some(false));
+    assert_eq!(doctest(1).junit.family.as_deref(), Some("xunit1"));
+    assert_eq!(doctest(2).maxfail, MaxFail::new(1));
+    assert_eq!(doctest(3).junit.log_passing_tests, None);
+    assert_eq!(doctest(4).junit.log_passing_tests, None);
+    assert_eq!(
+        *of(aye_adapter_unittest::NAME, 0),
+        FrameworkDefaults::default()
+    );
 }
 
 /// C26: a rerun repeats aye's own options that shape the run, as given:
@@ -1001,7 +1120,7 @@ fn reruns_leave_native_out() {
 
 #[test]
 fn maxfail_after_the_double_dash_wins_over_the_command_lines() {
-    let none = prepared(&[serde_json::json!({ "maxfail": null })]);
+    let none = from_contexts(&[serde_json::json!({ "maxfail": null })]);
     // As pytest's `--maxfail 3 -x` and `-x --maxfail 3`: the arguments
     // after `--` come last.
     assert_eq!(
@@ -1015,7 +1134,7 @@ fn maxfail_after_the_double_dash_wins_over_the_command_lines() {
     assert_eq!(maxfail(&args(&["-x", "--", "--maxfail=0"]), &none), None);
     assert_eq!(maxfail(&args(&["-x", "--", "-v"]), &none), Some(1));
     // Without either, the framework's own (pytest's addopts).
-    let addopts = prepared(&[serde_json::json!({ "maxfail": 2 })]);
+    let addopts = from_contexts(&[serde_json::json!({ "maxfail": 2 })]);
     assert_eq!(maxfail(&args(&[]), &addopts), Some(2));
     assert_eq!(maxfail(&args(&["--maxfail", "5"]), &addopts), Some(5));
     assert_eq!(maxfail(&args(&["--maxfail", "0"]), &addopts), None);

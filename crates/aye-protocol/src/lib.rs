@@ -4,12 +4,12 @@
 //! [`BatchContext`]: the adapter's [`AdapterContext`] and the keys the binary
 //! and the runner add, [`context_keys`]; the shutdown), and the worker
 //! answers with [`WorkerLine`]s, each a control [`Reply`] or an event
-//! [`Record`]. Beside the messages: the protocol's version
-//! ([`PROTOCOL_VERSION`]), the names of the services a worker may provide
-//! ([`services`]), an adapter's runtime face ([`Executor`], with the
-//! [`EmbeddedModule`]s it installs), and the [`Refiner`] trait, which the
-//! runner implements and collection calls. `docs/protocol.md` describes the
-//! protocol on the wire.
+//! [`Record`]. Beside the messages: a `maxfail` limit ([`MaxFail`]), the
+//! protocol's version ([`PROTOCOL_VERSION`]), the names of the services a
+//! worker may provide ([`services`]), an adapter's runtime face
+//! ([`Executor`], with the [`EmbeddedModule`]s it installs), and the
+//! [`Refiner`] trait, which the runner implements and collection calls.
+//! `docs/protocol.md` describes the protocol on the wire.
 //!
 //! Runner → engine: services inside the worker (capture, coverage, soft sandbox,
 //! timeouts, current-test context, cleanup registration, resources, the
@@ -49,6 +49,7 @@
 //!   torn down once per worker.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 
 use aye_events::{AdapterName, BatchIndex, Case, Diagnostic, ProjectPath, Record, TestId};
 use serde::{Deserialize, Serialize};
@@ -197,6 +198,25 @@ pub struct Policy {
 
 const fn yes() -> bool {
     true
+}
+
+/// A `maxfail` limit: stop after this many bad outcomes. Never 0: a run
+/// without a limit (`--maxfail 0`) has no `MaxFail`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MaxFail(NonZeroU32);
+
+impl MaxFail {
+    /// The limit of `n` bad outcomes; `None` for 0, no limit.
+    pub const fn new(n: u32) -> Option<Self> {
+        match NonZeroU32::new(n) {
+            Some(n) => Some(Self(n)),
+            None => None,
+        }
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
 }
 
 impl Default for Policy {

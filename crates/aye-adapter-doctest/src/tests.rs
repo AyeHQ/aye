@@ -2390,3 +2390,47 @@ fn the_context_is_pinned_byte_for_byte() {
         pinned[..]
     );
 }
+
+/// The binary writes the JUnit report by the configuration's
+/// `junit_log_passing_tests`, which this adapter gives as its text, read as
+/// pytest's `bool`, as the binary read it before: a text that reads neither
+/// way (spaces around it included) leaves pytest's default.
+#[test]
+fn junit_log_passing_tests_reads_as_pytests_bool() {
+    for (text, expected) in [
+        ("False", Some(false)),
+        ("off", Some(false)),
+        ("YES", Some(true)),
+        ("1", Some(true)),
+        ("maybe", None),
+        (" false", None),
+    ] {
+        let recognizer = config(
+            &[(
+                "pyproject.toml",
+                &format!(
+                    "[tool.pytest.ini_options]\naddopts = \"--doctest-modules\"\n\
+                     junit_log_passing_tests = \"{text}\"\n"
+                ),
+            )],
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            recognizer.defaults().junit.log_passing_tests,
+            expected,
+            "{text:?}"
+        );
+    }
+    let unset = config(
+        &[("pytest.ini", "[pytest]\naddopts = --doctest-modules\n")],
+        &[],
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        unset.defaults().junit,
+        aye_adapter::JunitDefaults::default()
+    );
+}

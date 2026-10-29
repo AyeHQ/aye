@@ -6,14 +6,15 @@
 //! collected `Case` with its tags, requirements, affinity keys and
 //! certainty, run metadata (a framework's status for a batch, why a run
 //! stopped early), and the schema version; the identities and paths they
-//! hold, each taken apart in one place: the test id and its parts, its key,
-//! an adapter's name, a lifetime's id and the scope it opens, a case's
-//! affinity keys, a run's id and its number in the run store, its lanes and
-//! batches, the project-relative path, and what a diagnostic and a frame
-//! point at; the stamper that writes a run's part of each record's
-//! envelope; the diagnostic codes, with what an error means for the exit
-//! code, the summary and the run store; and FNV-1a, the one hash aye
-//! computes, with the digest of a file's content it gives.
+//! hold, each taken apart in one place: the test id and its parts, the
+//! prefixes that deselect tests, a test's key, an adapter's name, a
+//! lifetime's id and the scope it opens, a case's affinity keys, a run's id
+//! and its number in the run store, its lanes and batches, the
+//! project-relative path, and what a diagnostic and a frame point at; the
+//! stamper that writes a run's part of each record's envelope; the
+//! diagnostic codes, with what an error means for the exit code, the
+//! summary and the run store; and FNV-1a, the one hash aye computes, with
+//! the digest of a file's content it gives.
 //!
 //! A run is its event log: summaries, history rows, run diffs and every
 //! renderer are folds over it. Events are self-contained and bounded, and
@@ -62,7 +63,7 @@ pub use failure::{
     Assertion, Columns, Compare, CompareKind, ComparisonOp, Difference, Failure, FailureSignature,
     Frame, Local, Side,
 };
-pub use id::{AdapterName, InvalidKey, KeyPrefix, TestId, TestIdParts, TestKey};
+pub use id::{AdapterName, IdPrefix, InvalidKey, KeyPrefix, TestId, TestIdParts, TestKey};
 pub use lifetime::{LifetimeId, Scope};
 pub use outcome::{ExitCode, FrameworkStatus, Outcome, OutcomeTrail, Phase, StopReason};
 pub use path::{

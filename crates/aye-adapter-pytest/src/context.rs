@@ -1,8 +1,15 @@
 //! The pytest adapter's context ([`PytestContext`]): what the front-end
 //! needs to start as pytest would start itself, and what the runner takes
 //! from pytest's options, built once by the recognizer and sent with every
-//! batch and refinement.
+//! batch and refinement. The binary reads the latter as the adapter's
+//! [`FrameworkDefaults`] ([`PytestContext::defaults`]).
 
+use std::path::PathBuf;
+
+use aye_adapter::{FrameworkDefaults, JunitDefaults};
+use aye_config::WorkerCount;
+use aye_events::IdPrefix;
+use aye_protocol::MaxFail;
 use serde::Serialize;
 
 use crate::PytestRecognizer;
@@ -106,6 +113,30 @@ impl PytestContext {
                 .collect(),
             colliding_modules: recognizer.colliding().iter().cloned().collect(),
             native: None,
+        }
+    }
+
+    /// What the binary takes from pytest's options, as the context gives
+    /// it: a `-n` aye can't read runs one worker.
+    pub(crate) fn defaults(&self) -> FrameworkDefaults {
+        FrameworkDefaults {
+            workers: self
+                .xdist_workers
+                .as_deref()
+                .map(|n| n.parse().unwrap_or(WorkerCount::Count(1))),
+            maxfail: self.maxfail.and_then(MaxFail::new),
+            keyword: self.keyword.clone(),
+            tags: self.tags.clone(),
+            deselect: self.deselect.iter().cloned().map(IdPrefix::from).collect(),
+            junit: JunitDefaults {
+                path: self.junitxml.as_deref().map(PathBuf::from),
+                prefix: self.junit_prefix.clone(),
+                suite_name: Some(self.junit_suite_name.clone()),
+                logging: Some(self.junit_logging.clone()),
+                log_passing_tests: Some(self.junit_log_passing_tests),
+                duration_report: Some(self.junit_duration_report.clone()),
+                family: Some(self.junit_family.clone()),
+            },
         }
     }
 }

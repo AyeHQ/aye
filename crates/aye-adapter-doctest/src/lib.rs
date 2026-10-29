@@ -319,7 +319,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use aye_adapter::{
-    Adapter, AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile,
+    Adapter, AdapterError, Claim, FrameworkDefaults, Project, Recognition, Recognizer, Setting,
+    SourceFile,
 };
 use aye_events::{
     AdapterName, AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity, Span,
@@ -1345,6 +1346,12 @@ impl Recognizer for DoctestRecognizer {
     /// `--doctest-ignore-import-errors`: [`DoctestContext`].
     fn context(&self) -> AdapterContext {
         AdapterContext::of(self.doctest_context())
+    }
+
+    /// What the context's keys for the runner say
+    /// ([`DoctestContext::defaults`]).
+    fn defaults(&self) -> FrameworkDefaults {
+        self.doctest_context().defaults()
     }
 }
 

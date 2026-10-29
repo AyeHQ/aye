@@ -10,6 +10,7 @@ homepage.workspace = true
 authors.workspace = true
 
 [dependencies]
+aye-config = { workspace = true }
 aye-events = { workspace = true }
 aye-protocol = { workspace = true }
 get-size2 = { workspace = true } # version pin only; see the workspace Cargo.toml

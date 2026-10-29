@@ -34,7 +34,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use aye_adapter::{
-    Adapter, AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile,
+    Adapter, AdapterError, Claim, FrameworkDefaults, Project, Recognition, Recognizer, Setting,
+    SourceFile,
 };
 use aye_engine::{MODEL_MODULE, NATIVE_ENGINE_MODULE, REWRITE_MODULE};
 use aye_events::{AdapterName, Diagnostic, DiagnosticCode, Fnv64, Severity};
@@ -245,6 +246,10 @@ impl Recognizer for NativeRecognizer {
             native: Some(native_context(self.inner.config())),
             ..self.inner.pytest_context().clone()
         }))
+    }
+
+    fn defaults(&self) -> FrameworkDefaults {
+        self.inner.defaults()
     }
 }
 

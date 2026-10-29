@@ -10,9 +10,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
-use aye_adapter::{Adapter, Project};
+use aye_adapter::{Adapter, FrameworkDefaults, Project};
 use aye_collect::{Collector, Environment, Options, Prepared};
-use aye_config::AyeConfig;
+use aye_config::{AyeConfig, WorkerCount};
 use aye_events::{
     AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event,
     ExitCode, ProjectPath, Record, RerunCommand, RunId, SCHEMA_VERSION, Severity, Stamper,
@@ -20,7 +20,7 @@ use aye_events::{
 };
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter, StoredRunId};
-use aye_protocol::{Policy, Refiner};
+use aye_protocol::{MaxFail, Policy, Refiner};
 use aye_render::{
     ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
     JunitOptions, Reporter, Tally, Tee, Text, TextOptions,
@@ -29,17 +29,9 @@ use aye_runner::{Echo, Plan, Runner, RunnerOptions};
 use aye_select::Selection;
 use aye_static::EnvVars;
 
-use crate::args::{Args, Color, Maxfail, Output, Passed, Workers, passed, passed_maxfail};
+use crate::args::{Args, Color, Maxfail, Output, Passed, passed, passed_maxfail};
 use crate::busy::Busy;
 use crate::registry;
-
-/// Keys of an adapter's context the binary reads.
-mod keys {
-    /// Set by an adapter whose framework drops the tests whose ids start
-    /// with one of these (pytest's `--deselect`, relative to the root):
-    /// selection drops that adapter's cases and counts them as deselected.
-    pub(super) const DESELECT: &str = "deselect";
-}
 
 /// A run's inputs, resolved: everything wrong with the command line or the
 /// configuration fails here, before anything is reported. Selectors that
@@ -61,6 +53,9 @@ pub(crate) struct Session {
     adapters: Vec<Box<dyn Adapter>>,
     adapters_why: registry::Why,
     prepared: Vec<Prepared>,
+    /// What each prepared adapter's framework says about the run, in the
+    /// same order.
+    defaults: Vec<(AdapterName, FrameworkDefaults)>,
     selection: Selection,
     python: PathBuf,
     python_source: aye_runner::PythonSource,
@@ -169,26 +164,22 @@ impl Session {
             );
         }
         let prepared = prepare(&adapters, &project)?;
+        let defaults: Vec<(AdapterName, FrameworkDefaults)> = prepared
+            .iter()
+            .map(|(name, recognizer)| (name.clone(), recognizer.defaults()))
+            .collect();
 
         let selection = selection(
             &args,
             positionals.iter().map(|p| p.selector.as_str()),
-            &prepared,
+            &defaults,
         )?;
 
-        let from_framework = prepared.iter().find_map(|(_, r)| {
-            r.context()
-                .as_value()
-                .get("xdist_workers")
-                .and_then(|w| w.as_str())
-                .map(str::to_string)
-        });
-        let workers = match (args.workers, config.settings.workers, from_framework) {
-            (Some(w), _, _) => w.resolve(),
-            (None, Some(aye_config::Workers::Count(n)), _) => n.max(1),
-            (None, Some(aye_config::Workers::Keyword(_)), _) => Workers::Auto.resolve(),
-            (None, None, Some(w)) => w.parse::<Workers>().map_or(1, Workers::resolve),
-            (None, None, None) => 1,
+        let workers = match (args.workers, config.settings.workers) {
+            (Some(w), _) => w.resolve(),
+            (None, Some(aye_config::Workers::Count(n))) => n.max(1),
+            (None, Some(aye_config::Workers::Keyword(_))) => WorkerCount::Auto.resolve(),
+            (None, None) => first(&defaults, |d| d.workers).map_or(1, WorkerCount::resolve),
         };
 
         drop(busy);
@@ -203,6 +194,7 @@ impl Session {
             adapters,
             adapters_why,
             prepared,
+            defaults,
             selection,
             python,
             python_source,
@@ -664,7 +656,7 @@ impl Session {
     /// Else the framework's own setting (pytest's `addopts`,
     /// `PYTEST_ADDOPTS`); 0 means no limit.
     fn maxfail(&self) -> Option<u32> {
-        maxfail(&self.args, &self.prepared)
+        maxfail(&self.args, &self.defaults)
     }
 
     /// Where the JUnit XML report goes: `--junitxml`, read as pytest reads
@@ -673,7 +665,7 @@ impl Session {
     /// after `--` gives, from the adapter's context). Relative to the
     /// current directory; empty means none.
     fn junit(&self) -> Option<PathBuf> {
-        junit_path(&self.cwd, self.args.junit_xml.as_deref(), &self.prepared)
+        junit_path(&self.cwd, self.args.junit_xml.as_deref(), &self.defaults)
     }
 
     /// `--output`, else `[tool.aye] output`, else text.
@@ -725,8 +717,8 @@ impl Session {
         if let Some(path) = junit {
             tee.push(File {
                 inner: Junit::new(path)
-                    .with_prefix(junit_prefix(&self.prepared))
-                    .with_options(junit_options(&self.prepared)),
+                    .with_prefix(junit_prefix(&self.defaults))
+                    .with_options(junit_options(&self.defaults)),
                 failed: Arc::clone(file_failed),
             });
         }
@@ -1401,20 +1393,33 @@ impl Remember<'_> {
     }
 }
 
+/// The first adapter's `field`, in priority order, that gives one: what
+/// the run takes from the frameworks' own configuration where aye's says
+/// nothing.
+fn first<T>(
+    defaults: &[(AdapterName, FrameworkDefaults)],
+    field: impl Fn(&FrameworkDefaults) -> Option<T>,
+) -> Option<T> {
+    defaults.iter().find_map(|(_, defaults)| field(defaults))
+}
+
+/// Each adapter's `field`, for those that give one, in priority order.
+fn each<T>(
+    defaults: &[(AdapterName, FrameworkDefaults)],
+    field: impl Fn(&FrameworkDefaults) -> Option<T>,
+) -> Vec<(&AdapterName, T)> {
+    defaults
+        .iter()
+        .filter_map(|(name, defaults)| Some((name, field(defaults)?)))
+        .collect()
+}
+
 /// See [`Session::maxfail`].
-fn maxfail(args: &Args, prepared: &[Prepared]) -> Option<u32> {
+fn maxfail(args: &Args, defaults: &[(AdapterName, FrameworkDefaults)]) -> Option<u32> {
     match passed_maxfail(&args.passthrough).unwrap_or_else(|| args.maxfail()) {
         Maxfail::After(n) => Some(n),
         Maxfail::Unlimited => None,
-        Maxfail::Unset => prepared.iter().find_map(|(_, recognizer)| {
-            recognizer
-                .context()
-                .as_value()
-                .get("maxfail")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|n| u32::try_from(n).ok())
-                .filter(|n| *n > 0)
-        }),
+        Maxfail::Unset => first(defaults, |d| d.maxfail).map(MaxFail::get),
     }
 }
 
@@ -1531,68 +1536,43 @@ fn rerun_args(args: &Args) -> Vec<String> {
 }
 
 /// See [`Session::junit`].
-fn junit_path(cwd: &Path, given: Option<&Path>, prepared: &[Prepared]) -> Option<PathBuf> {
+fn junit_path(
+    cwd: &Path,
+    given: Option<&Path>,
+    defaults: &[(AdapterName, FrameworkDefaults)],
+) -> Option<PathBuf> {
     let path = match given {
         Some(given) => aye_fs::expand_path(&given.to_string_lossy(), |name| std::env::var_os(name)),
-        None => context_strings(prepared, "junitxml")
-            .into_iter()
-            .next()
-            .map(|(_, path)| PathBuf::from(path))?,
+        None => first(defaults, |d| d.junit.path.clone())?,
     };
     (!path.as_os_str().is_empty()).then(|| cwd.join(path))
 }
 
 /// What goes before the JUnit report's classnames: the framework's own
 /// (pytest's `--junitprefix`), wherever the report's path came from.
-fn junit_prefix(prepared: &[Prepared]) -> String {
-    context_strings(prepared, "junit_prefix")
-        .into_iter()
-        .next()
-        .map(|(_, prefix)| prefix)
-        .unwrap_or_default()
+fn junit_prefix(defaults: &[(AdapterName, FrameworkDefaults)]) -> String {
+    first(defaults, |d| d.junit.prefix.clone()).unwrap_or_default()
 }
 
 /// How the JUnit report is written: the framework's own settings, from the
-/// first adapter's context that gives each (pytest's `junit_suite_name`,
+/// first adapter that gives each (pytest's `junit_suite_name`,
 /// `junit_logging`, `junit_log_passing_tests`, `junit_duration_report` and
 /// `junit_family`, in pytest's spellings), else aye's own.
-fn junit_options(prepared: &[Prepared]) -> JunitOptions {
+fn junit_options(defaults: &[(AdapterName, FrameworkDefaults)]) -> JunitOptions {
     let mut options = JunitOptions::default();
-    let first = |key: &str| {
-        context_strings(prepared, key)
-            .into_iter()
-            .next()
-            .map(|(_, value)| value)
-    };
-    if let Some(name) = first("junit_suite_name") {
+    if let Some(name) = first(defaults, |d| d.junit.suite_name.clone()) {
         options.suite_name = name;
     }
-    if let Some(logging) = first("junit_logging") {
+    if let Some(logging) = first(defaults, |d| d.junit.logging.clone()) {
         options.logging = JunitLogging::from(logging.as_str());
     }
-    if let Some(duration) = first("junit_duration_report") {
+    if let Some(duration) = first(defaults, |d| d.junit.duration_report.clone()) {
         options.duration = JunitDuration::from(duration.as_str());
     }
-    if let Some(family) = first("junit_family") {
+    if let Some(family) = first(defaults, |d| d.junit.family.clone()) {
         options.family = JunitFamily::from(family.as_str());
     }
-    let log_passing_tests = prepared.iter().find_map(|(_, recognizer)| {
-        match recognizer
-            .context()
-            .as_value()
-            .get("junit_log_passing_tests")?
-        {
-            serde_json::Value::Bool(value) => Some(*value),
-            // pytest's `bool` ini values, as `_strtobool` reads them.
-            serde_json::Value::String(value) => match value.to_ascii_lowercase().as_str() {
-                "y" | "yes" | "t" | "true" | "on" | "1" => Some(true),
-                "n" | "no" | "f" | "false" | "off" | "0" => Some(false),
-                _ => None,
-            },
-            _ => None,
-        }
-    });
-    if let Some(value) = log_passing_tests {
+    if let Some(value) = first(defaults, |d| d.junit.log_passing_tests) {
         options.log_passing_tests = value;
     }
     options
@@ -1600,14 +1580,14 @@ fn junit_options(prepared: &[Prepared]) -> JunitOptions {
 
 /// What static selection keeps: the positional arguments' `selectors`, the
 /// `-k` and `-m` expressions [`pick`] picks, and each adapter's
-/// `--deselect` prefixes (`keys::DESELECT`). A malformed expression on the
-/// command line is a usage error, even where the arguments after `--`
-/// override it; the framework's own, should aye fail to parse it, drops no
-/// case.
+/// `--deselect` prefixes ([`FrameworkDefaults::deselect`]). A malformed
+/// expression on the command line is a usage error, even where the
+/// arguments after `--` override it; the framework's own, should aye fail
+/// to parse it, drops no case.
 fn selection<'s>(
     args: &Args,
     selectors: impl IntoIterator<Item = &'s str>,
-    prepared: &[Prepared],
+    defaults: &[(AdapterName, FrameworkDefaults)],
 ) -> Result<Selection, aye_select::SelectError> {
     if let Some(expr) = &args.keyword {
         Selection::default().with_keyword(expr)?;
@@ -1616,13 +1596,14 @@ fn selection<'s>(
         Selection::default().with_tags(expr)?;
     }
     let mut selection = Selection::default().with_ids(selectors);
+    let keyword = |d: &FrameworkDefaults| d.keyword.clone();
     let given = args.keyword.as_deref();
     match pick(given, passed(&args.passthrough, 'k')) {
         Pick::Given(expr) => {
             selection = selection.clone().with_keyword(&expr).unwrap_or(selection);
         }
         Pick::Unknown => {
-            for (name, expr) in unread(given, prepared, "keyword") {
+            for (name, expr) in unread(given, defaults, keyword) {
                 selection = selection
                     .clone()
                     .with_own_keyword(name.clone(), &expr)
@@ -1630,7 +1611,7 @@ fn selection<'s>(
             }
         }
         Pick::Own => {
-            for (name, expr) in context_strings(prepared, "keyword") {
+            for (name, expr) in each(defaults, keyword) {
                 selection = selection
                     .clone()
                     .with_own_keyword(name.clone(), &expr)
@@ -1638,13 +1619,14 @@ fn selection<'s>(
             }
         }
     }
+    let tags = |d: &FrameworkDefaults| d.tags.clone();
     let given = args.tags.as_deref();
     match pick(given, passed(&args.passthrough, 'm')) {
         Pick::Given(expr) => {
             selection = selection.clone().with_tags(&expr).unwrap_or(selection);
         }
         Pick::Unknown => {
-            for (name, expr) in unread(given, prepared, "tags") {
+            for (name, expr) in unread(given, defaults, tags) {
                 selection = selection
                     .clone()
                     .with_own_tags(name.clone(), &expr)
@@ -1652,7 +1634,7 @@ fn selection<'s>(
             }
         }
         Pick::Own => {
-            for (name, expr) in context_strings(prepared, "tags") {
+            for (name, expr) in each(defaults, tags) {
                 selection = selection
                     .clone()
                     .with_own_tags(name.clone(), &expr)
@@ -1660,63 +1642,28 @@ fn selection<'s>(
             }
         }
     }
-    for (name, recognizer) in prepared {
-        if let Some(prefixes) = recognizer
-            .context()
-            .as_value()
-            .get(keys::DESELECT)
-            .and_then(serde_json::Value::as_array)
-        {
-            selection = selection.with_deselect(
-                name.clone(),
-                prefixes
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::to_string),
-            );
-        }
+    for (name, defaults) in defaults {
+        selection = selection.with_deselect(name.clone(), defaults.deselect.iter().cloned());
     }
     Ok(selection)
 }
 
-/// The adapters' contexts' strings under `key`, by adapter, for those that
-/// give one.
-fn context_strings<'p>(prepared: &'p [Prepared], key: &str) -> Vec<(&'p AdapterName, String)> {
-    prepared
-        .iter()
-        .filter_map(|(name, recognizer)| {
-            recognizer
-                .context()
-                .as_value()
-                .get(key)
-                .and_then(serde_json::Value::as_str)
-                .map(|value| (name, value.to_string()))
-        })
-        .collect()
-}
-
-/// The `-k` or `-m` expressions (the context's `key`) static selection
+/// The `-k` or `-m` expressions (each adapter's `own`) static selection
 /// applies, by adapter, when the arguments after `--` may hold one aye can't
 /// read ([`Pick::Unknown`]): the command line's (`given`), else the
 /// adapter's own. No adapter applies an expression at runtime (aye's
 /// pytest front-end lists every test, and nothing re-reads those
 /// arguments' `-k` or `-m` in a batch), so static selection is the last
 /// word on every case.
-fn unread<'p>(
+fn unread<'d>(
     given: Option<&str>,
-    prepared: &'p [Prepared],
-    key: &str,
-) -> Vec<(&'p AdapterName, String)> {
-    let own = context_strings(prepared, key);
-    prepared
+    defaults: &'d [(AdapterName, FrameworkDefaults)],
+    own: impl Fn(&FrameworkDefaults) -> Option<String>,
+) -> Vec<(&'d AdapterName, String)> {
+    defaults
         .iter()
-        .map(|(name, _)| name)
-        .filter_map(|name| {
-            let expr = given.map(str::to_string).or_else(|| {
-                own.iter()
-                    .find(|(adapter, _)| *adapter == name)
-                    .map(|(_, expr)| expr.clone())
-            })?;
+        .filter_map(|(name, defaults)| {
+            let expr = given.map(str::to_string).or_else(|| own(defaults))?;
             Some((name, expr))
         })
         .collect()

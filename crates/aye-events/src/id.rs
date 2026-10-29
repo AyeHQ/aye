@@ -1,4 +1,5 @@
-//! Identities: of a test, its key, and an adapter's name.
+//! Identities: of a test, the prefixes that deselect tests, a test's key,
+//! and an adapter's name.
 
 use std::borrow::{Borrow, Cow};
 use std::fmt;
@@ -134,6 +135,49 @@ impl<'a> TestIdParts<'a> {
             names,
             params,
         }
+    }
+}
+
+/// The start of test ids that drops every test whose id starts with it, as
+/// text: pytest's `--deselect`, which matches node ids so, made relative to
+/// the project root. Kept as written; an empty one drops nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IdPrefix(Box<str>);
+
+impl IdPrefix {
+    pub fn new(prefix: impl Into<String>) -> Self {
+        Self(prefix.into().into_boxed_str())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Whether `id` starts with it.
+    pub fn is_prefix_of(&self, id: &TestId) -> bool {
+        id.as_str().starts_with(self.as_str())
+    }
+}
+
+impl From<&str> for IdPrefix {
+    fn from(prefix: &str) -> Self {
+        Self::new(prefix)
+    }
+}
+
+impl From<String> for IdPrefix {
+    fn from(prefix: String) -> Self {
+        Self::new(prefix)
+    }
+}
+
+impl fmt::Display for IdPrefix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 

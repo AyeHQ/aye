@@ -166,6 +166,7 @@ dependencies = [
 name = "aye-adapter"
 version = "0.0.1"
 dependencies = [
+ "aye-config",
  "aye-events",
  "aye-protocol",
  "get-size2",

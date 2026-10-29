@@ -98,7 +98,7 @@ mod selector;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use aye_events::{AdapterName, Case, Certainty, TestId};
+use aye_events::{AdapterName, Case, Certainty, IdPrefix, TestId};
 
 pub use expression::{Expression, Kwarg, ParseError, Truth, Value};
 pub use selector::Selector;
@@ -129,7 +129,7 @@ pub struct Selection {
     /// The ids that failed last time, when running last-failed (`--lf`).
     pub last_failed: Option<HashSet<TestId>>,
     /// Id prefixes each adapter drops (pytest's `--deselect`), by adapter.
-    pub deselect: BTreeMap<AdapterName, Vec<String>>,
+    pub deselect: BTreeMap<AdapterName, Vec<IdPrefix>>,
     /// Each adapter's own `-k` (or one the caller chose for its cases),
     /// for its cases when `keyword` is unset.
     pub own_keyword: BTreeMap<AdapterName, Expression>,
@@ -231,12 +231,12 @@ impl Selection {
     pub fn with_deselect<I>(mut self, adapter: impl Into<AdapterName>, prefixes: I) -> Self
     where
         I: IntoIterator,
-        I::Item: Into<String>,
+        I::Item: Into<IdPrefix>,
     {
-        let prefixes: Vec<String> = prefixes
+        let prefixes: Vec<IdPrefix> = prefixes
             .into_iter()
             .map(Into::into)
-            .filter(|prefix: &String| !prefix.is_empty())
+            .filter(|prefix: &IdPrefix| !prefix.is_empty())
             .collect();
         if !prefixes.is_empty() {
             self.deselect
@@ -418,11 +418,10 @@ impl Selection {
     /// framework deselects it itself.
     fn deselects(&self, case: &Case) -> bool {
         case.certainty != Certainty::Partial
-            && self.deselect.get(&case.adapter).is_some_and(|prefixes| {
-                prefixes
-                    .iter()
-                    .any(|prefix| case.id.as_str().starts_with(prefix.as_str()))
-            })
+            && self
+                .deselect
+                .get(&case.adapter)
+                .is_some_and(|prefixes| prefixes.iter().any(|prefix| prefix.is_prefix_of(&case.id)))
     }
 
     /// Whether another positional argument subsumes the one at `at` (an

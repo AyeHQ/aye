@@ -1,7 +1,14 @@
 //! The doctest adapter's context ([`DoctestContext`]): what the executor
 //! needs, and what the runner takes from pytest's options, built once by
-//! the recognizer and sent with every batch and refinement.
+//! the recognizer and sent with every batch and refinement. The binary
+//! reads the latter as the adapter's [`FrameworkDefaults`]
+//! ([`DoctestContext::defaults`]).
 
+use std::path::PathBuf;
+
+use aye_adapter::{FrameworkDefaults, JunitDefaults};
+use aye_events::IdPrefix;
+use aye_protocol::MaxFail;
 use serde::Serialize;
 
 use crate::DoctestRecognizer;
@@ -106,5 +113,36 @@ impl DoctestContext {
             junit_duration_report: junit("junit_duration_report"),
             junit_family: junit("junit_family"),
         }
+    }
+
+    /// What the binary takes from pytest's options, as the context gives
+    /// it: `junit_log_passing_tests` is the configuration's text, read as
+    /// pytest's `bool` ([`truth`]).
+    pub(crate) fn defaults(&self) -> FrameworkDefaults {
+        FrameworkDefaults {
+            maxfail: self.maxfail.and_then(MaxFail::new),
+            deselect: self.deselect.iter().cloned().map(IdPrefix::from).collect(),
+            junit: JunitDefaults {
+                path: self.junitxml.as_deref().map(PathBuf::from),
+                prefix: self.junit_prefix.clone(),
+                suite_name: self.junit_suite_name.clone(),
+                logging: self.junit_logging.clone(),
+                log_passing_tests: self.junit_log_passing_tests.as_deref().and_then(truth),
+                duration_report: self.junit_duration_report.clone(),
+                family: self.junit_family.clone(),
+            },
+            ..FrameworkDefaults::default()
+        }
+    }
+}
+
+/// A `bool` ini value's text as pytest's `_strtobool` reads it, but for
+/// the spaces around it, which aye 0.0.1's binary kept: `None` when it
+/// reads neither way, which leaves pytest's default.
+fn truth(text: &str) -> Option<bool> {
+    match text.to_ascii_lowercase().as_str() {
+        "y" | "yes" | "t" | "true" | "on" | "1" => Some(true),
+        "n" | "no" | "f" | "false" | "off" | "0" => Some(false),
+        _ => None,
     }
 }

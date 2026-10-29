@@ -468,7 +468,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use aye_adapter::{AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile};
+use aye_adapter::{
+    AdapterError, Claim, FrameworkDefaults, Project, Recognition, Recognizer, Setting, SourceFile,
+};
 use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 use aye_fs::normalize_absolute;
 use aye_protocol::AdapterContext;
@@ -2053,5 +2055,10 @@ impl Recognizer for PytestRecognizer {
     /// what the runner takes from pytest's options: [`PytestContext`].
     fn context(&self) -> AdapterContext {
         AdapterContext::of(self.pytest_context())
+    }
+
+    /// What the context's keys for the runner say ([`PytestContext::defaults`]).
+    fn defaults(&self) -> FrameworkDefaults {
+        self.pytest_context().defaults()
     }
 }
