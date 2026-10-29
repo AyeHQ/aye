@@ -1,0 +1,18 @@
+---
+source: crates/aye/tests/snapshots.rs
+info:
+  program: aye
+  args:
+    - "--python"
+    - "[PYTHON]"
+  env:
+    COLUMNS: "120"
+    NO_COLOR: "1"
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+---
+success: false
+exit_code: 4
+----- stdout -----
+
+----- stderr -----
+aye: error: invalid [tool.aye] in [ROOT]/pyproject.toml: output = "human": expected text or json; "human" is now "text"

@@ -1,0 +1,22 @@
+---
+source: crates/aye/tests/snapshots.rs
+info:
+  program: aye
+  args:
+    - "--python"
+    - "[PYTHON]"
+    - "--output"
+    - human
+  env:
+    COLUMNS: "120"
+    NO_COLOR: "1"
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+---
+success: false
+exit_code: 4
+----- stdout -----
+
+----- stderr -----
+error: invalid value 'human' for '--output <FORMAT>': `human` is now `text`, the default: use `--output text`
+
+For more information, try '--help'.

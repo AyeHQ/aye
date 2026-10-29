@@ -1900,6 +1900,49 @@ def test_installed_as_pytest_it_shadows_pytest_and_serves_the_private_modules(tm
     assert report["reinstalled"] == [True, 1]
 
 
+AFTER_REAL_PYTEST = r"""
+import json, sys, types
+
+import _pytest.outcomes
+
+real = sys.modules["_pytest"]
+for name, path in (("aye_engine", sys.argv[2]), ("pytest", sys.argv[1])):
+    module = types.ModuleType(name)
+    sys.modules[name] = module
+    with open(path, encoding="utf-8") as file:
+        exec(compile(file.read(), f"<aye:{name}>", "exec"), module.__dict__)
+import pytest
+print(json.dumps({
+    "is_aye": getattr(pytest, "__aye__", False),
+    "_pytest kept": sys.modules["_pytest"] is real,
+    "outcomes kept": sys.modules["_pytest.outcomes"] is _pytest.outcomes,
+    "finders": sum(type(f).__name__ == "_PrivateModules" for f in sys.meta_path),
+    "installed again": pytest._aye_install_private_modules(),
+}))
+"""
+
+
+def test_installed_as_pytest_after_a_real_pytest_it_serves_no_private_module(tmp_path):
+    # A real ``_pytest`` imported first stays: aye's module installs no
+    # alias over it (docs/reorganisation.md §7.2).
+    done = subprocess.run(
+        [sys.executable, "-c", AFTER_REAL_PYTEST, str(SHIM_PATH), str(ENGINE / "aye_engine.py")],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        timeout=60,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout) == {
+        "is_aye": True,
+        "_pytest kept": True,
+        "outcomes kept": True,
+        "finders": 0,
+        "installed again": False,
+    }
+
+
 DOCTEST_ADAPTER = HERE.parents[3] / "aye-engine-doctest" / "python" / "aye_engine_doctest.py"
 
 FOUND = r"""

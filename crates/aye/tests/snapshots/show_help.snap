@@ -1,0 +1,86 @@
+---
+source: crates/aye/tests/snapshots.rs
+info:
+  program: aye
+  args:
+    - show
+    - "--help"
+  env:
+    COLUMNS: "120"
+    NO_COLOR: "1"
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+---
+success: true
+exit_code: 0
+----- stdout -----
+Show a stored run's results again, without running anything.
+
+aye keeps each run that ran something in `.aye/runs` (`[tool.aye] keep-runs`, 10 by default),
+numbered `r1`, `r2`, … With no test named, the list of the last run: a line per result (each test
+with its outcome, and for a failure its key and why; each failed lifetime, collection error or
+module skipped while collecting), then the run's summary; paths alone filter it. Name tests to see
+them in detail, as the run showed them: by the key the run printed (`aye show 3fae6`) or its start
+(from 4 digits), test id or dotted name (a class's id shows its failed setup or teardown too), and
+paths then select their tests too; `--failed` gives the details of everything that failed. Details
+come at the second level unless `-v` or `-q` says otherwise; the flags mean what they mean in a run
+(`aye show 3fae6 --output json` is what a coding agent wants; `-vv`, every frame, the output and the
+locals). `--log` writes the run's raw events. A file of a test shown that changed since the run is
+said first. The summary's exit code is the run's. Exit codes: 0 when it could show what was asked, 4
+for a name no test of the run has (or the start of several keys), 5 when no run is stored.
+
+Usage: aye show [OPTIONS] [TEST]...
+
+Arguments:
+  [TEST]...
+          Test keys (`3fae6`) or their start, test ids, dotted names or paths
+
+Options:
+      --failed
+          The details of everything that failed: tests that failed or errored, failed lifetimes,
+          collection errors and failed workers
+
+      --outcome <OUTCOME[,OUTCOME]>
+          Only these outcomes: `passed`, `failed`, `error`, `skipped`, `expected_failure`,
+          `unexpected_pass`
+
+  -k <EXPR>
+          Only tests matching the keyword expression, as the run's `-k`
+
+  -m <EXPR>
+          Only tests matching the tag expression, as the run's `-m`
+
+      --run <RUN>
+          An older stored run instead of the last: `r81` or `81` (`aye show --runs` lists them)
+
+      --runs
+          List the stored runs, newest first: run, start time, exit code and counts
+
+      --log
+          Write the run's log as stored, every event, one JSON object per line, whatever the output
+          format
+
+  -v, --verbose...
+          More detail; repeat for more (up to -vvv). Without -v or -q, details come at -v in text,
+          -vv in JSON
+
+  -q, --quiet...
+          Less: only the summary
+
+      --output <FORMAT>
+          Output format, as for a run
+
+          Possible values:
+          - text: For people: quiet on success, readable failures
+          - json: JSON lines: the summary with -q, bad outcomes, failures in full with -v (for
+            coding agents), every result with -vv, the raw event stream with -vvv
+
+      --color <WHEN>
+          When to use colour
+          
+          [default: auto]
+          [possible values: auto, always, never]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+----- stderr -----
