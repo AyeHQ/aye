@@ -13,7 +13,7 @@ use aye_adapter::{Adapter, AdapterError, Project, Recognizer};
 use aye_adapter_pytest::native::SHIM_MODULE;
 use aye_engine::{MODEL_MODULE, NATIVE_ENGINE_MODULE, REWRITE_MODULE};
 use aye_events::AdapterName;
-use aye_protocol::{EmbeddedModule, Executor};
+use aye_protocol::{Executor, ModuleSet};
 
 /// Every adapter the binary links, in priority order: the pytest adapter
 /// (for a static listing, `aye --co --no-refine`, the one that predicts
@@ -29,33 +29,41 @@ fn known(static_listing: bool) -> Vec<Box<dyn Adapter>> {
         Box::new(pytest),
         Box::new(WithAyePytest {
             inner: aye_adapter_unittest::Unittest,
-            modules: &UNITTEST_WITH_AYE_PYTEST,
+            modules: UNITTEST_WITH_AYE_PYTEST,
         }),
         Box::new(WithAyePytest {
             inner: aye_adapter_doctest::Doctest,
-            modules: &DOCTEST_WITH_AYE_PYTEST,
+            modules: DOCTEST_WITH_AYE_PYTEST,
         }),
     ]
 }
 
 /// The unittest adapter's modules after aye's `pytest` module and what it
 /// stands on, in the native engine's order.
-static UNITTEST_WITH_AYE_PYTEST: [EmbeddedModule; 5] = [
-    MODEL_MODULE,
-    REWRITE_MODULE,
-    NATIVE_ENGINE_MODULE,
-    SHIM_MODULE,
-    aye_adapter_unittest::MODULE,
-];
+const UNITTEST_WITH_AYE_PYTEST: ModuleSet = ModuleSet::new(
+    const {
+        &[
+            MODEL_MODULE,
+            REWRITE_MODULE,
+            NATIVE_ENGINE_MODULE,
+            SHIM_MODULE,
+            aye_adapter_unittest::MODULE,
+        ]
+    },
+);
 
 /// The doctest adapter's, likewise.
-static DOCTEST_WITH_AYE_PYTEST: [EmbeddedModule; 5] = [
-    MODEL_MODULE,
-    REWRITE_MODULE,
-    NATIVE_ENGINE_MODULE,
-    SHIM_MODULE,
-    aye_adapter_doctest::MODULE,
-];
+const DOCTEST_WITH_AYE_PYTEST: ModuleSet = ModuleSet::new(
+    const {
+        &[
+            MODEL_MODULE,
+            REWRITE_MODULE,
+            NATIVE_ENGINE_MODULE,
+            SHIM_MODULE,
+            aye_adapter_doctest::MODULE,
+        ]
+    },
+);
 
 /// An adapter other than pytest's whose workers get aye's own `pytest`
 /// module first, so that what they import (the conftests the doctest
@@ -66,7 +74,7 @@ struct WithAyePytest<A> {
     inner: A,
     /// aye's `pytest` module and its own, in install order (the adapter's
     /// own last).
-    modules: &'static [EmbeddedModule],
+    modules: ModuleSet,
 }
 
 impl<A: Adapter> Adapter for WithAyePytest<A> {
@@ -297,12 +305,17 @@ mod tests {
             (aye_adapter_doctest::Doctest.executor()),
         ]) {
             let executor = adapter.executor();
-            let names: Vec<&str> = executor.modules.iter().map(|m| m.name).collect();
+            let names: Vec<&str> = executor.modules.names().collect();
             assert_eq!(
                 names[..4],
                 ["aye_model", "aye_rewrite", "aye_native_engine", "pytest"]
             );
-            assert_eq!(executor.modules[4..], *own.modules, "{}", own.adapter);
+            assert_eq!(
+                executor.modules.modules()[4..],
+                *own.modules.modules(),
+                "{}",
+                own.adapter
+            );
             assert_eq!((executor.adapter, executor.entry), (own.adapter, own.entry));
         }
     }
@@ -458,7 +471,7 @@ mod tests {
                     .executor()
                     .modules
                     .iter()
-                    .map(|m| (m.name, m.source)),
+                    .map(|m| (&*m.name, &*m.source)),
             );
         }
         let mut named = BTreeSet::new();

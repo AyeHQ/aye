@@ -39,7 +39,7 @@ use aye_adapter::{
 };
 use aye_engine::{MODEL_MODULE, NATIVE_ENGINE_MODULE, REWRITE_MODULE};
 use aye_events::{AdapterName, Diagnostic, DiagnosticCode, Fnv64, Severity};
-use aye_protocol::{AdapterContext, EmbeddedModule, Executor};
+use aye_protocol::{AdapterContext, Executor, ModuleSet, ModuleSource};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -49,35 +49,39 @@ use crate::{PytestConfig, PytestRecognizer, config::ImportMode};
 /// aye's own `pytest` module: the authoring API (marks, fixtures,
 /// `raises`, `approx`, outcomes) the front-end reads, installed as
 /// `pytest`.
-pub const SHIM_MODULE: EmbeddedModule = EmbeddedModule {
-    name: "pytest",
-    source: include_str!("../python/native/aye_pytest_shim.py"),
-};
+pub const SHIM_MODULE: ModuleSource = ModuleSource::embedded(
+    "pytest",
+    include_str!("../python/native/aye_pytest_shim.py"),
+);
 
 /// The pytest front-end: reads a suite into aye's model, never runs a test.
-pub const FRONTEND_MODULE: EmbeddedModule = EmbeddedModule {
-    name: "aye_pytest_frontend",
-    source: include_str!("../python/native/aye_pytest_frontend.py"),
-};
+pub const FRONTEND_MODULE: ModuleSource = ModuleSource::embedded(
+    "aye_pytest_frontend",
+    include_str!("../python/native/aye_pytest_frontend.py"),
+);
 
 /// The glue: the executor (`refine`, `run`) over the front-end and the
 /// engine.
-pub const NATIVE_MODULE: EmbeddedModule = EmbeddedModule {
-    name: "aye_pytest_native",
-    source: include_str!("../python/native/aye_pytest_native.py"),
-};
+pub const NATIVE_MODULE: ModuleSource = ModuleSource::embedded(
+    "aye_pytest_native",
+    include_str!("../python/native/aye_pytest_native.py"),
+);
 
 /// The native executor's modules, in install order (after `aye_engine`):
 /// the model, the rewriter and the engine first, then aye's `pytest`, so
 /// it is in `sys.modules` before the front-end and any test import it.
-pub static MODULES: [EmbeddedModule; 6] = [
-    MODEL_MODULE,
-    REWRITE_MODULE,
-    NATIVE_ENGINE_MODULE,
-    SHIM_MODULE,
-    FRONTEND_MODULE,
-    NATIVE_MODULE,
-];
+pub const MODULES: ModuleSet = ModuleSet::new(
+    const {
+        &[
+            MODEL_MODULE,
+            REWRITE_MODULE,
+            NATIVE_ENGINE_MODULE,
+            SHIM_MODULE,
+            FRONTEND_MODULE,
+            NATIVE_MODULE,
+        ]
+    },
+);
 
 /// `module:Class` of the native executor.
 pub const ENTRY: &str = "aye_pytest_native:NativeExecutor";
@@ -151,7 +155,7 @@ impl Adapter for Pytest {
     fn executor(&self) -> Executor {
         Executor {
             adapter: NAME,
-            modules: &MODULES,
+            modules: MODULES,
             entry: ENTRY,
             lists_session: true,
         }
@@ -389,8 +393,8 @@ fn native_context(config: &PytestConfig) -> NativeContext {
 /// hex.
 fn modules_digest() -> String {
     let mut hash = Fnv64::new();
-    for module in &MODULES {
-        for text in [module.name, module.source] {
+    for module in MODULES {
+        for text in [&module.name, &module.source] {
             hash.write(text.as_bytes());
             hash.write(&[0]);
         }
@@ -1069,7 +1073,7 @@ mod tests {
         let executor = Pytest::default().executor();
         assert_eq!(executor.adapter, "pytest");
         assert_eq!(executor.entry, "aye_pytest_native:NativeExecutor");
-        let names: Vec<&str> = executor.modules.iter().map(|m| m.name).collect();
+        let names: Vec<&str> = executor.modules.names().collect();
         assert_eq!(
             names,
             [

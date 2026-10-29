@@ -22,9 +22,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use aye_engine::ENGINE_MODULE;
+use aye_engine::ENGINE;
 use aye_protocol::{
-    Executor, ExecutorSpec, ModuleSource, PROTOCOL_VERSION, Reply, Request, ServiceName, WorkerLine,
+    Executor, ExecutorSpec, PROTOCOL_VERSION, Reply, Request, ServiceName, WorkerLine,
 };
 
 use aye_static::EnvVars;
@@ -121,10 +121,11 @@ impl WorkerSpec {
     /// The handshake this spec sends.
     pub fn hello(&self) -> Request {
         let mut seen = HashSet::new();
-        let modules = std::iter::once(&ENGINE_MODULE)
+        let modules = ENGINE
+            .iter()
             .chain(self.executors.iter().flat_map(|e| e.modules))
-            .filter(|module| seen.insert(module.name))
-            .map(|module| ModuleSource::from(*module))
+            .filter(|module| seen.insert(&*module.name))
+            .cloned()
             .collect();
         Request::Hello {
             protocol: PROTOCOL_VERSION,
@@ -913,19 +914,14 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use std::fmt::Write as _;
 
+    use aye_engine::ENGINE_MODULE;
     use aye_events::{AdapterName, BatchIndex, Event};
-    use aye_protocol::EmbeddedModule;
+    use aye_protocol::{ModuleSet, ModuleSource};
 
     use super::*;
 
-    const ONE: EmbeddedModule = EmbeddedModule {
-        name: "one",
-        source: "",
-    };
-    const TWO: EmbeddedModule = EmbeddedModule {
-        name: "two",
-        source: "",
-    };
+    const ONE: ModuleSource = ModuleSource::embedded("one", "");
+    const TWO: ModuleSource = ModuleSource::embedded("two", "");
 
     #[test]
     fn hello_installs_the_engine_then_each_module_once() {
@@ -933,13 +929,13 @@ mod tests {
         spec.executors = vec![
             Executor {
                 adapter: AdapterName::new_static("a"),
-                modules: &[ONE, TWO],
+                modules: ModuleSet::new(const { &[ONE, TWO] }),
                 entry: "two:A",
                 lists_session: false,
             },
             Executor {
                 adapter: AdapterName::new_static("b"),
-                modules: &[TWO, ENGINE_MODULE],
+                modules: ModuleSet::new(const { &[TWO, ENGINE_MODULE] }),
                 entry: "two:B",
                 lists_session: true,
             },
@@ -956,7 +952,7 @@ mod tests {
         };
         assert_eq!(protocol, PROTOCOL_VERSION);
         assert_eq!(root, "/repo");
-        let names: Vec<&str> = modules.iter().map(|m| m.name.as_str()).collect();
+        let names: Vec<&str> = modules.iter().map(|m| &*m.name).collect();
         assert_eq!(names, ["aye_engine", "one", "two"]);
         assert_eq!(executors.len(), 2);
         assert_eq!(executors[1].entry, "two:B");

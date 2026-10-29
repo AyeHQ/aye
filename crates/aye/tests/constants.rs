@@ -15,32 +15,32 @@ use aye_adapter::ast::{DictItem, Expr, ModModule, Stmt};
 use aye_events::{
     CompareKind, ComparisonOp, DiagnosticCode, FrameworkStatus, Outcome, Phase, Scope, Severity,
 };
-use aye_protocol::{EmbeddedModule, PROTOCOL_VERSION, ServiceName, context_keys};
+use aye_protocol::{ModuleSource, PROTOCOL_VERSION, ServiceName, context_keys};
 use serde_json::{Value, json};
 
 /// Every Python module aye embeds, once each: the engine's, each adapter's,
 /// aye's `pytest` module, and the worker.
-fn embedded() -> Vec<EmbeddedModule> {
+fn embedded() -> Vec<ModuleSource> {
     let mut modules = vec![
         aye_engine::ENGINE_MODULE,
         aye_engine::MODEL_MODULE,
         aye_engine::REWRITE_MODULE,
         aye_engine::NATIVE_ENGINE_MODULE,
     ];
-    modules.extend(aye_adapter_pytest::native::MODULES);
+    modules.extend(aye_adapter_pytest::native::MODULES.iter().cloned());
     modules.push(aye_adapter_unittest::MODULE);
     modules.push(aye_adapter_doctest::MODULE);
-    modules.push(EmbeddedModule {
-        name: "aye_worker",
-        source: aye_runner::WORKER_SOURCE,
-    });
+    modules.push(ModuleSource::embedded(
+        "aye_worker",
+        aye_runner::WORKER_SOURCE,
+    ));
     let mut seen = BTreeSet::new();
-    modules.retain(|module| seen.insert(module.name));
+    modules.retain(|module| seen.insert(module.name.clone()));
     modules
 }
 
-fn parse(module: &EmbeddedModule) -> ModModule {
-    ruff_python_parser::parse_module(module.source)
+fn parse(module: &ModuleSource) -> ModModule {
+    ruff_python_parser::parse_module(&module.source)
         .unwrap_or_else(|e| panic!("{}: {e}", module.name))
         .into_syntax()
 }
@@ -324,10 +324,7 @@ fn the_engine_and_the_worker_speak_the_runners_protocol() {
         module_int(&engine(), "PROTOCOL"),
         Some(u64::from(PROTOCOL_VERSION))
     );
-    let worker = EmbeddedModule {
-        name: "aye_worker",
-        source: aye_runner::WORKER_SOURCE,
-    };
+    let worker = ModuleSource::embedded("aye_worker", aye_runner::WORKER_SOURCE);
     assert_eq!(
         module_int(&parse(&worker), "PROTOCOL"),
         Some(u64::from(PROTOCOL_VERSION))

@@ -402,7 +402,8 @@ fn the_adapter_names_its_executor() {
     assert_eq!(Unittest.name(), "unittest");
     assert_eq!(executor.adapter, "unittest");
     assert_eq!(executor.entry, "aye_engine_unittest:UnittestExecutor");
-    assert_eq!(executor.modules, &[MODULE]);
+    assert_eq!(executor.modules, MODULES);
+    assert_eq!(MODULES.modules(), [MODULE]);
     assert!(
         MODULE
             .source

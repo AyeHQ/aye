@@ -1,13 +1,12 @@
+use std::borrow::Cow;
+
 use aye_events::{Event, Outcome};
 
 use super::*;
 
 /// A module as the handshake carries one. aye's engine is `aye-engine`'s,
 /// which this crate can't name.
-const MODULE: EmbeddedModule = EmbeddedModule {
-    name: "aye_engine",
-    source: "PROTOCOL = 3\n",
-};
+const MODULE: ModuleSource = ModuleSource::embedded("aye_engine", "PROTOCOL = 3\n");
 
 #[test]
 fn requests_round_trip() {
@@ -15,7 +14,7 @@ fn requests_round_trip() {
         Request::Hello {
             protocol: PROTOCOL_VERSION,
             root: "/repo".into(),
-            modules: vec![MODULE.into()],
+            modules: vec![MODULE],
             executors: vec![ExecutorSpec {
                 adapter: "pytest".into(),
                 entry: "aye_engine_pytest:PytestExecutor".into(),
@@ -66,6 +65,38 @@ fn requests_round_trip() {
             "{line}"
         );
     }
+}
+
+/// A set lists its modules in install order, and a module copied out of
+/// it, as a handshake copies each, still borrows the binary's source; read
+/// from the wire, it is written the same.
+#[test]
+fn a_module_set_lends_its_modules_in_order() {
+    const SET: ModuleSet = ModuleSet::new(
+        const {
+            &[
+                ModuleSource::embedded("aye_model", ""),
+                ModuleSource::embedded("aye_native_engine", "import aye_engine\n"),
+            ]
+        },
+    );
+    assert_eq!(
+        SET.names().collect::<Vec<_>>(),
+        ["aye_model", "aye_native_engine"]
+    );
+    let embedded = &SET.modules()[1];
+    let copied = embedded.clone();
+    assert!(
+        matches!((&embedded.source, &copied.source), (Cow::Borrowed(a), Cow::Borrowed(b)) if std::ptr::eq(*a, *b))
+    );
+    let line = serde_json::to_string(&copied).unwrap();
+    assert_eq!(
+        line,
+        r#"{"name":"aye_native_engine","source":"import aye_engine\n"}"#
+    );
+    let read: ModuleSource = serde_json::from_str(&line).unwrap();
+    assert_eq!(read, copied);
+    assert_eq!(ModuleSet::default().iter().count(), 0);
 }
 
 #[test]

@@ -6,8 +6,8 @@
 //! answers with [`WorkerLine`]s, each a control [`Reply`] or an event
 //! [`Record`]. Beside the messages: a `maxfail` limit ([`MaxFail`]), the
 //! protocol's version ([`PROTOCOL_VERSION`]), the services a worker may
-//! provide ([`ServiceName`]), an adapter's runtime face
-//! ([`Executor`], with the [`EmbeddedModule`]s it installs), and the
+//! provide ([`ServiceName`]), an adapter's runtime face ([`Executor`], with
+//! the [`ModuleSet`] it installs, of [`ModuleSource`]s), and the
 //! [`Refiner`] trait, which the runner implements and collection calls.
 //! `docs/protocol.md` describes the protocol on the wire.
 //!
@@ -55,10 +55,12 @@ use aye_events::{AdapterName, BatchIndex, Case, Diagnostic, ProjectPath, Record,
 use serde::{Deserialize, Serialize};
 
 mod context;
+mod module;
 mod service;
 
 pub use aye_events::FrameworkStatus;
 pub use context::{AdapterContext, BatchContext, context_keys};
+pub use module::{ModuleSet, ModuleSource};
 pub use service::ServiceName;
 
 /// Version of the runner ↔ worker protocol. Checked at the handshake.
@@ -67,21 +69,13 @@ pub use service::ServiceName;
 /// 3: [`Batch::ends_session`].
 pub const PROTOCOL_VERSION: u32 = 3;
 
-/// A Python module embedded in the binary and installed in the worker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EmbeddedModule {
-    /// Import name, e.g. `aye_engine`.
-    pub name: &'static str,
-    pub source: &'static str,
-}
-
 /// An adapter's runtime face: modules the worker installs, and the executor
 /// class it instantiates.
 #[derive(Debug, Clone)]
 pub struct Executor {
     pub adapter: AdapterName,
-    /// Installed in order, after aye's engine (`aye_engine::ENGINE_MODULE`).
-    pub modules: &'static [EmbeddedModule],
+    /// Installed in order, after aye's engine (`aye_engine::ENGINE`).
+    pub modules: ModuleSet,
     /// `module:Class` of the `aye_engine.Executor` subclass.
     pub entry: &'static str,
     /// The executor keeps what it lists for the batches it runs later (its
@@ -235,22 +229,6 @@ pub struct Batch {
     /// it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ends_session: bool,
-}
-
-/// One embedded module, on the wire.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModuleSource {
-    pub name: String,
-    pub source: String,
-}
-
-impl From<EmbeddedModule> for ModuleSource {
-    fn from(module: EmbeddedModule) -> Self {
-        Self {
-            name: module.name.to_string(),
-            source: module.source.to_string(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

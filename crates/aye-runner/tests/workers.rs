@@ -19,8 +19,8 @@ use aye_events::{
     ProjectPath, Record, Stamper, StopReason, TestId, TestResult, WorkerIndex,
 };
 use aye_protocol::{
-    AdapterContext, BatchContext, EmbeddedModule, Executor, Policy, RefineRequest, Refiner, Reply,
-    Request,
+    AdapterContext, BatchContext, Executor, ModuleSet, ModuleSource, Policy, RefineRequest,
+    Refiner, Reply, Request,
 };
 #[cfg(unix)]
 use aye_runner::Worker;
@@ -263,28 +263,26 @@ class ListingExecutor(FakeExecutor):
         note_call("close")
 "#;
 
-const FAKE_MODULE: EmbeddedModule = EmbeddedModule {
-    name: "fake_executor",
-    source: FAKE_SOURCE,
-};
+const FAKE_MODULES: ModuleSet =
+    ModuleSet::new(const { &[ModuleSource::embedded("fake_executor", FAKE_SOURCE)] });
 
 const FAKE: Executor = Executor {
     adapter: AdapterName::new_static("fake"),
-    modules: &[FAKE_MODULE],
+    modules: FAKE_MODULES,
     entry: "fake_executor:FakeExecutor",
     lists_session: false,
 };
 
 const OTHER: Executor = Executor {
     adapter: AdapterName::new_static("other"),
-    modules: &[FAKE_MODULE],
+    modules: FAKE_MODULES,
     entry: "fake_executor:OtherExecutor",
     lists_session: false,
 };
 
 const LISTING: Executor = Executor {
     adapter: AdapterName::new_static("listing"),
-    modules: &[FAKE_MODULE],
+    modules: FAKE_MODULES,
     entry: "fake_executor:ListingExecutor",
     lists_session: true,
 };

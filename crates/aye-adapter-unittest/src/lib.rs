@@ -290,7 +290,7 @@ use aye_adapter::{
 };
 use aye_events::{AdapterName, AffinityKey, Case, Certainty, ProjectPath, ProjectPathRef, Span};
 use aye_fs::normalize_absolute;
-use aye_protocol::{AdapterContext, EmbeddedModule, Executor};
+use aye_protocol::{AdapterContext, Executor, ModuleSet, ModuleSource};
 
 pub use config::UnittestConfig;
 pub use fnmatch::{fnmatch, valid_module_name};
@@ -300,10 +300,14 @@ use crate::context::UnittestContext;
 use crate::module::Modules;
 
 /// The unittest adapter's executor module.
-pub const MODULE: EmbeddedModule = EmbeddedModule {
-    name: "aye_engine_unittest",
-    source: include_str!("../python/aye_engine_unittest.py"),
-};
+pub const MODULE: ModuleSource = ModuleSource::embedded(
+    "aye_engine_unittest",
+    include_str!("../python/aye_engine_unittest.py"),
+);
+
+/// What a worker installs for the unittest adapter's executor, after aye's
+/// engine.
+pub const MODULES: ModuleSet = ModuleSet::new(const { &[MODULE] });
 
 /// The adapter's name, in cases, batches and the registry.
 pub const NAME: AdapterName = AdapterName::new_static("unittest");
@@ -329,7 +333,7 @@ impl Adapter for Unittest {
     fn executor(&self) -> Executor {
         Executor {
             adapter: NAME,
-            modules: &[MODULE],
+            modules: MODULES,
             entry: "aye_engine_unittest:UnittestExecutor",
             lists_session: false,
         }

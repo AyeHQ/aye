@@ -44,9 +44,10 @@
 //! aye's engine, in Python, embedded in the binary and installed in each
 //! worker's `sys.modules` from memory: the objects every executor builds on
 //! ([`ENGINE_MODULE`], `python/aye_engine.py`: `Executor`, `EngineExecutor`,
-//! `Sink`, `Result`, `Failure`, `Lifetimes`), and the test model, assertion
-//! rewriting and the native engine the pytest front-end runs on
-//! ([`MODEL_MODULE`], [`REWRITE_MODULE`], [`NATIVE_ENGINE_MODULE`]). Their
+//! `Sink`, `Result`, `Failure`, `Lifetimes`), which every worker installs
+//! first ([`ENGINE`]), and the test model, assertion rewriting and the
+//! native engine the pytest front-end runs on ([`MODEL_MODULE`],
+//! [`REWRITE_MODULE`], [`NATIVE_ENGINE_MODULE`]). Their
 //! Python tests are in `python/tests`; `tests/records.rs` checks that what
 //! the engine's records send reads as the Rust types.
 //!
@@ -127,34 +128,31 @@
 //!   engine's, the framework's), as unittest leaves out its own
 //!   (`aye_engine.format_exception(exc, paths)`).
 
-use aye_protocol::EmbeddedModule;
+use aye_protocol::{ModuleSet, ModuleSource};
+
+/// aye's engine as a worker installs it, before any other module.
+pub const ENGINE: ModuleSet = ModuleSet::new(const { &[ENGINE_MODULE] });
 
 /// aye's engine: the Python base classes every executor builds on.
-pub const ENGINE_MODULE: EmbeddedModule = EmbeddedModule {
-    name: "aye_engine",
-    source: include_str!("../python/aye_engine.py"),
-};
+pub const ENGINE_MODULE: ModuleSource =
+    ModuleSource::embedded("aye_engine", include_str!("../python/aye_engine.py"));
 
 /// aye's test model (prototype): what a front-end produces when it reads a
 /// framework's tests, and what the native engine runs. Knows no framework.
-pub const MODEL_MODULE: EmbeddedModule = EmbeddedModule {
-    name: "aye_model",
-    source: include_str!("../python/aye_model.py"),
-};
+pub const MODEL_MODULE: ModuleSource =
+    ModuleSource::embedded("aye_model", include_str!("../python/aye_model.py"));
 
 /// Assertion rewriting (prototype): a service of the native engine, for
 /// the modules a front-end asks it to rewrite.
-pub const REWRITE_MODULE: EmbeddedModule = EmbeddedModule {
-    name: "aye_rewrite",
-    source: include_str!("../python/aye_rewrite.py"),
-};
+pub const REWRITE_MODULE: ModuleSource =
+    ModuleSource::embedded("aye_rewrite", include_str!("../python/aye_rewrite.py"));
 
 /// The native engine (prototype): runs [`MODEL_MODULE`]'s cases, resources
 /// and lifetimes; imports no framework.
-pub const NATIVE_ENGINE_MODULE: EmbeddedModule = EmbeddedModule {
-    name: "aye_native_engine",
-    source: include_str!("../python/aye_native_engine.py"),
-};
+pub const NATIVE_ENGINE_MODULE: ModuleSource = ModuleSource::embedded(
+    "aye_native_engine",
+    include_str!("../python/aye_native_engine.py"),
+);
 
 #[cfg(test)]
 mod tests;

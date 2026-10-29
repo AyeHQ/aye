@@ -325,7 +325,7 @@ use aye_adapter::{
 use aye_events::{
     AdapterName, AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity, Span,
 };
-use aye_protocol::{AdapterContext, EmbeddedModule, Executor};
+use aye_protocol::{AdapterContext, Executor, ModuleSet, ModuleSource};
 use aye_static::{EnvVars, ProcessEnv};
 
 pub use config::{DoctestConfig, ImportMode};
@@ -333,10 +333,14 @@ pub use config::{DoctestConfig, ImportMode};
 use crate::context::DoctestContext;
 
 /// The doctest adapter's executor module.
-pub const MODULE: EmbeddedModule = EmbeddedModule {
-    name: "aye_engine_doctest",
-    source: include_str!("../python/aye_engine_doctest.py"),
-};
+pub const MODULE: ModuleSource = ModuleSource::embedded(
+    "aye_engine_doctest",
+    include_str!("../python/aye_engine_doctest.py"),
+);
+
+/// What a worker installs for the doctest adapter's executor, after aye's
+/// engine.
+pub const MODULES: ModuleSet = ModuleSet::new(const { &[MODULE] });
 
 /// The adapter's name, in cases, batches and the registry.
 pub const NAME: AdapterName = AdapterName::new_static("doctest");
@@ -378,7 +382,7 @@ impl Adapter for Doctest {
     fn executor(&self) -> Executor {
         Executor {
             adapter: NAME,
-            modules: &[MODULE],
+            modules: MODULES,
             entry: "aye_engine_doctest:DoctestExecutor",
             lists_session: false,
         }
