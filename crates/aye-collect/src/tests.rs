@@ -101,10 +101,10 @@ impl Recognizer for Fake {
             if let ast::Stmt::FunctionDef(def) = stmt {
                 let name = def.name.as_str();
                 if name == "dynamic" {
-                    recognition.refine = Some("tests made at import".to_string());
+                    recognition.refine = Some("tests made at import".into());
                 }
                 if name == "broken" {
-                    recognition.refine = Some("the framework decides".to_string());
+                    recognition.refine = Some("the framework decides".into());
                     for (severity, code) in [
                         (Severity::Error, "static-error"),
                         (Severity::Warning, "static-lint"),
@@ -800,10 +800,10 @@ fn a_file_that_is_not_utf8_is_refined() {
         codes_of(&collection),
         [(DiagnosticCode::NotRefined, Severity::Info)]
     );
-    assert!(
-        collection.diagnostics[0]
-            .message
-            .contains("not valid UTF-8")
+    assert_eq!(
+        collection.diagnostics[0].message,
+        "fake must import this file to know its tests (the file is not valid UTF-8), but \
+         refinement is off; keeping the static guess"
     );
 }
 
@@ -1272,7 +1272,7 @@ fn stray_refined_cases_in_a_requested_package_keep_their_place() {
             for stmt in &file.module.body {
                 if let ast::Stmt::FunctionDef(def) = stmt {
                     if def.name.as_str() == "dynamic" {
-                        recognition.refine = Some("tests made at import".to_string());
+                        recognition.refine = Some("tests made at import".into());
                     } else {
                         let id = format!("{}::{}", file.rel, def.name);
                         recognition.cases.push(Case::new(id, "packages"));

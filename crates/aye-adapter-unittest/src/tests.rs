@@ -7,7 +7,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use aye_adapter::{Adapter, Claim, LineIndex, Project, Recognition, Recognizer, SourceFile};
+use aye_adapter::{
+    Adapter, Claim, LineIndex, Project, Recognition, Recognizer, RefineReason, SourceFile,
+};
 use aye_events::Certainty;
 
 use super::*;
@@ -478,7 +480,8 @@ fn refined_files_keep_a_partial_guess() {
     assert!(
         recognition
             .refine
-            .as_deref()
+            .as_ref()
+            .map(RefineReason::as_str)
             .unwrap()
             .contains("load_tests")
     );
@@ -520,7 +523,7 @@ fn modules_with_no_visible_test_are_refined() {
     );
     let reasons: Vec<&str> = found
         .iter()
-        .filter_map(|(_, r)| r.refine.as_deref())
+        .filter_map(|(_, r)| r.refine.as_ref().map(RefineReason::as_str))
         .collect();
     assert!(reasons.contains(&NO_STATIC_TESTS));
     assert_eq!(

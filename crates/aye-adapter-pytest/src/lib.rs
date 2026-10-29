@@ -1558,9 +1558,9 @@ fn doctest_text(file: &SourceFile<'_>) -> Recognition {
         return Recognition::default();
     }
     Recognition {
-        refine: Some(format!(
-            "pytest's doctest plugin collects this text file ({PYTEST_DOCTESTS})"
-        )),
+        refine: Some(
+            format!("pytest's doctest plugin collects this text file ({PYTEST_DOCTESTS})").into(),
+        ),
         ..Recognition::default()
     }
 }
@@ -1788,9 +1788,12 @@ impl Recognizer for PytestRecognizer {
                 // Only pytest's doctest plugin collects it, importing it: an
                 // import error is a collection error.
                 return Recognition {
-                    refine: Some(format!(
-                        "pytest's doctest plugin imports it for its doctests ({PYTEST_DOCTESTS})"
-                    )),
+                    refine: Some(
+                        format!(
+                            "pytest's doctest plugin imports it for its doctests ({PYTEST_DOCTESTS})"
+                        )
+                        .into(),
+                    ),
                     ..Recognition::default()
                 };
             }
@@ -1942,8 +1945,8 @@ impl Recognizer for PytestRecognizer {
         if maybe_ignored {
             let reason = "collect_ignore may exclude this file at runtime".to_string();
             recognition.refine = Some(match recognition.refine {
-                Some(existing) => format!("{reason}; {existing}"),
-                None => reason,
+                Some(existing) => format!("{reason}; {existing}").into(),
+                None => reason.into(),
             });
             // None of its tests may exist.
             for case in &mut recognition.cases {
@@ -1957,8 +1960,8 @@ impl Recognizer for PytestRecognizer {
                 "a conftest.py in scope changes {changed} at runtime, which collection reads"
             );
             recognition.refine = Some(match recognition.refine {
-                Some(existing) => format!("{existing}; {reason}"),
-                None => reason,
+                Some(existing) => format!("{existing}; {reason}").into(),
+                None => reason.into(),
             });
             for case in &mut recognition.cases {
                 if case.certainty == Certainty::Exact {
@@ -1973,8 +1976,8 @@ impl Recognizer for PytestRecognizer {
                  which one it gets depends on what pytest imported before"
             );
             recognition.refine = Some(match recognition.refine {
-                Some(existing) => format!("{existing}; {reason}"),
-                None => reason,
+                Some(existing) => format!("{existing}; {reason}").into(),
+                None => reason.into(),
             });
             for case in &mut recognition.cases {
                 if case.certainty == Certainty::Exact {
@@ -2003,8 +2006,8 @@ impl Recognizer for PytestRecognizer {
             let reason =
                 format!("{who} implements {MODIFYITEMS} and makes items: it may add tests");
             recognition.refine = Some(match recognition.refine {
-                Some(existing) => format!("{existing}; {reason}"),
-                None => reason,
+                Some(existing) => format!("{existing}; {reason}").into(),
+                None => reason.into(),
             });
             for case in &mut recognition.cases {
                 if case.certainty == Certainty::Exact {
@@ -2016,8 +2019,8 @@ impl Recognizer for PytestRecognizer {
             let reason =
                 format!("pytest's doctest plugin collects its doctests ({PYTEST_DOCTESTS})");
             recognition.refine = Some(match recognition.refine {
-                Some(existing) => format!("{existing}; {reason}"),
-                None => reason,
+                Some(existing) => format!("{existing}; {reason}").into(),
+                None => reason.into(),
             });
             for case in &mut recognition.cases {
                 if case.certainty == Certainty::Exact {

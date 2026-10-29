@@ -9,7 +9,9 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use aye_adapter::{Adapter, Claim, LineIndex, Project, Recognition, Recognizer, SourceFile};
+use aye_adapter::{
+    Adapter, Claim, LineIndex, Project, Recognition, Recognizer, RefineReason, SourceFile,
+};
 use aye_events::{Certainty, DiagnosticCode};
 
 use super::*;
@@ -175,6 +177,7 @@ fn refined(source: &str) -> String {
     recognition
         .refine
         .unwrap_or_else(|| panic!("not refined:\n{source}"))
+        .to_string()
 }
 
 // ---------------------------------------------------------------- the parser
@@ -1355,7 +1358,7 @@ fn modules_without_a_visible_doctest_are_refined() {
     let found = collect(dir.path());
     let refined: Vec<(&str, &str)> = found
         .iter()
-        .filter_map(|(rel, r)| Some((rel.as_str(), r.refine.as_deref()?)))
+        .filter_map(|(rel, r)| Some((rel.as_str(), r.refine.as_ref().map(RefineReason::as_str)?)))
         .collect();
     assert_eq!(
         refined,
@@ -1424,7 +1427,7 @@ fn project_modules_that_set_module_refine_their_importers() {
             .recognize(&file.file(), Requested::Found, &[])
             .refine;
         assert!(refine.is_some());
-        refine.filter(|why| why.contains("__module__"))
+        refine.filter(|why| why.as_str().contains("__module__"))
     };
     assert_eq!(check("pkg/__init__.py"), None);
     write(
@@ -1496,7 +1499,7 @@ fn import_modes_and_optimization_refine_every_module() {
     );
     let file = Parsed::read(root, "mod.py");
     let recognition = recognizer(root).recognize(&file.file(), Requested::Found, &[]);
-    assert!(recognition.refine.unwrap().contains("importlib"));
+    assert!(recognition.refine.unwrap().as_str().contains("importlib"));
     write(
         root,
         "pytest.ini",
@@ -2104,7 +2107,7 @@ fn a_computed_module_refines_the_importers() {
         recognizer(root)
             .recognize(&file.file(), Requested::Found, &[])
             .refine
-            .filter(|why| why.contains("__module__"))
+            .filter(|why| why.as_str().contains("__module__"))
     };
     let computed = [
         "from ._utils import public_module\n\n@public_module\ndef func():\n    pass\n",
@@ -2201,6 +2204,7 @@ fn ignoring_import_mismatches_refines_modules() {
         recognition
             .refine
             .unwrap()
+            .as_str()
             .contains("PY_IGNORE_IMPORTMISMATCH")
     );
 }
@@ -2321,7 +2325,10 @@ fn doctests_below_a_conftest_that_may_skip_are_refined() {
         let recognizer = recognizer(root);
         for rel in below {
             let why = refine(&recognizer, rel).unwrap_or_else(|| panic!("{rel}: {source}"));
-            assert!(why.starts_with("sub/conftest.py may skip"), "{why}");
+            assert!(
+                why.as_str().starts_with("sub/conftest.py may skip"),
+                "{why}"
+            );
         }
         assert_eq!(refine(&recognizer, "top.py"), None);
         assert_eq!(refine(&recognizer, "other/o.py"), None);

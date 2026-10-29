@@ -32,7 +32,7 @@ fn hooks_that_make_items_refine_every_test_file() {
     for rel in ["tests/test_mod.py", "other/test_o.py"] {
         let recognition = recognize_with(&found, root, rel);
         assert!(
-            recognition.refine.as_deref().is_some_and(|r| r.contains(
+            recognition.refine.as_ref().map(RefineReason::as_str).is_some_and(|r| r.contains(
                 "a conftest.py implements pytest_collection_modifyitems and makes items: it may add tests"
             )),
             "{rel}: {recognition:?}"
@@ -123,6 +123,7 @@ fn reasons_name_pytest_plugins_plugins() {
         .unwrap();
         recognize_with(&recognizer, root, "test_hk.py")
             .refine
+            .map(|r| r.to_string())
             .unwrap_or_default()
     };
     assert_eq!(
@@ -305,7 +306,8 @@ fn pytests_doctests_are_refined() {
     assert!(m.cases.is_empty(), "{m:?}");
     assert!(
         m.refine
-            .as_deref()
+            .as_ref()
+            .map(RefineReason::as_str)
             .is_some_and(|r| r.contains("pytest's doctest plugin")),
         "{m:?}"
     );

@@ -4,13 +4,14 @@
 //! [`AdapterError`], and gives the runtime face a worker installs
 //! ([`Executor`]). The recognizer is its static face: it [`Claim`]s paths,
 //! named or found ([`Requested`]), predicts the tests of a parsed
-//! [`SourceFile`] (a [`Recognition`]), reports the [`Setting`]s it
-//! resolved, for `aye config`, says what the framework's own configuration
-//! says about the run ([`FrameworkDefaults`], with [`JunitDefaults`]), and
-//! gives the context its executor gets. Ruff's
-//! syntax tree, line index and text ranges are re-exported ([`ast`],
-//! [`LineIndex`], [`TextRange`], [`TextSize`], [`Ranged`]), so collection
-//! and every adapter name the one version of them aye pins.
+//! [`SourceFile`] (a [`Recognition`], with a [`RefineReason`] when only an
+//! import can tell), reports the [`Setting`]s it resolved, for `aye
+//! config`, says what the framework's own configuration says about the run
+//! ([`FrameworkDefaults`], with [`JunitDefaults`]), and gives the context
+//! its executor gets. Ruff's syntax tree, line index and text ranges are
+//! re-exported ([`ast`], [`LineIndex`], [`TextRange`], [`TextSize`],
+//! [`Ranged`]), so collection and every adapter name the one version of
+//! them aye pins.
 //!
 //! Adapter → runner: `recognize(file, ast, config) → cases`, `refine(files) →
 //! cases` for runtime-dependent files, affinity and scope declarations, the
@@ -50,6 +51,7 @@
 //!   default text glob depends on pytest running beside it.
 
 use std::borrow::Cow;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use aye_config::{AyeSettings, ValueSource, WorkerCount};
@@ -227,8 +229,48 @@ pub struct Recognition {
     /// Why this file's tests can only be known by importing it. When set,
     /// `cases` holds the best static guess (possibly empty), and collection
     /// asks the worker to refine the file.
-    pub refine: Option<String>,
+    pub refine: Option<RefineReason>,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Why a file's tests can only be known by importing it, in words: the
+/// `not-refined` info says it when refinement is off. It is in no key of
+/// the refinement cache.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefineReason {
+    /// The file isn't valid UTF-8, and only the framework knows its
+    /// encoding: collection's own reason, when the recognizer gave none.
+    NotUtf8,
+    /// The adapter's, in its words. A recognizer with several gives them
+    /// as one, joined by `; `.
+    Adapter(Box<str>),
+}
+
+impl RefineReason {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::NotUtf8 => "the file is not valid UTF-8",
+            Self::Adapter(reason) => reason,
+        }
+    }
+}
+
+impl fmt::Display for RefineReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<String> for RefineReason {
+    fn from(reason: String) -> Self {
+        Self::Adapter(reason.into())
+    }
+}
+
+impl From<&str> for RefineReason {
+    fn from(reason: &str) -> Self {
+        Self::Adapter(reason.into())
+    }
 }
 
 /// A resolved setting, with where it came from, for `aye config`, which

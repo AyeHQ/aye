@@ -181,7 +181,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use aye_adapter::{Project, Recognition, Recognizer, SourceFile};
+use aye_adapter::{Project, Recognition, Recognizer, RefineReason, SourceFile};
 use aye_events::{
     AdapterName, Case, ContentDigest, Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPathRef,
     Severity, TestId,
@@ -645,7 +645,7 @@ impl<'a> Collector<'a> {
                     .1
                     .recognize(&file, entry.requested(), &support);
             if source.is_lossy() && recognition.refine.is_none() {
-                recognition.refine = Some("the file is not valid UTF-8".to_string());
+                recognition.refine = Some(RefineReason::NotUtf8);
             }
             recognized.by.push((*i, recognition));
         }

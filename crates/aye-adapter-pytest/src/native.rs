@@ -1042,6 +1042,8 @@ fn parse_options(args: &[String]) -> Parsed {
 
 #[cfg(test)]
 mod tests {
+    use aye_adapter::RefineReason;
+
     use super::*;
 
     fn write(root: &Path, rel: &str, body: &str) {
@@ -1252,7 +1254,10 @@ mod tests {
         };
         let recognition = recognizer.recognize(&file, Requested::Found, &[]);
         assert_eq!(recognition.cases, [] as [aye_events::Case; 0]);
-        assert_eq!(recognition.refine.as_deref(), Some(REFINE_REASON));
+        assert_eq!(
+            recognition.refine.as_ref().map(RefineReason::as_str),
+            Some(REFINE_REASON)
+        );
     }
 
     /// Without the doctest adapter, what pytest's doctest plugin would
@@ -1372,7 +1377,10 @@ mod tests {
         };
         let recognition = run.recognize(&file, Requested::Found, &[]);
         assert_eq!(recognition.cases, []);
-        assert_eq!(recognition.refine.as_deref(), Some(REFINE_REASON));
+        assert_eq!(
+            recognition.refine.as_ref().map(RefineReason::as_str),
+            Some(REFINE_REASON)
+        );
     }
 
     /// The context's bytes as aye 0.0.1 built them (`tests/contexts.jsonl`,

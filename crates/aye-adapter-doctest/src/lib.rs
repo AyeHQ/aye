@@ -1109,18 +1109,16 @@ impl DoctestRecognizer {
             .to_lowercase()
             .replace(['-', '_'], "");
         if !matches!(encoding.as_str(), "utf8" | "u8" | "utf" | "cp65001") {
-            recognition.refine = Some(format!(
-                "text files are read as {}",
-                self.config.encoding.value
-            ));
+            recognition.refine =
+                Some(format!("text files are read as {}", self.config.encoding.value).into());
         }
         let doc = parser::text_file(&parser::universal_newlines(file.source));
         if let Some(why) = doc.unsure {
-            recognition.refine = Some(why);
+            recognition.refine = Some(why.into());
         }
         if doc.examples {
             if let Some(why) = self.skipping_conftest(file.abs) {
-                recognition.refine = Some(why);
+                recognition.refine = Some(why.into());
             }
             let name = file.rel.file_name();
             let span = Span {
@@ -1235,7 +1233,7 @@ impl DoctestRecognizer {
             recognition.cases.push(case);
         }
         if !reasons.is_empty() {
-            recognition.refine = Some(reasons.join("; "));
+            recognition.refine = Some(reasons.join("; ").into());
         }
         recognition
     }

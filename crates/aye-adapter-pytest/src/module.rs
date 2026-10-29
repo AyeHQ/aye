@@ -585,7 +585,7 @@ pub(crate) fn recognize<'a>(
     }
     Recognition {
         cases: recognizer.cases,
-        refine: (!refine.is_empty()).then(|| refine.join("; ")),
+        refine: (!refine.is_empty()).then(|| refine.join("; ").into()),
         diagnostics,
     }
 }

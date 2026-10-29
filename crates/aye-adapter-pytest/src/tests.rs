@@ -6,7 +6,9 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use aye_adapter::{Adapter, Claim, LineIndex, Project, Recognition, Recognizer, SourceFile};
+use aye_adapter::{
+    Adapter, Claim, LineIndex, Project, Recognition, Recognizer, RefineReason, SourceFile,
+};
 use aye_events::Certainty;
 
 use super::*;
@@ -691,7 +693,11 @@ def test_comprehension(x): pass
 def test_static(): pass
 "#,
     );
-    let refine = recognition.refine.as_deref().unwrap();
+    let refine = recognition
+        .refine
+        .as_ref()
+        .map(RefineReason::as_str)
+        .unwrap();
     assert!(
         refine.contains("test_imported: parametrize argvalues are not literal"),
         "{refine}"
@@ -738,7 +744,11 @@ class TestMarked:
     def test_m(self): pass
 "#,
     );
-    let refine = recognition.refine.as_deref().unwrap();
+    let refine = recognition
+        .refine
+        .as_ref()
+        .map(RefineReason::as_str)
+        .unwrap();
     assert!(
         refine.contains("test_retry has a decorator aye can't see through"),
         "{refine}"
@@ -804,7 +814,14 @@ def test_generator():
         recognition.diagnostics[0].message,
         "cannot collect test class 'TestInit' because it has a __init__ constructor (from: test_x.py)"
     );
-    assert!(recognition.refine.as_deref().unwrap().contains("generator"));
+    assert!(
+        recognition
+            .refine
+            .as_ref()
+            .map(RefineReason::as_str)
+            .unwrap()
+            .contains("generator")
+    );
 }
 
 #[test]
@@ -960,7 +977,13 @@ fn descend_and_claim() {
     );
     let conftest = Parsed::read(root, "conftest.py");
     let recognition = recognizer.recognize(&file.file(), Requested::Found, &[conftest.file()]);
-    assert!(recognition.refine.unwrap().contains("collect_ignore"));
+    assert!(
+        recognition
+            .refine
+            .unwrap()
+            .as_str()
+            .contains("collect_ignore")
+    );
 }
 
 #[test]
@@ -987,6 +1010,7 @@ fn plugins_named_by_conftests_are_in_scope() {
         recognition
             .refine
             .unwrap()
+            .as_str()
             .contains("pytest_generate_tests")
     );
 }
@@ -1130,7 +1154,13 @@ fn opaque_decorators_on_classes_and_unittest_methods_are_refined() {
     let recognition = recognize(
         "import unittest\nfrom ddt import ddt, data\n@ddt\nclass TestThing(unittest.TestCase):\n    def test_plain(self): pass\n",
     );
-    assert!(recognition.refine.unwrap().contains("class decorator"));
+    assert!(
+        recognition
+            .refine
+            .unwrap()
+            .as_str()
+            .contains("class decorator")
+    );
     let recognition = recognize(
         "import unittest\nfrom parameterized import parameterized\nclass TestP(unittest.TestCase):\n    @parameterized.expand([1, 2])\n    def test_x(self, v): pass\n",
     );
@@ -1138,6 +1168,7 @@ fn opaque_decorators_on_classes_and_unittest_methods_are_refined() {
         recognition
             .refine
             .unwrap()
+            .as_str()
             .contains("TestP.test_x has a decorator aye can't see through")
     );
 }
@@ -1169,7 +1200,8 @@ fn decorated_generators_are_left_to_pytest() {
     assert!(
         recognition
             .refine
-            .as_deref()
+            .as_ref()
+            .map(RefineReason::as_str)
             .is_some_and(|r| r.contains("test_gen is a generator"))
     );
 }
@@ -1199,7 +1231,11 @@ except Exception:
     pass
 "#,
     );
-    let refine = recognition.refine.as_deref().unwrap();
+    let refine = recognition
+        .refine
+        .as_ref()
+        .map(RefineReason::as_str)
+        .unwrap();
     for reason in [
         "test_b may be deleted at runtime",
         "test_windows is defined conditionally",
@@ -1264,7 +1300,10 @@ fn class_members_added_at_runtime_are_refined() {
             "the module sets TestA.test_extra",
         ),
     ] {
-        let refine = recognize(source).refine.unwrap_or_default();
+        let refine = recognize(source)
+            .refine
+            .map(|r| r.to_string())
+            .unwrap_or_default();
         assert!(refine.contains(reason), "{source}: {refine}");
     }
     // An abstract base class is no reason.
@@ -1448,6 +1487,7 @@ fn hooks_through_star_imports_registrations_and_plugin_options() {
         recognize_at(root, "test_b.py")
             .refine
             .unwrap()
+            .as_str()
             .contains("pytest_make_parametrize_id")
     );
     // `-p NAME` in addopts loads a project module before anything else.
@@ -1457,6 +1497,7 @@ fn hooks_through_star_imports_registrations_and_plugin_options() {
         recognize_at(root, "test_b.py")
             .refine
             .unwrap()
+            .as_str()
             .contains("pytest_generate_tests")
     );
 }

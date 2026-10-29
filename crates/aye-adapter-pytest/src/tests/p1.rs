@@ -4,7 +4,7 @@
 //! --collect-only -q` on pytest 9.1.1; `p1_suites_match_live_pytest`
 //! re-checks every file left unrefined against the pytest at hand.
 
-use aye_adapter::Recognition;
+use aye_adapter::{Recognition, RefineReason};
 use aye_events::Certainty;
 
 use super::suites::Suite;
@@ -1277,7 +1277,11 @@ fn reasons_name_what_implements_hooks() {
             .iter()
             .find(|(rel, _)| rel == "tests/test_hk.py")
             .unwrap();
-        recognition.refine.clone().unwrap_or_default()
+        recognition
+            .refine
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default()
     };
     let ini = "[tool.pytest.ini_options]\npythonpath = [\".\"]\n";
     assert_eq!(
@@ -1341,7 +1345,8 @@ fn maybe_ignored_files_leave_partial_guesses() {
     assert!(
         recognition
             .refine
-            .as_deref()
+            .as_ref()
+            .map(RefineReason::as_str)
             .is_some_and(|r| r.contains("collect_ignore")),
         "{:?}",
         recognition.refine

@@ -289,7 +289,8 @@ fn unittest_cases_from_modules_aye_cannot_read_are_refined() {
         assert!(
             recognition
                 .refine
-                .as_deref()
+                .as_ref()
+                .map(RefineReason::as_str)
                 .is_some_and(|r| r.contains("HealthChecks")),
             "{conftest}: {recognition:?}"
         );
@@ -328,7 +329,7 @@ fn unittest_cases_from_modules_aye_cannot_read_are_refined() {
         "import sys\nfrom pathlib import Path\nsys.path.append(str(Path(__file__).parent / 'support'))\nfrom apicases import HealthChecks\nfrom somepkg import Helper\n\ndef test_users():\n    pass\n",
     );
     let recognition = recognize_at(root, "tests/test_api.py");
-    let reason = recognition.refine.unwrap();
+    let reason = recognition.refine.unwrap().to_string();
     assert!(
         reason.contains("HealthChecks") && !reason.contains("Helper"),
         "{reason}"
@@ -510,7 +511,8 @@ fn plugins_on_a_path_a_conftest_adds_are_read() {
     assert!(
         recognition
             .refine
-            .as_deref()
+            .as_ref()
+            .map(RefineReason::as_str)
             .is_some_and(|r| r.contains("parametrized fixture db")),
         "{recognition:?}"
     );
@@ -525,7 +527,7 @@ fn plugins_on_a_path_a_conftest_adds_are_read() {
         "import sys\nsys.path.insert(0, 'tests/support')\npytest_plugins = ['fixtures_db']\n",
     );
     let recognition = recognize_at(root, "tests/test_db.py");
-    let reason = recognition.refine.unwrap();
+    let reason = recognition.refine.unwrap().to_string();
     assert!(reason.contains("test_db uses db"), "{reason}");
     assert!(!reason.contains("tmp_path"), "{reason}");
     // A plugin aye can't find, with no such path: an installed one, as
@@ -555,7 +557,10 @@ fn fixtures_defined_in_alternative_branches_refine_their_tests() {
         "tests/test_condfx.py",
         "def test_codec(codec):\n    pass\n\ndef test_api(api):\n    pass\n",
     );
-    let reason = recognize_at(root, "tests/test_condfx.py").refine.unwrap();
+    let reason = recognize_at(root, "tests/test_condfx.py")
+        .refine
+        .unwrap()
+        .to_string();
     assert!(
         reason.contains("parametrized fixture codec")
             && reason.contains("parametrized fixture api"),
@@ -732,7 +737,8 @@ fn test_modules_importing_a_colliding_helper_are_refined_together() {
         assert!(
             recognition
                 .refine
-                .as_deref()
+                .as_ref()
+                .map(RefineReason::as_str)
                 .is_some_and(|r| r.contains("it imports helpers")),
             "{rel}: {recognition:?}"
         );
@@ -762,7 +768,8 @@ fn test_modules_importing_a_colliding_helper_are_refined_together() {
     assert!(
         !recognize_with(&found, root, "tests/a/test_a.py")
             .refine
-            .as_deref()
+            .as_ref()
+            .map(RefineReason::as_str)
             .unwrap_or_default()
             .contains("it imports helpers")
     );

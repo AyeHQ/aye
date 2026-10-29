@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use aye_adapter::Setting;
+use aye_adapter::{RefineReason, Setting};
 use aye_events::{
     AdapterName, ContentDigest, Diagnostic, DiagnosticCode, Fnv128, ProjectPath, Severity,
 };
@@ -60,12 +60,12 @@ impl Collector<'_> {
         // By package `__init__.py` and recognizer: its digest when standalone.
         let mut inits: HashMap<(PathBuf, usize), Option<ContentDigest>> = HashMap::new();
         for (i, (adapter, recognizer)) in self.recognizers.iter().enumerate() {
-            let pending: Vec<(&Job, &Recognized, &str)> = jobs
+            let pending: Vec<(&Job, &Recognized, &RefineReason)> = jobs
                 .iter()
                 .zip(recognized)
                 .filter_map(|(job, found)| {
                     let (_, recognition) = found.by.iter().find(|(by, _)| *by == i)?;
-                    Some((job, found, recognition.refine.as_deref()?))
+                    Some((job, found, recognition.refine.as_ref()?))
                 })
                 .collect();
             if pending.is_empty() {

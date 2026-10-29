@@ -285,7 +285,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_adapter::{
-    Adapter, AdapterError, Claim, Project, Recognition, Recognizer, Requested, Setting, SourceFile,
+    Adapter, AdapterError, Claim, Project, Recognition, Recognizer, RefineReason, Requested,
+    Setting, SourceFile,
 };
 use aye_events::{AdapterName, AffinityKey, Case, Certainty, ProjectPath, ProjectPathRef, Span};
 use aye_fs::normalize_absolute;
@@ -643,7 +644,7 @@ impl Recognizer for UnittestRecognizer {
                 )
             });
             return Recognition {
-                refine,
+                refine: refine.map(RefineReason::from),
                 ..Recognition::default()
             };
         }
@@ -693,7 +694,7 @@ impl Recognizer for UnittestRecognizer {
         }
         Recognition {
             cases,
-            refine,
+            refine: refine.map(RefineReason::from),
             diagnostics: Vec::new(),
         }
     }
