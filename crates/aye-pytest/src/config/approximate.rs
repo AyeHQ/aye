@@ -670,3 +670,268 @@ impl ApproximateConfig {
         })
     }
 }
+
+/// Pinned where paths are written with `/`.
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::config::{RawConfig, load_config, locate_config};
+
+    /// The configuration files the pins read, one each, alone in their
+    /// directory.
+    const FILES: &[(&str, &str)] = &[
+        (
+            "pytest.ini",
+            "[pytest]\naddopts = -ra -q\nmarkers =\n    slow: slow\n    db\nxfail_strict = true\n",
+        ),
+        ("pytest.ini", "[other]\nx = 1\n"),
+        (".pytest.ini", "[pytest]\ntestpaths = a b\n"),
+        ("tox.ini", "[pytest]\npython_files = check_*.py\n"),
+        ("tox.ini", "[tox]\nenvlist = py3\n"),
+        ("custom.ini", "[pytest]\npython_classes = Check\n"),
+        ("pytest.ini", "x = 1\n"),
+        ("setup.cfg", "[tool:pytest]\naddopts = --doctest-modules\n"),
+        ("setup.cfg", "[pytest]\naddopts = -q\n"),
+        ("setup.cfg", "[metadata]\nname = x\n"),
+        (
+            "pytest.toml",
+            "[pytest]\naddopts = [\"-ra\"]\nstrict = true\ntimeout = 5\nratio = 1.5\nwhen = 1979-05-27\n[pytest.sub]\nkey = \"v\"\n",
+        ),
+        ("pytest.toml", "[other]\nx = 1\n"),
+        (".pytest.toml", "[pytest]\nminversion = \"9.0\"\n"),
+        (
+            "pyproject.toml",
+            "[tool.pytest]\naddopts = [\"-ra\"]\ncollect_imported_tests = false\n",
+        ),
+        (
+            "pyproject.toml",
+            "[tool.pytest.ini_options]\naddopts = \"-ra\"\nxfail_strict = true\ntimeout = 5\nratio = 1.0\nbig = 1e10\nneg = -0.5\nmarkers = [\"slow\", 1, true, 2.5]\nwhen = 1979-05-27\n",
+        ),
+        (
+            "pyproject.toml",
+            "[tool.pytest]\naddopts = [\"-ra\"]\n[tool.pytest.ini_options]\naddopts = \"-q\"\n",
+        ),
+        ("pyproject.toml", "[tool.pytest]\nini_options = 1\n"),
+        ("pyproject.toml", "[tool.pytest]\n"),
+        ("pyproject.toml", "[project]\nname = \"x\"\n"),
+        ("pyproject.toml", "[tool]\npytest = 1\n"),
+        ("pyproject.toml", "[tool.pytest\n"),
+        ("notes.txt", "[pytest]\nx = 1\n"),
+    ];
+
+    /// Directory trees the pins locate a configuration in, from a
+    /// directory of each (`start`).
+    const TREES: &[(&[(&str, &str)], &str)] = &[
+        (
+            &[
+                ("a/pyproject.toml", "[project]\nname = 'x'\n"),
+                ("tox.ini", "[pytest]\ntestpaths = a\n"),
+            ],
+            "a/b",
+        ),
+        (&[("a/pyproject.toml", "[project]\nname = 'x'\n")], "a/b"),
+        (
+            &[
+                ("a/setup.cfg", "[pytest]\naddopts = -q\n"),
+                ("pytest.ini", "[pytest]\n"),
+            ],
+            "a",
+        ),
+        (
+            &[
+                (
+                    "a/pyproject.toml",
+                    "[tool.pytest.ini_options]\naddopts = '-q'\n",
+                ),
+                ("a/pytest.ini", "[pytest]\nx = 1\n"),
+            ],
+            "a",
+        ),
+        (&[], "a"),
+    ];
+
+    fn exact_values(config: &RawConfig) -> String {
+        config
+            .values
+            .iter()
+            .map(|(key, (raw, source))| format!("{key}={raw:?} <- {source}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    fn approximate_values(values: &BTreeMap<String, Value>) -> String {
+        values
+            .iter()
+            .map(|(key, value)| format!("{key}={value:?}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    /// What each rules makes of each of [`FILES`] (`load_config` and
+    /// `load`), and where each locates a configuration in each of
+    /// [`TREES`] (`locate_config` and `locate`), the root written `<root>`.
+    fn readings() -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for (name, body) in FILES {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(name);
+            std::fs::write(&path, body).unwrap();
+            let root = dir.path().to_string_lossy().into_owned();
+            let exact = match load_config(&path) {
+                Ok(Some((config, section))) => format!("{section} {}", exact_values(&config)),
+                Ok(None) => "none".to_string(),
+                Err(err) => format!("error: {err}"),
+            };
+            let approximate = match load(&path) {
+                Ok(Some((section, values))) => {
+                    format!("{section} {}", approximate_values(&values))
+                }
+                Ok(None) => "none".to_string(),
+                Err(err) => format!("error: {err}"),
+            };
+            out.push((
+                exact.replace(&root, "<root>"),
+                approximate.replace(&root, "<root>"),
+            ));
+        }
+        for (files, start) in TREES {
+            let dir = tempfile::tempdir().unwrap();
+            for (rel, body) in *files {
+                let path = dir.path().join(rel);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, body).unwrap();
+            }
+            let start = dir.path().join(start);
+            std::fs::create_dir_all(&start).unwrap();
+            let root = dir.path().to_string_lossy().into_owned();
+            let exact = match locate_config(std::slice::from_ref(&start)) {
+                Ok(Some(found)) => format!(
+                    "{} {} {}",
+                    found.rootdir.display(),
+                    found.inifile.display(),
+                    exact_values(&found.config)
+                ),
+                Ok(None) => "none".to_string(),
+                Err(err) => format!("error: {err}"),
+            };
+            let approximate = match locate(&start) {
+                Ok(ini) => format!(
+                    "{:?} {:?} {} configured={} {}",
+                    ini.rootdir,
+                    ini.file,
+                    ini.section,
+                    ini.configured,
+                    approximate_values(&ini.values)
+                ),
+                Err(err) => format!("error: {err}"),
+            };
+            out.push((
+                exact.replace(&root, "<root>"),
+                approximate.replace(&root, "<root>"),
+            ));
+        }
+        out
+    }
+
+    /// Each rules' reading of each of [`FILES`], then where each locates
+    /// a configuration in each of [`TREES`], recorded from the pytest
+    /// adapter's and the doctest adapter's readers before they shared any
+    /// code: `(exact, approximate)`.
+    const READINGS: &[(&str, &str)] = &[
+        (
+            "[pytest] addopts=Ini(\"-ra -q\") <- <root>/pytest.ini [pytest]; markers=Ini(\"slow: slow\\ndb\") <- <root>/pytest.ini [pytest]; xfail_strict=Ini(\"true\") <- <root>/pytest.ini [pytest]",
+            "[pytest] addopts=Text(\"-ra -q\"); markers=Text(\"slow: slow\\ndb\"); xfail_strict=Text(\"true\")",
+        ),
+        ("[pytest] ", "[pytest] "),
+        (
+            "[pytest] testpaths=Ini(\"a b\") <- <root>/.pytest.ini [pytest]",
+            "[pytest] testpaths=Text(\"a b\")",
+        ),
+        (
+            "[pytest] python_files=Ini(\"check_*.py\") <- <root>/tox.ini [pytest]",
+            "[pytest] python_files=Text(\"check_*.py\")",
+        ),
+        ("none", "none"),
+        (
+            "[pytest] python_classes=Ini(\"Check\") <- <root>/custom.ini [pytest]",
+            "[pytest] python_classes=Text(\"Check\")",
+        ),
+        (
+            "error: failed to parse <root>/pytest.ini: line 1: key outside of a section",
+            "error: failed to parse <root>/pytest.ini: line 1: key outside of a section",
+        ),
+        (
+            "[tool:pytest] addopts=Ini(\"--doctest-modules\") <- <root>/setup.cfg [tool:pytest]",
+            "[tool:pytest] addopts=Text(\"--doctest-modules\")",
+        ),
+        (
+            "error: <root>/setup.cfg: [pytest] section in setup.cfg files is no longer supported, change to [tool:pytest] instead.",
+            "none",
+        ),
+        ("none", "none"),
+        (
+            "[pytest] addopts=Toml(Array([String(\"-ra\")])) <- <root>/pytest.toml [pytest]; ratio=Toml(Float(1.5)) <- <root>/pytest.toml [pytest]; strict=Toml(Boolean(true)) <- <root>/pytest.toml [pytest]; sub=Toml(Table({\"key\": String(\"v\")})) <- <root>/pytest.toml [pytest]; timeout=Toml(Integer(5)) <- <root>/pytest.toml [pytest]; when=Toml(Datetime(Datetime { date: Some(Date { year: 1979, month: 5, day: 27 }), time: None, offset: None })) <- <root>/pytest.toml [pytest]",
+            "[pytest] addopts=List([\"-ra\"]); ratio=Text(\"1.5\"); strict=Bool(true); sub=Text(\"{ key = \\\"v\\\" }\"); timeout=Text(\"5\"); when=Text(\"1979-05-27\")",
+        ),
+        ("[pytest] ", "[pytest] "),
+        (
+            "[pytest] minversion=Toml(String(\"9.0\")) <- <root>/.pytest.toml [pytest]",
+            "[pytest] minversion=Text(\"9.0\")",
+        ),
+        (
+            "[tool.pytest] addopts=Toml(Array([String(\"-ra\")])) <- <root>/pyproject.toml [tool.pytest]; collect_imported_tests=Toml(Boolean(false)) <- <root>/pyproject.toml [tool.pytest]",
+            "[tool.pytest] addopts=List([\"-ra\"]); collect_imported_tests=Bool(false)",
+        ),
+        (
+            "[tool.pytest.ini_options] addopts=Ini(\"-ra\") <- <root>/pyproject.toml [tool.pytest.ini_options]; big=Ini(\"10000000000.0\") <- <root>/pyproject.toml [tool.pytest.ini_options]; markers=IniList([\"slow\", \"1\", \"True\", \"2.5\"]) <- <root>/pyproject.toml [tool.pytest.ini_options]; neg=Ini(\"-0.5\") <- <root>/pyproject.toml [tool.pytest.ini_options]; ratio=Ini(\"1.0\") <- <root>/pyproject.toml [tool.pytest.ini_options]; timeout=Ini(\"5\") <- <root>/pyproject.toml [tool.pytest.ini_options]; when=Ini(\"1979-05-27\") <- <root>/pyproject.toml [tool.pytest.ini_options]; xfail_strict=Ini(\"True\") <- <root>/pyproject.toml [tool.pytest.ini_options]",
+            "[tool.pytest.ini_options] addopts=Text(\"-ra\"); big=Text(\"10000000000.0\"); markers=List([\"slow\", \"1\", \"true\", \"2.5\"]); neg=Text(\"-0.5\"); ratio=Text(\"1.0\"); timeout=Text(\"5\"); when=Text(\"1979-05-27\"); xfail_strict=Bool(true)",
+        ),
+        (
+            "error: <root>/pyproject.toml: Cannot use both [tool.pytest] (native TOML types) and [tool.pytest.ini_options] (string-based INI format) simultaneously.",
+            "[tool.pytest] addopts=List([\"-ra\"])",
+        ),
+        ("[tool.pytest.ini_options] ", "none"),
+        ("none", "none"),
+        ("none", "none"),
+        ("none", "none"),
+        (
+            "error: failed to parse <root>/pyproject.toml: TOML parse error at line 1, column 13\n  |\n1 | [tool.pytest\n  |             ^\nunclosed table, expected `]`\n",
+            "error: failed to parse <root>/pyproject.toml: TOML parse error at line 1, column 13\n  |\n1 | [tool.pytest\n  |             ^\nunclosed table, expected `]`\n",
+        ),
+        ("none", "none"),
+        (
+            "<root> <root>/tox.ini testpaths=Ini(\"a\") <- <root>/tox.ini [pytest]",
+            "Some(\"<root>\") Some(\"<root>/tox.ini\") [pytest] configured=true testpaths=Text(\"a\")",
+        ),
+        (
+            "<root>/a <root>/a/pyproject.toml ",
+            "Some(\"<root>/a\") Some(\"<root>/a/pyproject.toml\")  configured=false ",
+        ),
+        (
+            "error: <root>/a/setup.cfg: [pytest] section in setup.cfg files is no longer supported, change to [tool:pytest] instead.",
+            "Some(\"<root>\") Some(\"<root>/pytest.ini\") [pytest] configured=true ",
+        ),
+        (
+            "<root>/a <root>/a/pytest.ini x=Ini(\"1\") <- <root>/a/pytest.ini [pytest]",
+            "Some(\"<root>/a\") Some(\"<root>/a/pytest.ini\") [pytest] configured=true x=Text(\"1\")",
+        ),
+        ("none", "None None  configured=false "),
+    ];
+
+    /// The two rules read and locate configuration files as their two
+    /// readers always have, differences included: what the exact rules
+    /// refuse and the approximation reads on from (a `setup.cfg` with
+    /// `[pytest]`, both TOML forms at once), TOML values coerced to text
+    /// or kept, an `ini_options` that isn't a table.
+    #[test]
+    fn each_rules_reads_configuration_files_as_it_always_has() {
+        let readings = readings();
+        assert_eq!(readings.len(), READINGS.len());
+        for ((exact, approximate), (pinned_exact, pinned_approximate)) in
+            readings.iter().zip(READINGS)
+        {
+            assert_eq!(exact, pinned_exact);
+            assert_eq!(approximate, pinned_approximate);
+        }
+    }
+}
