@@ -1303,10 +1303,15 @@ mod tests {
         );
     }
 
-    /// Projects the pin of the native context's `ini` reads: their files,
-    /// the arguments after `--`, and `-c`.
-    #[allow(clippy::type_complexity)]
-    const INI_PROJECTS: &[(&[(&str, &str)], &[&str], Option<&str>)] = &[
+    /// A project: its files, the arguments after `--`, and `-c`.
+    type IniProject = (
+        &'static [(&'static str, &'static str)],
+        &'static [&'static str],
+        Option<&'static str>,
+    );
+
+    /// Projects the pin of the native context's `ini` reads.
+    const INI_PROJECTS: &[IniProject] = &[
         (
             &[(
                 "pytest.ini",
