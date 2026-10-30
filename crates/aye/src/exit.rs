@@ -29,6 +29,15 @@ impl Errors {
     }
 }
 
+/// How a run ended: the exit code `run_finished` carried, and whether a
+/// report file that could be written when the run started couldn't be at
+/// its end, which only the process's exit code can say ([`crate::main`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RunEnd {
+    pub(crate) code: ExitCode,
+    pub(crate) report_failed: bool,
+}
+
 /// When a run's exit code is decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RunStage {

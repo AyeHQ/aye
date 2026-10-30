@@ -26,16 +26,17 @@ use aye_runner::{Echo, Plan, Runner, RunnerOptions};
 use aye_select::Selection;
 use aye_static::EnvVars;
 
-use crate::exit::{Errors, RunStage, RunVerdict};
+use crate::error::AyeError;
+use crate::exit::{Errors, RunEnd, RunStage, RunVerdict};
 use crate::positional::Positional;
 use crate::printer::Printer;
 use crate::registry;
 use crate::settings::{JunitTarget, RunSettings};
 
-/// Run what `settings` ask for, and say how it went: the exit code
-/// `run_finished` carries, or one before any event. What aye says beside
-/// the stream goes to `printer`.
-pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> ExitCode {
+/// Run what `settings` ask for, and say how it ended ([`RunEnd`]), or why
+/// it couldn't start: a JUnit report that can't be written, before any
+/// event. What aye says beside the stream goes to `printer`.
+pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> Result<RunEnd, AyeError> {
     let started = Instant::now();
     // A report that can't be written fails before anything runs, not
     // after the whole suite.
@@ -43,11 +44,10 @@ pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> ExitCode {
     if let Some(junit) = &junit
         && let Err(err) = writable(&junit.path)
     {
-        printer.error(format_args!(
+        return Err(AyeError::usage(format!(
             "cannot write the JUnit XML report to {}: {err}",
             junit.path.display()
-        ));
-        return ExitCode::UsageError;
+        )));
     }
     let state = StateDir::for_root(&settings.root);
     let mut history = History::load(state.path());
@@ -196,12 +196,12 @@ pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> ExitCode {
             interrupted: true,
             ..RunVerdict::default()
         };
-        return out.finish(
+        return Ok(out.finish(
             verdict.exit_code(RunStage::Collection),
             verdict.counts,
             Some(StopReason::Interrupted),
             &file_failed,
-        );
+        ));
     }
     // Dotted names and keys are resolved among what collection found,
     // over the whole project: what the run reaches decides which of
@@ -352,12 +352,12 @@ pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> ExitCode {
         duration: collect_started.elapsed(),
     });
     if collected.ends_after_collection() {
-        return out.finish(
+        return Ok(out.finish(
             collected.exit_code(RunStage::Collection),
             collected.counts,
             None,
             &file_failed,
-        );
+        ));
     }
 
     // -- run ----------------------------------------------------------------
@@ -413,12 +413,12 @@ pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> ExitCode {
         ..summary.counts
     };
     let verdict = collected.with_run(&summary, out.errors, counts);
-    out.finish(
+    Ok(out.finish(
         verdict.exit_code(RunStage::Run),
         verdict.counts,
         summary.stopped,
         &file_failed,
-    )
+    ))
 }
 
 /// The run's reporters: its output format's on stdout (and GitHub's
@@ -945,7 +945,7 @@ impl Stream<'_> {
         counts: Counts,
         stopped: Option<StopReason>,
         file_failed: &AtomicBool,
-    ) -> ExitCode {
+    ) -> RunEnd {
         self.emit(Event::RunFinished {
             exit_code: code,
             counts,
@@ -969,13 +969,10 @@ impl Stream<'_> {
                 runs.display()
             ));
         }
-        // A report file that couldn't be written at the very end (it was
-        // writable when the run started) fails the run, as it does pytest's;
-        // `run_finished` was already out, so only the process says so.
-        if file_failed.load(Ordering::Relaxed) && matches!(code, ExitCode::Ok | ExitCode::NoTests) {
-            return ExitCode::TestsFailed;
+        RunEnd {
+            code,
+            report_failed: file_failed.load(Ordering::Relaxed),
         }
-        code
     }
 }
 

@@ -111,7 +111,7 @@ fn a_run_is_picked_by_its_number_or_the_start_of_an_old_id() {
     assert_eq!(picked(Some(old)).ok().as_deref(), Some(old));
     for wanted in ["r9", "9", "abcd", "r"] {
         assert!(
-            matches!(picked(Some(wanted)), Err(Problem::Usage(message)) if message.contains("stored: r2, r1, fedcba9876543210")),
+            matches!(picked(Some(wanted)), Err(AyeError::Usage(err)) if err.to_string().contains("stored: r2, r1, fedcba9876543210")),
             "{wanted}"
         );
     }
@@ -395,7 +395,8 @@ fn chosen(records: &[Record], args: &[&str]) -> Result<Vec<String>, String> {
             ids.dedup();
             Ok(ids)
         }
-        Err(Problem::Usage(message) | Problem::NoRun(message)) => Err(message),
+        Err(AyeError::Usage(err)) => Err(err.to_string()),
+        Err(other) => panic!("{other:?}"),
     }
 }
 

@@ -88,8 +88,8 @@ fn a_closed_stdout_starves_no_other_reporter() {
         stream.emit(Event::CollectionStarted);
     }
     let failed = AtomicBool::new(false);
-    let code = stream.finish(ExitCode::Ok, Counts::default(), None, &failed);
-    assert_eq!(code, ExitCode::Ok);
+    let ended = stream.finish(ExitCode::Ok, Counts::default(), None, &failed);
+    assert_eq!(ended.code, ExitCode::Ok);
     // Every record, run_finished included, reached the other reporter.
     assert_eq!(seen.load(Ordering::Relaxed), 6);
     // stdout was tried until it failed, then left alone.
@@ -320,9 +320,16 @@ fn a_report_that_fails_at_the_end_fails_the_run() {
         started: Instant::now(),
         printer: Printer,
     };
-    let code = stream.finish(ExitCode::Ok, Counts::default(), None, &failed);
+    let ended = stream.finish(ExitCode::Ok, Counts::default(), None, &failed);
     assert!(failed.load(Ordering::Relaxed));
-    assert_eq!(code, ExitCode::TestsFailed);
+    // `run_finished` said 0; the process exits 1 (`crate::main`).
+    assert_eq!(
+        ended,
+        RunEnd {
+            code: ExitCode::Ok,
+            report_failed: true
+        }
+    );
 }
 
 #[test]

@@ -61,40 +61,13 @@ use aye_render::{
 use aye_select::Selection;
 
 use crate::cli::ShowArgs;
+use crate::error::AyeError;
 use crate::positional;
 use crate::printer::Printer;
 use crate::settings::ShowSettings;
 
 /// How many of the closest names a selector naming nothing lists.
 const CLOSEST: usize = 5;
-
-/// Why `aye show` shows nothing.
-enum Problem {
-    /// What was asked can't be shown (exit 4).
-    Usage(String),
-    /// No run is stored (exit 5).
-    NoRun(String),
-}
-
-impl From<io::Error> for Problem {
-    fn from(err: io::Error) -> Self {
-        Self::Usage(format!("cannot write output: {err}"))
-    }
-}
-
-pub(crate) fn main(args: &ShowArgs, printer: Printer) -> ExitCode {
-    match show(args, printer) {
-        Ok(()) => ExitCode::Ok,
-        Err(Problem::Usage(message)) => {
-            printer.error(message);
-            ExitCode::UsageError
-        }
-        Err(Problem::NoRun(message)) => {
-            printer.note(message);
-            ExitCode::NoTests
-        }
-    }
-}
 
 /// A positional argument, as `aye show` reads it.
 #[derive(Debug, Clone)]
@@ -106,8 +79,10 @@ enum Wanted {
     Test(String),
 }
 
-fn show(args: &ShowArgs, printer: Printer) -> Result<(), Problem> {
-    let settings = ShowSettings::resolve(args).map_err(Problem::Usage)?;
+/// Show what `args` ask for of a stored run, through `printer` where it
+/// isn't a renderer's.
+pub(crate) fn show(args: &ShowArgs, printer: Printer) -> Result<(), AyeError> {
+    let settings = ShowSettings::resolve(args).map_err(AyeError::usage)?;
     let (cwd, root, format) = (&settings.cwd, &settings.root, settings.format);
     let store = RunStore::new(aye_fs::StateDir::for_root(root).bucket(aye_fs::StateBucket::Runs));
     let keep = settings.keep_runs;
@@ -116,7 +91,7 @@ fn show(args: &ShowArgs, printer: Printer) -> Result<(), Problem> {
     }
     let meta = pick(&store, args.run.as_deref(), keep)?;
     let unreadable = |err: io::Error| {
-        Problem::NoRun(format!(
+        AyeError::NoRun(format!(
             "the log of run {} can't be read from {}: {err}",
             meta.run,
             store.dir().display()
@@ -220,13 +195,13 @@ fn show(args: &ShowArgs, printer: Printer) -> Result<(), Problem> {
 }
 
 /// No run is stored: why, when the configuration says.
-fn no_run(store: &RunStore, keep: usize) -> Problem {
+fn no_run(store: &RunStore, keep: usize) -> AyeError {
     if keep == 0 {
-        Problem::NoRun(
+        AyeError::NoRun(
             "no run is kept: [tool.aye] keep-runs = 0 (set it above 0 for aye show)".into(),
         )
     } else {
-        Problem::NoRun(format!(
+        AyeError::NoRun(format!(
             "no run is stored in {} yet: run aye first",
             store.dir().display()
         ))
@@ -237,7 +212,7 @@ fn no_run(store: &RunStore, keep: usize) -> Problem {
 /// stored when the one `last` names is gone). `--run` takes a run's number
 /// (`r81` or `81`) or, for a run stored before runs were numbered, the
 /// start of its hex id.
-fn pick(store: &RunStore, wanted: Option<&str>, keep: usize) -> Result<RunMeta, Problem> {
+fn pick(store: &RunStore, wanted: Option<&str>, keep: usize) -> Result<RunMeta, AyeError> {
     let Some(wanted) = wanted else {
         return store.last().ok_or_else(|| no_run(store, keep));
     };
@@ -260,7 +235,7 @@ fn pick(store: &RunStore, wanted: Option<&str>, keep: usize) -> Result<RunMeta, 
         .collect();
     match found.len() {
         1 => Ok(found.remove(0)),
-        0 => Err(Problem::Usage(format!(
+        0 => Err(AyeError::usage(format!(
             "--run {wanted}: no stored run is numbered so{}; stored: {}",
             if runs.iter().any(|meta| meta.number().is_none()) {
                 " or has an id that starts with it"
@@ -269,7 +244,7 @@ fn pick(store: &RunStore, wanted: Option<&str>, keep: usize) -> Result<RunMeta, 
             },
             ids(&runs)
         ))),
-        _ => Err(Problem::Usage(format!(
+        _ => Err(AyeError::usage(format!(
             "--run {wanted}: several stored runs' ids start with it: {}",
             ids(&found)
         ))),
@@ -290,7 +265,7 @@ fn list_runs(
     format: OutputFormat,
     keep: usize,
     printer: Printer,
-) -> Result<(), Problem> {
+) -> Result<(), AyeError> {
     let runs = store.runs();
     if runs.is_empty() {
         return Err(no_run(store, keep));
@@ -401,7 +376,7 @@ fn choose(
     keys: &Keys,
     wanted: &[(&str, Wanted)],
     meta: &RunMeta,
-) -> Result<HashSet<usize>, Problem> {
+) -> Result<HashSet<usize>, AyeError> {
     if wanted.is_empty() {
         return Ok((0..log.items.len()).collect());
     }
@@ -456,7 +431,7 @@ fn choose(
     if problems.is_empty() {
         Ok(chosen)
     } else {
-        Err(Problem::Usage(problems.join("\naye: error: ")))
+        Err(AyeError::usage(problems.join("\naye: error: ")))
     }
 }
 
@@ -585,7 +560,7 @@ struct Filter {
 }
 
 impl Filter {
-    fn new(args: &ShowArgs) -> Result<Option<Self>, Problem> {
+    fn new(args: &ShowArgs) -> Result<Option<Self>, AyeError> {
         let mut outcomes: HashSet<Outcome> = args.outcome.iter().copied().collect();
         if args.failed {
             outcomes.extend([Outcome::Failed, Outcome::Error]);
@@ -594,12 +569,12 @@ impl Filter {
         if let Some(expr) = &args.keyword {
             selection = selection
                 .with_keyword(expr)
-                .map_err(|err| Problem::Usage(err.to_string()))?;
+                .map_err(|err| AyeError::usage(err.to_string()))?;
         }
         if let Some(expr) = &args.tags {
             selection = selection
                 .with_tags(expr)
-                .map_err(|err| Problem::Usage(err.to_string()))?;
+                .map_err(|err| AyeError::usage(err.to_string()))?;
         }
         Ok(
             (!outcomes.is_empty() || !selection.is_empty()).then_some(Self {
