@@ -451,6 +451,13 @@ fn adapter_faces() {
     assert!(adapter.prepare(&project).unwrap().is_some());
 }
 
+/// The `fnmatch` answers as aye 0.0.1's copy here gave them, for
+/// `python_files`, `norecursedirs`, the ignore globs and `testpaths`.
+#[test]
+fn fnmatch_answers_are_pinned() {
+    aye_test::assert_fnmatch_pins(aye_test::FnmatchAnswers::Legacy, crate::fnmatch::fnmatch);
+}
+
 mod p1;
 mod p2;
 mod p3;

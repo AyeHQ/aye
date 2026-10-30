@@ -866,6 +866,13 @@ fn claims_follow_discovery() {
     assert!(!recognizer.descend(&root.join("plain")));
 }
 
+/// Discovery's `fnmatch` answers as aye 0.0.1's copy here gave them, sets
+/// read as CPython reads them.
+#[test]
+fn fnmatch_answers_are_pinned() {
+    aye_test::assert_fnmatch_pins(aye_test::FnmatchAnswers::CPython, crate::fnmatch::fnmatch);
+}
+
 /// A file named on the command line is a module alone, as `python -m
 /// unittest path.py` loads it, even below a package that may define
 /// `load_tests` (which answers for it in discovery).

@@ -3,9 +3,10 @@
 //! directory, in the hermetic environment, with the interpreter a run is
 //! given), what snapshots of its output leave out ([`filters`]), its
 //! output read back (exit codes, stdout, JSON lines, and those lines as the
-//! records a run's log would hold: [`as_records`]), and the fixtures (a
+//! records a run's log would hold: [`as_records`]), the fixtures (a
 //! project written for a test, a copy of one, the examples, a venv without
-//! pytest).
+//! pytest), and the `fnmatch` answers aye 0.0.1's copies gave, pinned
+//! ([`assert_fnmatch_pins`]).
 //!
 //! Decided (implementation, October 2026):
 //! - **One interpreter for every test**: `AYE_TEST_PYTHON` when set, else
@@ -23,7 +24,8 @@
 //!   `record.py` ran the referee.
 //!
 //! Owns: the lookup of the test interpreter, the hermetic environment, the
-//! snapshots' filters, reading aye's output back, and the fixtures above.
+//! snapshots' filters, reading aye's output back, the fixtures above, and
+//! the `fnmatch` pins.
 //! Does not own: the adapters' own harnesses, which build parsed files and
 //! drive recognizers (they stay in their crates), nor reading the run store
 //! (aye-history, which the binary's tests read themselves).
@@ -36,6 +38,7 @@
 mod context;
 mod filters;
 mod fixtures;
+mod fnmatch;
 mod output;
 mod python;
 
@@ -44,5 +47,6 @@ pub use filters::filters;
 pub use fixtures::{
     copy_project, examples_dir, project, runs_dir, venv_without_pytest, workspace_root,
 };
+pub use fnmatch::{FNMATCH_NAMES, FNMATCH_PINS, FnmatchAnswers, assert_fnmatch_pins};
 pub use output::{as_records, code, events, json_lines, stderr, stdout};
 pub use python::{Needs, test_python};

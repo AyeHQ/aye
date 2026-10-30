@@ -281,6 +281,13 @@ fn fnmatch_follows_python() {
     assert!(fnmatch_ex(".*", &r.join(".git")));
 }
 
+/// The `fnmatch` answers as aye 0.0.1's copy here gave them, the same as
+/// the pytest adapter's.
+#[test]
+fn fnmatch_answers_are_pinned() {
+    aye_test::assert_fnmatch_pins(aye_test::FnmatchAnswers::Legacy, crate::fnmatch::fnmatch);
+}
+
 // ---------------------------------------------------------------- names
 
 #[test]
