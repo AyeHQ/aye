@@ -35,6 +35,14 @@ impl Klass<'_> {
     }
 }
 
+/// Two classes are the same when their keys are: a class of the module by
+/// where its statement starts, one from elsewhere by its path.
+impl PartialEq for Klass<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key()
+    }
+}
+
 /// What an external base class brings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum External {

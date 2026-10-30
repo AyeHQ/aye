@@ -16,6 +16,7 @@
 //!   while a module is imported, and the statements that may not run.
 //! - [`class`]: classes: their bases, known classes from elsewhere, and
 //!   names as a class body stores them.
+//! - [`c3`]: C3 linearization, the order of a class's MRO.
 //! - [`decorator`]: whether a decorator hands back what it decorates.
 //! - [`sys_path`]: the directories a module's code puts on `sys.path`.
 //! - [`module_resolver`]: the file an import finds, as `FileFinder` looks
@@ -32,6 +33,7 @@
 //! AST. Knows no framework but the standard library's own unittest; only
 //! the adapters depend on it.
 
+pub mod c3;
 pub mod class;
 pub mod decorator;
 mod escape;

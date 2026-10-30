@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use aye_adapter::ast::{Expr, ExprLambda, Stmt, StmtClassDef, StmtFunctionDef};
 use aye_adapter::{Ranged, Recognition, SourceFile, TextRange, TextSize};
 use aye_events::{AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity};
+use aye_python_semantic::c3::{InconsistentMro, linearize};
 use aye_python_semantic::class::{
     External, Klass, Unresolved, external_kind, is_unittest_base, mangle,
 };
@@ -1189,32 +1190,11 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
             });
         }
         sequences.push(bases.clone());
-        let mut out = vec![Klass::Local(class)];
-        loop {
-            sequences.retain(|s| !s.is_empty());
-            if sequences.is_empty() {
-                break;
-            }
-            let head = sequences.iter().map(|s| s[0].clone()).find(|candidate| {
-                let key = candidate.key();
-                sequences
-                    .iter()
-                    .all(|s| s[1..].iter().all(|k| k.key() != key))
-            });
-            let Some(head) = head else {
-                return Err(Unresolved {
-                    reason: format!("{} has an inconsistent MRO", class.name),
-                    harmless: false,
-                });
-            };
-            let key = head.key();
-            out.push(head);
-            for sequence in &mut sequences {
-                if sequence[0].key() == key {
-                    sequence.remove(0);
-                }
-            }
-        }
+        let mut out =
+            linearize(Klass::Local(class), sequences).map_err(|InconsistentMro| Unresolved {
+                reason: format!("{} has an inconsistent MRO", class.name),
+                harmless: false,
+            })?;
         if !out.iter().any(|k| k.key() == "builtins.object") {
             out.push(Klass::object());
         }

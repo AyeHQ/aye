@@ -231,6 +231,7 @@ dependencies = [
  "aye-config",
  "aye-events",
  "aye-protocol",
+ "aye-python-semantic",
  "aye-python-stdlib",
  "aye-test",
  "ruff_python_parser",

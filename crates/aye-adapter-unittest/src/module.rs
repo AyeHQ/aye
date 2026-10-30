@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 use aye_adapter::ast::visitor::{self, Visitor};
 use aye_adapter::ast::{self, CmpOp, Expr, ExprCall, Stmt, StmtClassDef, StmtFunctionDef};
 use aye_adapter::{LineIndex, Ranged, TextRange};
+use aye_python_semantic::c3::{InconsistentMro, linearize};
 use aye_python_stdlib::builtins::{DYNAMIC_CALLS, READING_BUILTINS};
 use aye_python_stdlib::modules::STDLIB;
 use aye_python_stdlib::unittest::{
@@ -2323,30 +2324,12 @@ impl Modules {
             sequences.push(vec![Node::Object]);
         }
         sequences.push(direct);
-        let mut out = vec![Node::Class(Arc::clone(summary), index)];
-        loop {
-            sequences.retain(|s| !s.is_empty());
-            if sequences.is_empty() {
-                return Ok(out);
-            }
-            let candidate = sequences
-                .iter()
-                .map(|s| &s[0])
-                .find(|head| !sequences.iter().any(|s| s[1..].contains(head)))
-                .cloned();
-            let Some(next) = candidate else {
-                return Err(format!(
-                    "{} has an inconsistent MRO; Python refuses to make it",
-                    class.name
-                ));
-            };
-            for sequence in &mut sequences {
-                if sequence[0] == next {
-                    sequence.remove(0);
-                }
-            }
-            out.push(next);
-        }
+        linearize(Node::Class(Arc::clone(summary), index), sequences).map_err(|InconsistentMro| {
+            format!(
+                "{} has an inconsistent MRO; Python refuses to make it",
+                class.name
+            )
+        })
     }
 
     /// [`Modules::class_tests`] of a class of `summary`, for a static guess.
