@@ -8,11 +8,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use aye_adapter::{
-    Adapter, Claim, LineIndex, Project, Recognition, Recognizer, RefineReason, SourceFile,
+    Adapter, Claim, LineIndex, Project, Recognition, Recognizer, RefineReason, Requested,
+    SourceFile,
 };
 use aye_events::Certainty;
+use aye_python_stdlib::fnmatch::fnmatch;
+use aye_python_stdlib::unittest::may_define_load_tests;
 
 use super::*;
+use crate::recognizer::NO_STATIC_TESTS;
 
 mod suites;
 
