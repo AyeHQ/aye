@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use aye_events::{
-    Assertion, Captured, Counts, Event, ExitCode, Failure, Frame, Location, Outcome, Phase, Record,
-    TestId, TestResult,
+    Assertion, Captured, Counts, DiagnosticCode, Event, ExitCode, Failure, FailureSignature, Frame,
+    Location, Outcome, Phase, Record, RunNumber, TestId, TestResult,
 };
 use serde_json::Value;
 
@@ -417,7 +417,7 @@ fn a_test_failed_only_by_its_subtests_gets_no_second_line() {
     parent.failures.push(Failure {
         phase: Some(Phase::Test),
         message: "contains 1 failed subtest".into(),
-        signature: "16b555694f3fa454".into(),
+        signature: FailureSignature::new("16b555694f3fa454"),
         detail: Some("contains 1 failed subtest".into()),
         ..Failure::default()
     });
@@ -453,7 +453,7 @@ fn sub_failed(id: &TestId, name: &str, message: &str, signature: &str) -> Record
         failure: Some(Failure {
             phase: Some(Phase::Test),
             message: message.into(),
-            signature: signature.into(),
+            signature: FailureSignature::new(signature),
             ..Failure::default()
         }),
         duration: Duration::ZERO,
@@ -467,7 +467,7 @@ fn a_test_failed_only_by_its_subtests_puts_its_output_and_rerun_on_the_first() {
     parent.failures.push(Failure {
         phase: Some(Phase::Test),
         message: "contains 2 failed subtests".into(),
-        signature: "16b555694f3fa454".into(),
+        signature: FailureSignature::new("16b555694f3fa454"),
         detail: Some("contains 2 failed subtests".into()),
         ..Failure::default()
     });
@@ -476,7 +476,7 @@ fn a_test_failed_only_by_its_subtests_puts_its_output_and_rerun_on_the_first() {
         ..Captured::default()
     };
     parent.reproduce = Some(aye_events::Reproduce {
-        command: vec!["aye".into(), id.0.clone(), "-x".into()],
+        command: vec!["aye".into(), id.as_str().to_owned(), "-x".into()],
         inputs: std::collections::BTreeMap::new(),
     });
     let other = TestId::new("tests/test_t.py::test_t");
@@ -583,7 +583,7 @@ fn the_summary_says_why_the_run_stopped() {
 fn the_summary_names_a_stored_run() {
     let mut records = streams::pass_only();
     if let Event::RunStarted { run, .. } = &mut records[0].event {
-        *run = Some(81);
+        *run = RunNumber::new(81);
     }
     assert!(json(&records, -1).starts_with(r#"{"type":"summary","run":"r81","exit":0,"#));
 }
@@ -592,8 +592,8 @@ fn the_summary_names_a_stored_run() {
 fn an_error_every_batch_repeats_is_reported_once() {
     let record = Record::new(Event::Diagnostic(aye_events::Diagnostic {
         severity: aye_events::Severity::Error,
-        code: "usage-error".into(),
-        path: String::new(),
+        code: DiagnosticCode::UsageError,
+        path: aye_events::DiagnosticPath::Nowhere,
         span: None,
         message: "unrecognized arguments: --bogus".into(),
     }));
@@ -697,8 +697,8 @@ fn very_verbose_adds_a_line_per_diagnostic() {
 fn very_verbose_lines_are_bounded() {
     let diagnostic = Record::new(Event::Diagnostic(aye_events::Diagnostic {
         severity: aye_events::Severity::Warning,
-        code: "c".repeat(300),
-        path: "p".repeat(900),
+        code: "c".repeat(300).as_str().into(),
+        path: "p".repeat(900).into(),
         span: None,
         message: "m".repeat(9000),
     }));

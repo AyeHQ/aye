@@ -1,0 +1,48 @@
+---
+source: crates/aye/tests/snapshots.rs
+info:
+  program: aye
+  args:
+    - "--python"
+    - "[PYTHON]"
+    - "-vv"
+  env:
+    COLUMNS: "120"
+    NO_COLOR: "1"
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+---
+success: true
+exit_code: 0
+----- stdout -----
+aye · unittest · python [VERSION] · 24 tests · 1 worker
+collected 24 tests in [TIME]
+
+✓ passed  tests/test_cart.py::CartTests::test_add_and_remove  [TIME]
+✓ passed  tests/test_cart.py::CartTests::test_cannot_add_more_than_in_stock  [TIME]
+✓ passed  tests/test_cart.py::CartTests::test_coupon  [TIME]
+  expected failure tests/test_cart.py::CartTests::test_coupons_stack  [TIME] — Decimal('5.00') != Decimal('7.52')
+✓ passed  tests/test_cart.py::CartTests::test_new_cart_is_empty  [TIME]
+✓ passed  tests/test_cart.py::CartTests::test_print_receipt  [TIME]
+✓ passed  tests/test_cart.py::CartTests::test_subtotal  [TIME]
+  skipped tests/test_cart.py::CartTests::test_summary_after_coupon  [TIME] — fails on purpose: set AYE_EXAMPLE_FAIL=1 to see a failure
+✓ passed  tests/test_cart.py::CartTests::test_tax_applies_after_the_discount  [TIME]
+✓ passed  tests/test_cart.py::CheckoutTests::test_charges_the_total_and_takes_the_stock  [TIME]
+✓ passed  tests/test_cart.py::CheckoutTests::test_declined_payment_can_be_retried  [TIME]
+✓ passed  tests/test_cart.py::CheckoutTests::test_empty_cart  [TIME]
+  skipped tests/test_cart.py::CheckoutTests::test_gift_card  [TIME] — gift cards aren't supported yet
+✓ passed  tests/test_cart.py::CheckoutTests::test_sold_out_items_are_not_charged  [TIME]
+✓ passed  tests/test_discounts.py::CouponTests::test_amount_off  [TIME]
+✓ passed  tests/test_discounts.py::CouponTests::test_fixed_amount_never_exceeds_the_subtotal  [TIME]
+✓ passed  tests/test_discounts.py::CouponTests::test_staff_coupon  [TIME]
+✓ passed  tests/test_discounts.py::CouponTests::test_unknown_coupon  [TIME]
+✓ passed  tests/test_inventory.py::InventoryFileTests::test_load_a_missing_file  [TIME]
+✓ passed  tests/test_inventory.py::InventoryFileTests::test_save_and_load  [TIME]
+✓ passed  tests/test_inventory.py::InventoryTests::test_cannot_take_more_than_available  [TIME]
+✓ passed  tests/test_inventory.py::InventoryTests::test_restock_needs_a_positive_quantity  [TIME]
+✓ passed  tests/test_inventory.py::InventoryTests::test_take_reduces_stock  [TIME]
+✓ passed  tests/test_inventory.py::InventoryTests::test_unknown_sku_has_no_stock  [TIME]
+
+skipped  fails on purpose: set AYE_EXAMPLE_FAIL=1 to see a failure (1) · gift cards aren't supported yet (1)
+✓ 21 passed · 2 skipped · 1 expected failure   [TIME]
+
+----- stderr -----

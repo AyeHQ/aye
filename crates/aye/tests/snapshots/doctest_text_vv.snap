@@ -1,0 +1,38 @@
+---
+source: crates/aye/tests/snapshots.rs
+info:
+  program: aye
+  args:
+    - "--python"
+    - "[PYTHON]"
+    - "-vv"
+  env:
+    COLUMNS: "120"
+    NO_COLOR: "1"
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+---
+success: true
+exit_code: 0
+----- stdout -----
+aye · doctest · python [VERSION] · 15 tests · 1 worker
+collected 15 tests in [TIME]
+
+✓ passed  docs/test_failure.txt::test_failure.txt  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt  [TIME]
+✓ passed  shop/__init__.py::shop  [TIME]
+✓ passed  shop/cart.py::shop.cart  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.add  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.print_receipt  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.summary  [TIME]
+✓ passed  shop/cart.py::shop.cart.Product  [TIME]
+✓ passed  shop/pricing.py::shop.pricing  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.AmountOff  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.AmountOff.amount_off  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.PercentOff  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.PercentOff.amount_off  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.money  [TIME]
+
+✓ 15 passed   [TIME]
+
+----- stderr -----

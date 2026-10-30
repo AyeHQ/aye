@@ -37,7 +37,7 @@ use aye_engine::{
     Adapter, AdapterError, Claim, EmbeddedModule, Executor, MODEL_MODULE, NATIVE_ENGINE_MODULE,
     Project, REWRITE_MODULE, Recognition, Recognizer, Setting, SourceFile,
 };
-use aye_events::{Diagnostic, Severity};
+use aye_events::{AdapterName, Diagnostic, DiagnosticCode, Fnv64, Severity};
 use serde_json::{Value, json};
 
 use crate::{PytestConfig, PytestRecognizer, config::ImportMode};
@@ -82,7 +82,11 @@ pub const ENTRY: &str = "aye_pytest_native:NativeExecutor";
 const REFINE_REASON: &str = "aye's pytest front-end reads every test file";
 
 /// The adapter's name.
-pub const NAME: &str = "pytest";
+pub const NAME: AdapterName = AdapterName::new_static("pytest");
+
+/// The doctest adapter's name: with it in the run, the files pytest's
+/// doctest plugin would collect are its.
+const DOCTEST: AdapterName = AdapterName::new_static("doctest");
 
 /// The pytest adapter: pytest's rules, read by aye's front-end, run by
 /// aye's engine, with no pytest installed.
@@ -107,7 +111,7 @@ impl Pytest {
 }
 
 impl Adapter for Pytest {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> AdapterName {
         NAME
     }
 
@@ -126,10 +130,10 @@ impl Adapter for Pytest {
     fn prepare_among(
         &self,
         project: &Project<'_>,
-        adapters: &[&str],
+        adapters: &[AdapterName],
     ) -> Result<Option<Box<dyn Recognizer>>, AdapterError> {
         let recognizer = PytestRecognizer::new(project)?;
-        let recognizer = if adapters.contains(&"doctest") {
+        let recognizer = if adapters.contains(&DOCTEST) {
             recognizer
         } else {
             recognizer.with_pytest_doctests()
@@ -142,7 +146,7 @@ impl Adapter for Pytest {
 
     fn executor(&self) -> Executor {
         Executor {
-            adapter: "pytest",
+            adapter: NAME,
             modules: &MODULES,
             entry: ENTRY,
             lists_session: true,
@@ -198,13 +202,22 @@ impl Recognizer for NativeRecognizer {
     /// doctest adapter only.
     fn recognize(&self, file: &SourceFile<'_>, support: &[SourceFile<'_>]) -> Recognition {
         if self.inner.doctests.is_some() {
-            let explicit = self.inner.explicit.lock().expect("lock").contains(file.rel);
-            if self.inner.doctest_file(file.rel, explicit).is_some() {
+            let explicit = self
+                .inner
+                .explicit
+                .lock()
+                .expect("lock")
+                .contains(file.rel.as_str());
+            if self
+                .inner
+                .doctest_file(file.rel.as_str(), explicit)
+                .is_some()
+            {
                 return Recognition {
                     diagnostics: vec![Diagnostic {
                         severity: Severity::Error,
-                        code: "usage-error".into(),
-                        path: file.rel.to_string(),
+                        code: DiagnosticCode::UsageError,
+                        path: file.rel.to_project_path().into(),
                         span: None,
                         message: "pytest's doctest plugin would collect doctests here, which \
                                   aye runs only with its doctest adapter: add \"doctest\" to \
@@ -344,20 +357,14 @@ fn native_context(config: &PytestConfig) -> Value {
 /// A 64-bit FNV-1a digest of the executor's module names and sources, in
 /// hex.
 fn modules_digest() -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut hash = Fnv64::new();
     for module in &MODULES {
-        for byte in module
-            .name
-            .bytes()
-            .chain([0])
-            .chain(module.source.bytes())
-            .chain([0])
-        {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        for text in [module.name, module.source] {
+            hash.write(text.as_bytes());
+            hash.write(&[0]);
         }
     }
-    format!("{hash:016x}")
+    format!("{:016x}", hash.finish())
 }
 
 /// Python's `str()` of a TOML scalar, as `[tool.pytest.ini_options]`
@@ -1206,7 +1213,7 @@ mod tests {
         let parsed = ruff_python_parser::parse_module(source).unwrap();
         let lines = aye_engine::LineIndex::from_source_text(source);
         let file = SourceFile {
-            rel: "test_a.py",
+            rel: aye_events::ProjectPathRef::as_written("test_a.py"),
             abs: &root.join("test_a.py"),
             source,
             module: parsed.syntax(),
@@ -1233,14 +1240,14 @@ mod tests {
             framework_args: &[],
         };
         let recognizer = Pytest::default()
-            .prepare_among(&project, &["pytest"])
+            .prepare_among(&project, &[NAME])
             .unwrap()
             .unwrap();
         assert_eq!(recognizer.claim("test_notes.txt", false), Claim::Tests);
         let parsed = ruff_python_parser::parse_module("").unwrap();
         let lines = aye_engine::LineIndex::from_source_text(source);
         let file = SourceFile {
-            rel: "test_notes.txt",
+            rel: aye_events::ProjectPathRef::as_written("test_notes.txt"),
             abs: &root.join("test_notes.txt"),
             source,
             module: parsed.syntax(),
@@ -1248,7 +1255,7 @@ mod tests {
         };
         let recognition = recognizer.recognize(&file, &[]);
         assert!(recognition.cases.is_empty() && recognition.refine.is_none());
-        assert_eq!(recognition.diagnostics[0].code, "usage-error");
+        assert_eq!(recognition.diagnostics[0].code, DiagnosticCode::UsageError);
         assert!(
             recognition.diagnostics[0].message.contains("doctest"),
             "{:?}",
@@ -1256,16 +1263,16 @@ mod tests {
         );
         // A static listing refuses it too.
         let listing = Pytest::static_listing()
-            .prepare_among(&project, &["pytest"])
+            .prepare_among(&project, &[NAME])
             .unwrap()
             .unwrap();
         assert_eq!(
             listing.recognize(&file, &[]).diagnostics[0].code,
-            "usage-error"
+            DiagnosticCode::UsageError
         );
         // With the doctest adapter, the file is the doctest adapter's.
         let recognizer = Pytest::default()
-            .prepare_among(&project, &["doctest", "pytest"])
+            .prepare_among(&project, &[DOCTEST, NAME])
             .unwrap()
             .unwrap();
         assert_eq!(recognizer.claim("test_notes.txt", false), Claim::Ignore);
@@ -1292,14 +1299,14 @@ mod tests {
             framework_args: &[],
         };
         let listing = Pytest::static_listing()
-            .prepare_among(&project, &["doctest", "pytest"])
+            .prepare_among(&project, &[DOCTEST, NAME])
             .unwrap()
             .unwrap();
         let recognize = |rel: &str, source: &str| {
             let parsed = ruff_python_parser::parse_module(source).unwrap();
             let lines = aye_engine::LineIndex::from_source_text(source);
             let file = SourceFile {
-                rel,
+                rel: aye_events::ProjectPathRef::as_written(rel),
                 abs: &root.join(rel),
                 source,
                 module: parsed.syntax(),
@@ -1326,13 +1333,13 @@ mod tests {
         assert_eq!(recognition.cases[0].id.to_string(), "test_b.py::test_b");
         // A run refines every file.
         let run = Pytest::default()
-            .prepare_among(&project, &["doctest", "pytest"])
+            .prepare_among(&project, &[DOCTEST, NAME])
             .unwrap()
             .unwrap();
         let parsed = ruff_python_parser::parse_module(exact).unwrap();
         let lines = aye_engine::LineIndex::from_source_text(exact);
         let file = SourceFile {
-            rel: "test_a.py",
+            rel: aye_events::ProjectPathRef::as_written("test_a.py"),
             abs: &root.join("test_a.py"),
             source: exact,
             module: parsed.syntax(),

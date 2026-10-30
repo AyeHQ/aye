@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use aye_engine::ast::{Expr, ExprLambda, Stmt, StmtClassDef, StmtFunctionDef};
 use aye_engine::{Ranged, Recognition, SourceFile, TextRange, TextSize};
-use aye_events::{Case, Certainty, Diagnostic, Severity};
+use aye_events::{AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity};
 
 use crate::fnmatch::matches_prefix_or_glob;
 use crate::ids::{IdOptions, parameterset_ids};
@@ -21,7 +21,7 @@ use crate::support::{
 
 /// The configuration recognition depends on.
 #[derive(Debug, Clone)]
-pub struct Settings {
+pub(crate) struct Settings {
     pub python_classes: Vec<String>,
     pub python_functions: Vec<String>,
     pub ids: IdOptions,
@@ -37,7 +37,7 @@ pub struct Settings {
 
 /// What the support files in scope do.
 #[derive(Debug, Clone, Default)]
-pub struct Scope {
+pub(crate) struct Scope {
     /// Hooks of the conftests in scope (and the plugins they load).
     pub hooks: BTreeSet<String>,
     /// [`GLOBAL_HOOKS`](crate::support::GLOBAL_HOOKS) implemented by any
@@ -98,7 +98,7 @@ impl Scope {
 }
 
 /// What the module's imports refer to, beyond its own source.
-pub trait Imports {
+pub(crate) trait Imports {
     /// Whether the class `path` names (a dotted path through the module's
     /// imports) may be a unittest case, which a subclass inherits tests
     /// from whatever its name.
@@ -122,7 +122,7 @@ pub trait Imports {
 
 /// Fixtures a test module imports.
 #[derive(Debug, Clone, Default)]
-pub struct ModuleImports {
+pub(crate) struct ModuleImports {
     /// Read from project files.
     pub fixtures: Vec<FixtureDef>,
     /// Imported from modules that are not project files: each may be a
@@ -482,7 +482,7 @@ fn changes_collection(path: &str) -> bool {
 /// name, or a support file in scope reaches module namespaces, imports a
 /// module of its name, or implements a hook that gets the module before
 /// pytest collects it. `rel` is the module's path.
-pub fn reached(module: &Namespace<'_>, scope: &Scope, rel: &str) -> Vec<String> {
+pub(crate) fn reached(module: &Namespace<'_>, scope: &Scope, rel: &str) -> Vec<String> {
     let mut out = Vec::new();
     if names_module(module.imported_modules(), rel) {
         out.push("the module imports itself, which may change its names".to_string());
@@ -506,7 +506,7 @@ pub fn reached(module: &Namespace<'_>, scope: &Scope, rel: &str) -> Vec<String> 
 
 /// Whether one of `modules` (dotted names, as imported) may be the module
 /// at `rel`: its last part is the file's stem.
-pub fn names_module(modules: &[String], rel: &str) -> bool {
+pub(crate) fn names_module(modules: &[String], rel: &str) -> bool {
     let stem = std::path::Path::new(rel)
         .file_stem()
         .map(|s| s.to_string_lossy())
@@ -516,7 +516,7 @@ pub fn names_module(modules: &[String], rel: &str) -> bool {
 
 /// Recognize one test module. `module` is its namespace
 /// ([`Namespace::build`] over its body).
-pub fn recognize<'a>(
+pub(crate) fn recognize<'a>(
     settings: &Settings,
     scope: &Scope,
     imports: &dyn Imports,
@@ -555,7 +555,7 @@ pub fn recognize<'a>(
     if recognizer.module_wide || !recognizer.partial_names.is_empty() {
         let prefix = format!("{}::", file.rel);
         for case in &mut recognizer.cases {
-            let name = case.id.0.strip_prefix(&prefix).unwrap_or_default();
+            let name = case.id.as_str().strip_prefix(&prefix).unwrap_or_default();
             let name = name.split("::").next().unwrap_or_default();
             let name = name.split('[').next().unwrap_or_default();
             if (recognizer.module_wide || recognizer.partial_names.contains(name))
@@ -775,11 +775,17 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
         self.refine.push(reason.into());
     }
 
-    fn diagnostic(&mut self, severity: Severity, code: &str, range: TextRange, message: String) {
+    fn diagnostic(
+        &mut self,
+        severity: Severity,
+        code: DiagnosticCode,
+        range: TextRange,
+        message: String,
+    ) {
         self.diagnostics.push(Diagnostic {
             severity,
-            code: code.to_string(),
-            path: self.file.rel.to_string(),
+            code,
+            path: self.file.rel.to_project_path().into(),
             span: Some(self.file.span(range)),
             message,
         });
@@ -814,6 +820,10 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
             .extend(self.scope.module_imports.fixtures.iter().cloned());
         let classes = self.classes;
         let mut class_fixtures = HashMap::new();
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "fills a map: the order shows nowhere"
+        )]
         for (start, info) in classes {
             let class = self.class_def(*start);
             class_fixtures.insert(*start, self.fixtures_in(&info.ns, class));
@@ -834,7 +844,7 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
                 }
             }
         }
-        let reached = reached(module, self.scope, self.file.rel);
+        let reached = reached(module, self.scope, self.file.rel.as_str());
         if !reached.is_empty() {
             for reason in reached {
                 self.doubt(reason);
@@ -1024,7 +1034,10 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
         let (cases, refine, diagnostics) =
             (self.cases.len(), self.refine.len(), self.diagnostics.len());
         self.member_binding(name, bound, site, frames, in_module);
-        let ids: Vec<String> = self.cases[cases..].iter().map(|c| c.id.0.clone()).collect();
+        let ids: Vec<String> = self.cases[cases..]
+            .iter()
+            .map(|c| c.id.as_str().to_owned())
+            .collect();
         let clean = self.refine.len() == refine;
         self.cases.truncate(cases);
         self.keys.truncate(cases);
@@ -1746,7 +1759,7 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
                         self.nodeid(&frames.iter().map(|f| f.name.clone()).collect::<Vec<_>>());
                     self.diagnostic(
                         Severity::Warning,
-                        "class-has-init",
+                        DiagnosticCode::ClassHasInit,
                         class.name.range(),
                         format!(
                             "cannot collect test class '{}' because it has a __init__ constructor (from: {parent})",
@@ -1868,7 +1881,7 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
             if has {
                 self.diagnostic(
                     Severity::Warning,
-                    "class-has-init",
+                    DiagnosticCode::ClassHasInit,
                     class.name.range(),
                     format!(
                         "cannot collect test class '{}' because it has a {dunder} constructor (from: {parent})",
@@ -2671,7 +2684,7 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
         self.keys.push(Vec::new());
         let mut case = Case::new(
             format!("{}::{}", self.nodeid(&item.classes), item.name),
-            "pytest",
+            crate::NAME,
         );
         case.span = Some(self.file.span(item.span));
         // `iter_markers` order: the function's own marks (its decorators,
@@ -2728,9 +2741,10 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
         }
         case.keywords = keywords;
         case.tags = tags;
-        case.affinity.push(self.file.rel.to_string());
+        case.affinity.push(AffinityKey::file(self.file.rel));
         for i in 1..=item.classes.len() {
-            case.affinity.push(self.nodeid(&item.classes[..i]));
+            case.affinity
+                .push(AffinityKey::file_class(self.file.rel, &item.classes[..i]));
         }
         case.certainty = item.certainty;
         self.cases.push(case);
@@ -2773,7 +2787,12 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
             }
         }
         for (range, message) in reported {
-            self.diagnostic(Severity::Warning, "duplicate-definition", range, message);
+            self.diagnostic(
+                Severity::Warning,
+                DiagnosticCode::DuplicateDefinition,
+                range,
+                message,
+            );
         }
     }
 }

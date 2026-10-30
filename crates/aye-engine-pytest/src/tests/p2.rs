@@ -148,7 +148,7 @@ fn verdict(root: &Path, rel: &str) -> (bool, Vec<(String, Certainty)>) {
         recognition
             .cases
             .iter()
-            .map(|c| (c.id.0.clone(), c.certainty))
+            .map(|c| (c.id.as_str().to_owned(), c.certainty))
             .collect(),
     )
 }

@@ -19,7 +19,7 @@ use clap::{ArgAction, Parser, ValueEnum};
     max_term_width = 100,
     args_override_self = true
 )]
-pub struct Args {
+pub(crate) struct Args {
     /// Files, directories, test ids (`path::Class::test[param]`), dotted
     /// names (`pkg.mod.Class.test`) or test keys.
     #[arg(value_name = "TEST")]
@@ -127,7 +127,7 @@ impl Args {
     /// negative number or contains a space; otherwise it was meant as a flag.
     /// And the arguments after `--` must not turn the framework's session
     /// into something other than a test run ([`replaced_run`]).
-    pub fn check(&self) -> Result<(), String> {
+    pub(crate) fn check(&self) -> Result<(), String> {
         for (flag, value) in [("-k", &self.keyword), ("-m", &self.tags)] {
             if let Some(value) = value
                 && !is_value(value)
@@ -144,7 +144,7 @@ impl Args {
     /// How much the output shows: the number of `-v` less the number of
     /// `-q`, from -1 (`-q`: the summary alone) to 3 (`-vvv`: everything).
     /// A batch's policy carries it unclamped ([`Args::framework_verbosity`]).
-    pub fn verbosity(&self) -> i8 {
+    pub(crate) fn verbosity(&self) -> i8 {
         let net = (i16::from(self.verbose) - i16::from(self.quiet)).clamp(-1, 3);
         i8::try_from(net).unwrap_or_default()
     }
@@ -152,13 +152,13 @@ impl Args {
     /// The verbosity a batch's policy carries (`Policy::verbosity`): the
     /// number of `-v` less the number of `-q`, unclamped, as pytest counts
     /// them.
-    pub fn framework_verbosity(&self) -> i8 {
+    pub(crate) fn framework_verbosity(&self) -> i8 {
         let net = i16::from(self.verbose) - i16::from(self.quiet);
         i8::try_from(net.clamp(i16::from(i8::MIN), i16::from(i8::MAX))).unwrap_or_default()
     }
 
     /// The `maxfail` the command line asks for.
-    pub fn maxfail(&self) -> Maxfail {
+    pub(crate) fn maxfail(&self) -> Maxfail {
         match (self.exitfirst, self.maxfail) {
             (true, _) => Maxfail::After(1),
             (false, None) => Maxfail::Unset,
@@ -197,7 +197,7 @@ impl Args {
     max_term_width = 100,
     args_override_self = true
 )]
-pub struct ShowArgs {
+pub(crate) struct ShowArgs {
     /// Test keys (`3fae6`) or their start, test ids, dotted names or paths.
     #[arg(value_name = "TEST")]
     pub tests: Vec<String>,
@@ -267,7 +267,7 @@ pub struct ShowArgs {
 impl ShowArgs {
     /// A `-k` or `-m` value starting with `-`, as a run checks it
     /// ([`Args::check`]).
-    pub fn check(&self) -> Result<(), String> {
+    pub(crate) fn check(&self) -> Result<(), String> {
         for (flag, value) in [("-k", &self.keyword), ("-m", &self.tags)] {
             if let Some(value) = value
                 && !is_value(value)
@@ -282,7 +282,7 @@ impl ShowArgs {
     /// either, `details` (of tests named, or `--failed`) come at the detail
     /// ladder's second level, which is text's 1 and JSON's 2; the list at a
     /// run's default, 0.
-    pub fn verbosity(&self, details: bool, format: Output) -> i8 {
+    pub(crate) fn verbosity(&self, details: bool, format: Output) -> i8 {
         if details && self.verbose == 0 && self.quiet == 0 {
             return match format {
                 Output::Text => 1,
@@ -318,7 +318,7 @@ fn outcome(name: &str) -> Result<aye_events::Outcome, String> {
 
 /// What the command line says about `maxfail`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Maxfail {
+pub(crate) enum Maxfail {
     /// Neither `-x` nor `--maxfail`.
     Unset,
     /// `--maxfail 0`.
@@ -413,7 +413,7 @@ fn replaced_run(passthrough: &[String]) -> Option<String> {
 /// What the arguments after `--` say about one of pytest's short options
 /// that take a value (`-k`, `-m`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Passed {
+pub(crate) enum Passed {
     /// They don't give it.
     Unset,
     /// Its last value. They come last in the framework's arguments, after
@@ -427,7 +427,7 @@ pub enum Passed {
 /// Read the arguments after `--` for the short option `option`, as
 /// argparse does: alone with its value next (`-k x`), attached (`-kx`), or
 /// ending a cluster of flags (`-vk x`, `-vkx`). A lone `--` ends the options.
-pub fn passed(passthrough: &[String], option: char) -> Passed {
+pub(crate) fn passed(passthrough: &[String], option: char) -> Passed {
     let mut found = Passed::Unset;
     let mut args = passthrough.iter().peekable();
     while let Some(arg) = args.next() {
@@ -489,7 +489,7 @@ const MAXFAIL_SHORT_VALUED: &str = "kmcpoWrn";
 /// option pytest doesn't know is left alone, a `--maxfail` value pytest
 /// would reject sets nothing, and a negative one stops at the first
 /// failure, as pytest does. A lone `--` ends the options.
-pub fn passed_maxfail(passthrough: &[String]) -> Option<Maxfail> {
+pub(crate) fn passed_maxfail(passthrough: &[String]) -> Option<Maxfail> {
     fn limit(value: &str) -> Option<Maxfail> {
         let n: i64 = value.trim().parse().ok()?;
         Some(match n {
@@ -581,7 +581,7 @@ fn looks_like_negative_number(value: &str) -> bool {
 /// The output formats. How much each shows is the verbosity's
 /// ([`Args::verbosity`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Output {
+pub(crate) enum Output {
     /// For people: quiet on success, readable failures.
     Text,
     /// JSON lines, for programs and coding agents.
@@ -590,7 +590,7 @@ pub enum Output {
 
 impl Output {
     /// Its name, as `--output` and `[tool.aye] output` take it.
-    pub const fn name(self) -> &'static str {
+    pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Text => "text",
             Self::Json => "json",
@@ -630,20 +630,20 @@ impl FromStr for Output {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum Color {
+pub(crate) enum Color {
     Auto,
     Always,
     Never,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Workers {
+pub(crate) enum Workers {
     Auto,
     Count(u32),
 }
 
 impl Workers {
-    pub fn resolve(self) -> u32 {
+    pub(crate) fn resolve(self) -> u32 {
         match self {
             Self::Count(n) => n.max(1),
             Self::Auto => std::thread::available_parallelism()

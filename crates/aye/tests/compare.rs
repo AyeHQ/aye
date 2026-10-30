@@ -48,6 +48,7 @@ use serde_json::{Value, json};
 /// a result (`record.py` clears the same).
 const CLEARED: [&str; 2] = ["PYTEST_ADDOPTS", "AYE_EXAMPLE_FAIL"];
 
+#[expect(clippy::print_stderr, reason = "a test says why it skips")]
 fn python() -> Option<PathBuf> {
     let candidate = std::env::var_os("AYE_TEST_PYTHON").map_or_else(
         || {
@@ -148,6 +149,7 @@ impl Project {
 
     /// Whether the project can be compared here: a packaged crate has no
     /// `examples/` beside it.
+    #[expect(clippy::print_stderr, reason = "a test says why it skips")]
     fn present(self) -> bool {
         if matches!(self, Self::Example(_)) && !examples_dir().is_dir() {
             eprintln!("skipping: no examples/ beside the crate");
@@ -249,7 +251,7 @@ fn runs_in(root: &Path) -> HashSet<String> {
     store(root)
         .runs()
         .into_iter()
-        .map(|meta| meta.run)
+        .map(|meta| meta.run.to_string())
         .collect()
 }
 
@@ -260,8 +262,8 @@ fn kept(root: &Path, before: &HashSet<String>) -> Option<Vec<Value>> {
     let meta = store
         .runs()
         .into_iter()
-        .find(|meta| !before.contains(&meta.run))?;
-    let log = store.log(&meta.run).ok()?;
+        .find(|meta| !before.contains(&meta.run.to_string()))?;
+    let log = store.log(&meta.run.to_string()).ok()?;
     Some(
         log.iter()
             .map(|record| serde_json::to_value(record).unwrap())

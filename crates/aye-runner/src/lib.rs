@@ -9,7 +9,8 @@
 //! Owns: how tests run, where, and in what order. Does not own: what a test is
 //! or how one executes inside the framework; it calls the engine for that.
 //!
-//! Depends on: aye-engine, aye-events. Must not depend on any `aye-engine-*`.
+//! Depends on: aye-engine, aye-events, aye-static. Must not depend on any
+//! `aye-engine-*`.
 //!
 //! Environments come from `aye-provision` (uv as a subprocess, or paths the
 //! user supplies); the runner requests them per matrix row and per backend,
@@ -137,9 +138,9 @@
 //!   first ([`Plan::first`], `--ff`) run first within their batch, in plan
 //!   order, across files, and the batches holding them are handed out first.
 //! - **The log.** The runner stamps `run`, `environment`, the run-wide `seq`
-//!   and `t_ms` with the [`Stamper`] the binary also uses for its own
-//!   records, keeps each worker record's `batch`, and brackets every worker
-//!   and batch with started and finished records.
+//!   and `t_ms` with the [`Stamper`](aye_events::Stamper) the binary also
+//!   uses for its own records, keeps each worker record's `batch`, and
+//!   brackets every worker and batch with started and finished records.
 //! - **`maxfail` is counted across workers.** Each batch is sent with what
 //!   is left of the budget. When it runs out, nothing more is handed out,
 //!   and busy workers end their batches as pytest's `-x` ends a session,
@@ -232,10 +233,7 @@ mod schedule;
 mod worker;
 
 pub use python::{PythonSource, find_python, venv_python};
-pub use run::{
-    BatchEnd, BatchSummary, Crash, Plan, RunSummary, Runner, RunnerOptions, Stamper, StopHandle,
-    StopReason, new_run_id,
-};
+pub use run::{BatchEnd, BatchSummary, Crash, Plan, RunSummary, Runner, RunnerOptions, StopHandle};
 pub use schedule::DEFAULT_WEIGHT;
 pub use worker::{
     DEFAULT_SERVICES, Echo, Exit, Incoming, Killer, SpawnError, Worker, WorkerSpec, describe,

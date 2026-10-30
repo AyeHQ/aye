@@ -1,0 +1,51 @@
+---
+source: crates/aye/tests/snapshots.rs
+info:
+  program: aye
+  args:
+    - config
+    - "--python"
+    - "[PYTHON]"
+  env:
+    COLUMNS: "120"
+    NO_COLOR: "1"
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+---
+success: true
+exit_code: 0
+----- stdout -----
+root     [ROOT]
+python   [PYTHON]  (--python)
+workers  1
+output   text  (default)
+adapters doctest, pytest  (default: pytest's rules, which run unittest's TestCase classes too)
+engine   native
+
+[tool.aye]
+  (not set)
+
+[doctest]
+  rootdir = [ROOT]    # pyproject.toml
+  inifile = [ROOT]/pyproject.toml    # pyproject.toml
+  modules = false    # default
+  glob = test*.txt    # default
+  optionflags = ELLIPSIS    # default
+  encoding = utf-8    # default
+
+[pytest]
+  rootdir = [ROOT]    # pyproject.toml
+  inifile = [ROOT]/pyproject.toml    # pyproject.toml
+  testpaths = tests    # pyproject.toml [tool.pytest.ini_options]
+  python_files = 'test_*.py' '*_test.py'    # default
+  python_classes = Test    # default
+  python_functions = test    # default
+  norecursedirs = '*.egg' '.*' _darcs build CVS dist node_modules venv '{arch}'    # default
+  addopts = --strict-markers    # pyproject.toml [tool.pytest.ini_options]
+  usefixtures =     # default
+  markers = slow: takes longer than the rest (deselect with -m "not slow")    # pyproject.toml [tool.pytest.ini_options]
+  empty_parameter_set_mark =     # default
+  collect_imported_tests = true    # default
+  strict_parametrization_ids = false    # default
+  disable_test_id_escaping_and_forfeit_all_rights_to_community_support = false    # default
+
+----- stderr -----

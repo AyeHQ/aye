@@ -1,0 +1,20 @@
+---
+source: crates/aye/tests/snapshots.rs
+info:
+  program: aye
+  args:
+    - "--python"
+    - "[PYTHON]"
+    - "--output"
+    - json
+  env:
+    COLUMNS: "120"
+    NO_COLOR: "1"
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+---
+success: true
+exit_code: 0
+----- stdout -----
+{"type":"summary","run":"r1","exit":0,"tests":30,"passed":27,"skipped":2,"expected_failure":1,"s":[N]}
+
+----- stderr -----

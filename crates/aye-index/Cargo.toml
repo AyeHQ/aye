@@ -1,0 +1,13 @@
+[package]
+name = "aye-index"
+description = "Index newtypes for aye: newtype_index!, IndexVec and IndexSlice"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true

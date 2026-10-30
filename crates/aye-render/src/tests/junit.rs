@@ -320,9 +320,9 @@ fn recorded() -> Vec<Record> {
         truncated: false,
     };
     let case = |name: &str, line: u32| {
-        let mut case = aye_events::Case::new(id(name).0, "pytest");
+        let mut case = aye_events::Case::new(id(name).into_string(), "pytest");
         case.span = Some(aye_events::Span {
-            path: "tests/test_x.py".into(),
+            path: aye_events::ProjectPath::new("tests/test_x.py").unwrap(),
             start: 0,
             end: 0,
             line: Some(line),
