@@ -190,6 +190,8 @@ mod source;
 mod targets;
 mod walk;
 
+pub use targets::Targets;
+
 use recognize::{Job, Recognized};
 use refine::standalone::Scope;
 use walk::{Mask, Tree, bits};
@@ -362,14 +364,9 @@ impl<'a> Collector<'a> {
         }
     }
 
-    /// Collect the tests under `targets` (absolute, or relative to the
-    /// project's cwd), or under the recognizers' roots when there are none.
-    /// Files that can only be known by importing them go to `refiner`.
-    pub fn collect(
-        &self,
-        targets: &[PathBuf],
-        refiner: Option<&(dyn Refiner + Sync)>,
-    ) -> Collection {
+    /// Collect the tests under `targets`. Files that can only be known by
+    /// importing them go to `refiner`.
+    pub fn collect(&self, targets: &Targets, refiner: Option<&(dyn Refiner + Sync)>) -> Collection {
         self.collect_watching(targets, refiner, &mut |_| {})
     }
 
@@ -379,7 +376,7 @@ impl<'a> Collector<'a> {
     /// runs on another thread meanwhile).
     pub fn collect_watching(
         &self,
-        targets: &[PathBuf],
+        targets: &Targets,
         refiner: Option<&(dyn Refiner + Sync)>,
         progress: &mut dyn FnMut(Progress),
     ) -> Collection {

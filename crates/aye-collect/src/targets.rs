@@ -1,22 +1,44 @@
-//! What collection walks: the explicit paths, normalized as pytest
-//! normalizes its arguments, or else every recognizer's roots.
+//! What collection walks ([`Targets`]): the explicit paths, normalized as
+//! pytest normalizes its arguments, or else every recognizer's roots.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
+use aye_adapter::Project;
 use aye_events::{Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 
 use crate::Collector;
 use crate::walk::{Mask, Tree};
 
+/// What a collection walks, from the paths a run was given.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Targets {
+    /// No path: wherever the recognizers look when none is given, each of
+    /// their roots walked for the recognizers that list it (a root that is
+    /// a file claimed as named), a missing one skipped.
+    #[default]
+    Default,
+    /// Only paths (absolute, or relative to the project's cwd), each
+    /// walked for every recognizer, a file claimed as named; a missing one
+    /// is a `not-found` error, a file no recognizer claims `unclaimed`.
+    /// None at all is [`Targets::Default`].
+    Paths(Vec<PathBuf>),
+    /// Paths with dotted names or keys, which name tests wherever the
+    /// recognizers look: those paths, after each recognizer's roots that
+    /// exist (as it gives them when no path is given), all walked as
+    /// [`Targets::Paths`] are.
+    PathsAndDefault(Vec<PathBuf>),
+}
+
 impl Collector<'_> {
-    /// Walk the targets, or the recognizers' roots; `false` when `tick`
-    /// stopped a walk.
+    /// Walk `targets`; `false` when `tick` stopped a walk.
     pub(crate) fn discover(
         &self,
         tree: &mut Tree<'_>,
-        targets: &[PathBuf],
+        targets: &Targets,
         tick: &mut dyn FnMut(&Tree<'_>) -> bool,
     ) -> bool {
+        let targets = self.explicit(targets);
         if targets.is_empty() {
             for (root, mask) in self.roots() {
                 if root.is_dir() {
@@ -30,7 +52,7 @@ impl Collector<'_> {
             return true;
         }
         let all = (0..self.recognizers.len()).fold(0, |all: Mask, i| all | 1 << i);
-        for (abs, target) in self.normalize_targets(targets) {
+        for (abs, target) in self.normalize_targets(&targets) {
             let rel = aye_fs::relative_through_root(&abs, self.project.root);
             let (code, message) = if abs.is_dir() {
                 if !tree.walk(&abs, all, tick) {
@@ -60,6 +82,29 @@ impl Collector<'_> {
             });
         }
         true
+    }
+
+    /// The paths `targets` name explicitly, as given; none for
+    /// [`Targets::Default`], whose roots [`Collector::roots`] gives.
+    fn explicit<'t>(&self, targets: &'t Targets) -> Cow<'t, [PathBuf]> {
+        match targets {
+            Targets::Default => Cow::Borrowed(&[]),
+            Targets::Paths(paths) => Cow::Borrowed(paths),
+            Targets::PathsAndDefault(paths) => {
+                let bare = Project {
+                    args: &[],
+                    ..self.project
+                };
+                let mut targets: Vec<PathBuf> = self
+                    .recognizers
+                    .iter()
+                    .flat_map(|(_, recognizer)| recognizer.roots(&bare))
+                    .filter(|root| root.exists())
+                    .collect();
+                targets.extend(paths.iter().cloned());
+                Cow::Owned(targets)
+            }
+        }
     }
 
     /// The explicit paths, absolute and normalized, as pytest's

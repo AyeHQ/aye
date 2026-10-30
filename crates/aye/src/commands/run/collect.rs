@@ -3,13 +3,11 @@
 //! the runner refining what can't be predicted, and how collection
 //! reports its progress while it runs ([`Pace`]).
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
-use aye_adapter::Project;
-use aye_collect::{Collection, Collector, Options};
+use aye_collect::{Collection, Collector, Options, Targets};
 use aye_events::Event;
 use aye_fs::{StateBucket, StateDir};
 use aye_protocol::Refiner;
@@ -61,7 +59,7 @@ pub(super) fn collect(
         variables: settings.env.vars.clone(),
     })
     .with_stop(Arc::clone(stop));
-    let targets = targets(settings, project);
+    let targets = targets(settings);
     let refiner: Option<&(dyn Refiner + Sync)> = if settings.no_refine {
         None
     } else {
@@ -92,30 +90,18 @@ pub(super) fn collect(
     })
 }
 
-/// What collection walks: the path arguments when every positional
-/// argument is one; nothing given when there are none (each recognizer's
-/// roots); and for paths mixed with dotted names or keys, the paths, and
+/// What collection walks: nothing given when there is no path (each
+/// recognizer's roots); the path arguments when every positional argument
+/// is one; and for paths mixed with dotted names or keys, the paths, and
 /// wherever the adapters look when no path is given, for the rest.
-fn targets(settings: &RunSettings, project: Project<'_>) -> Vec<PathBuf> {
-    if settings.positionals.only_paths() {
-        return settings.paths.clone();
-    }
+fn targets(settings: &RunSettings) -> Targets {
     if settings.paths.is_empty() {
-        return Vec::new();
+        Targets::Default
+    } else if settings.positionals.only_paths() {
+        Targets::Paths(settings.paths.clone())
+    } else {
+        Targets::PathsAndDefault(settings.paths.clone())
     }
-    let bare = Project {
-        args: &[],
-        ..project
-    };
-    let mut targets: Vec<PathBuf> = settings
-        .adapters
-        .prepared()
-        .iter()
-        .flat_map(|(_, recognizer)| recognizer.roots(&bare))
-        .filter(|root| root.exists())
-        .collect();
-    targets.extend(settings.paths.iter().cloned());
-    targets
 }
 
 /// When collection reports its progress: not before it has taken half a

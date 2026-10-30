@@ -235,7 +235,12 @@ fn run(
     refiner: Option<&(dyn Refiner + Sync)>,
 ) -> Collection {
     let project = Project::new(root, root);
-    Collector::new(project, recognizers, options).collect(targets, refiner)
+    let targets = if targets.is_empty() {
+        Targets::Default
+    } else {
+        Targets::Paths(targets.to_vec())
+    };
+    Collector::new(project, recognizers, options).collect(&targets, refiner)
 }
 
 fn fake() -> Vec<Prepared> {
@@ -292,7 +297,7 @@ fn run_cached_with(
     };
     Collector::new(project, recognizers, options)
         .with_environment(environment)
-        .collect(&[], refiner)
+        .collect(&Targets::Default, refiner)
 }
 
 /// The entries in a cache directory, for the `fake` adapter.
@@ -525,6 +530,50 @@ fn roots_are_walked_only_for_the_recognizers_that_list_them() {
             "other/notes.txt::second",
         ]
     );
+}
+
+/// With dotted names or keys among the paths, collection walks the paths
+/// after wherever the recognizers look without them: their roots that
+/// exist, walked as paths are, for every recognizer, a file named.
+#[test]
+fn paths_with_names_walk_the_recognizers_roots_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, "tests/t_check.py", "def test_t(): pass\n");
+    write(root, "tests/notes.txt", "first\n");
+    write(root, "lone.py", "def test_l(): pass\n");
+    write(root, "other/o_check.py", "def test_o(): pass\n");
+    write(root, "elsewhere/e_check.py", "def test_e(): pass\n");
+    let recognizers: Vec<Prepared> = vec![
+        (
+            "fake".into(),
+            Box::new(Fake::rooted(vec![
+                root.join("tests"),
+                root.join("lone.py"),
+                root.join("missing"),
+            ])),
+        ),
+        // Its root, the cwd, doesn't exist.
+        ("lines".into(), Box::new(Lines)),
+    ];
+    let cwd = root.join("nowhere");
+    let collect = |targets: Targets| {
+        Collector::new(Project::new(root, &cwd), &recognizers, Options::default())
+            .collect(&targets, None)
+    };
+    let collection = collect(Targets::PathsAndDefault(vec![root.join("other")]));
+    assert_eq!(
+        ids(&collection),
+        [
+            "tests/notes.txt::first",
+            "tests/t_check.py::test_t",
+            "lone.py::test_l",
+            "other/o_check.py::test_o",
+        ]
+    );
+    assert_eq!(collection.diagnostics, []);
+    let collection = collect(Targets::Paths(vec![root.join("other")]));
+    assert_eq!(ids(&collection), ["other/o_check.py::test_o"]);
 }
 
 #[test]
@@ -1475,7 +1524,7 @@ fn refinement_is_cached_by_content() {
         };
         let collection = Collector::new(project, recognizers, options)
             .with_environment(environment(&python))
-            .collect(&[], Some(refiner));
+            .collect(&Targets::Default, Some(refiner));
         assert_eq!(collection.refined_files, 2);
         assert_eq!(
             ids(&collection),
@@ -2591,13 +2640,13 @@ fn a_stopped_collection_ends_at_once_and_says_so() {
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let collection = collector_at(dir.path(), &recognizers)
         .with_stop(stop)
-        .collect(&[], None);
+        .collect(&Targets::Default, None);
     assert!(collection.interrupted);
     assert_eq!(collection.cases, [] as [aye_events::Case; 0]);
     assert_eq!(collection.diagnostics, [] as [aye_events::Diagnostic; 0]);
 
     // Not stopped: everything, and not interrupted.
-    let collection = collector_at(dir.path(), &recognizers).collect(&[], None);
+    let collection = collector_at(dir.path(), &recognizers).collect(&Targets::Default, None);
     assert!(!collection.interrupted);
     assert_eq!(collection.cases.len(), 10);
 }
@@ -2617,9 +2666,11 @@ fn collection_reports_its_progress_while_it_walks() {
     }
     let recognizers = fake();
     let mut reports = Vec::new();
-    let collection =
-        collector_at(dir.path(), &recognizers)
-            .collect_watching(&[], None, &mut |progress| reports.push(progress));
+    let collection = collector_at(dir.path(), &recognizers).collect_watching(
+        &Targets::Default,
+        None,
+        &mut |progress| reports.push(progress),
+    );
     assert_eq!(collection.cases.len(), 5);
     // One while walking (every 256 entries), one when the walk is done.
     assert!(reports.len() >= 2, "{reports:?}");
@@ -2642,7 +2693,7 @@ fn collection_reports_its_progress_while_a_file_is_refined() {
     };
     let mut reports = Vec::new();
     let collection = collector_at(dir.path(), &recognizers).collect_watching(
-        &[],
+        &Targets::Default,
         Some(&refiner),
         &mut |progress| reports.push(progress),
     );
@@ -2665,7 +2716,7 @@ fn a_stop_while_refining_ends_collection_as_interrupted() {
     };
     let collection = collector_at(dir.path(), &recognizers)
         .with_stop(stop)
-        .collect(&[], Some(&refiner));
+        .collect(&Targets::Default, Some(&refiner));
     assert!(collection.interrupted);
     assert_eq!(collection.cases, [] as [aye_events::Case; 0]);
 }
