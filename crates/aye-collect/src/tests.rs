@@ -2193,6 +2193,75 @@ fn code_named_by_string_outside_the_project_is_never_cached() {
     }
 }
 
+/// The environment's digest, which the refinement cache's key holds,
+/// pinned to what it hashes, each an FNV-1a 128 part: the interpreter (its
+/// path, the file it resolves to, that file's size and time), its venv's
+/// `pyvenv.cfg` and its content, each `site-packages` directory with its
+/// entries in order (and a `.pth` file's content after its name), then the
+/// variables but the shell's, sorted, then the framework's arguments.
+/// Entries an earlier aye wrote keep answering only while it hashes the
+/// same. `#[cfg(unix)]`: there a temporary directory has one spelling once
+/// resolved, so the venv is found once.
+#[cfg(unix)]
+#[test]
+fn the_environments_digest_is_pinned() {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use aye_events::Fnv128;
+
+    let dir = tempfile::tempdir().unwrap();
+    // As the interpreter resolves to itself: no second spelling of the venv.
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let python = interpreter(&root);
+    let site = root.join("venv/lib/python3.13/site-packages");
+    write(&site, "b.pth", "/src\n");
+    write(&site, "a/__init__.py", "");
+    let modified = Duration::from_secs(1_700_000_000);
+    fs::File::options()
+        .write(true)
+        .open(&python)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + modified)
+        .unwrap();
+    let environment = Environment {
+        framework_args: vec!["-x".into(), "--lf".into()],
+        variables: Some(
+            [("B", "2"), ("SHLVL", "3"), ("A", "1"), ("PWD", "/x")]
+                .into_iter()
+                .map(|(name, value)| (name.into(), value.into()))
+                .collect(),
+        ),
+        ..environment(&python)
+    };
+
+    let mut hash = Fnv128::new();
+    hash.part(b"interpreter");
+    hash.part(python.as_os_str().as_encoded_bytes());
+    hash.part(python.as_os_str().as_encoded_bytes());
+    hash.part(&0u64.to_le_bytes());
+    hash.part(&modified.as_nanos().to_le_bytes());
+    hash.part(root.join("venv/pyvenv.cfg").as_os_str().as_encoded_bytes());
+    hash.part(b"home = /usr/bin\n");
+    hash.part(site.as_os_str().as_encoded_bytes());
+    hash.part(b"a");
+    hash.part(b"b.pth");
+    hash.part(b"/src\n");
+    hash.part(b"variables");
+    for part in ["A", "1", "B", "2"] {
+        hash.part(part.as_bytes());
+    }
+    hash.part(b"framework args");
+    hash.part(b"-x");
+    hash.part(b"--lf");
+    assert_eq!(environment.digest(&root), Some(hash.finish()));
+    // A relative interpreter is the cwd's.
+    let relative = Environment {
+        interpreter: Some(PathBuf::from("venv/bin/python")),
+        ..environment.clone()
+    };
+    assert_eq!(relative.digest(&root), Some(hash.finish()));
+}
+
 #[test]
 fn installed_modules_are_listed_from_the_interpreters_paths() {
     let dir = tempfile::tempdir().unwrap();

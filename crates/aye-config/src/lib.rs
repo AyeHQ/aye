@@ -918,6 +918,71 @@ mod tests {
         assert!(config.settings.adapter_table("pytest").is_none());
     }
 
+    /// With several bad values, the one reported is the first of: an
+    /// unknown key, a value of the wrong type or a bad `workers` (the first
+    /// of those by the keys' names, whatever the file's order), then
+    /// `output`, `python`, `timeout`, `keep-runs` and `adapters`, in that
+    /// order. Pinned as 0.0.1 decides it: a usage error names one value.
+    #[test]
+    fn the_value_reported_among_bad_ones_is_pinned() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = |body: &str| {
+            write(
+                dir.path(),
+                "pyproject.toml",
+                &format!("[tool.aye]\n{body}\n"),
+            );
+            let err = AyeConfig::load(dir.path()).unwrap_err().to_string();
+            let (_, message) = err.split_once("pyproject.toml: ").unwrap();
+            message.to_string()
+        };
+        for (body, reported) in [
+            (
+                "timeout = -5\noutput = \"xml\"",
+                "output = \"xml\": expected text or json",
+            ),
+            (
+                "timeout = -5\npython = \"\"",
+                "python = \"\": expected the path or name of an interpreter",
+            ),
+            (
+                "adapters = []\nkeep-runs = -1",
+                "keep-runs = -1: expected a number of runs, 0 or more",
+            ),
+            (
+                "adapters = []\ntimeout = inf",
+                "timeout = inf: expected a number of seconds, 0 or more",
+            ),
+            (
+                "output = \"xml\"\nworkers = \"lots\"",
+                "workers = \"lots\": expected a number of workers or \"auto\"",
+            ),
+            (
+                "output = \"xml\"\ntimeout = \"5\"",
+                "invalid type: string \"5\", expected f64",
+            ),
+            (
+                "output = \"xml\"\nwrokers = 4",
+                "unknown field `wrokers`, expected one of `workers`, `python`, `output`, \
+                 `timeout`, `adapters`, `keep-runs`, `unittest`, `doctest`",
+            ),
+            (
+                "workers = \"lots\"\nadapters = \"pytest\"",
+                "invalid type: string \"pytest\", expected a sequence",
+            ),
+            (
+                "adapters = \"pytest\"\nworkers = \"lots\"",
+                "invalid type: string \"pytest\", expected a sequence",
+            ),
+            (
+                "keep-runs = \"ten\"\npython = 3",
+                "invalid type: string \"ten\", expected i64",
+            ),
+        ] {
+            assert_eq!(first(body), reported, "{body}");
+        }
+    }
+
     /// Every source as `aye config`'s rows show it, and in full, as 0.0.1
     /// spelt each (`aye config`'s snapshots pin them in place).
     #[test]
