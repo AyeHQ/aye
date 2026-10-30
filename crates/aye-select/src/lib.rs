@@ -107,7 +107,7 @@ pub use expression::{Expression, Kwarg, ParseError, Value};
 pub use last_failed::{FailedEntry, LastFailed};
 pub use order::Order;
 pub use selection::{AdapterSelection, RunAs, Selected, SelectedCase, Selection, SelectorIndex};
-pub use selector::{Named, Selector, dotted_reach};
+pub use selector::{DottedReading, Reached, Selector};
 pub use truth::Truth;
 
 /// A malformed `-k` or `-m` expression: a usage error. The parse error is

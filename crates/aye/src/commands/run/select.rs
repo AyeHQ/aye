@@ -27,11 +27,11 @@ use std::path::Path;
 use aye_adapter::FrameworkDefaults;
 use aye_events::{
     AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, Event, ProjectPath,
-    Severity, TestId,
+    ProjectPathRef, Severity, TestId,
 };
 use aye_fs::root_relative;
 use aye_select::{
-    LastFailed, Named, Order, SelectedCase, Selection, Selector, SelectorIndex, dotted_reach,
+    DottedReading, LastFailed, Order, Reached, SelectedCase, Selection, Selector, SelectorIndex,
 };
 
 use super::collect::Collected;
@@ -198,9 +198,10 @@ fn unmatched<'a>(
             let found = match positional {
                 Positional::Path { absolute, .. } => absolute.exists(),
                 Positional::Id { .. } => false,
-                Positional::Word(_) => skips
-                    .iter()
-                    .any(|path| dotted_reach(selector.as_str(), path) == Named::Whole),
+                Positional::Word(_) => skips.iter().any(|path| {
+                    let path = ProjectPathRef::as_written(path);
+                    selector.reaches(path, DottedReading::AnyParts) == Reached::Whole
+                }),
             };
             (!found).then_some((selector, positional))
         })

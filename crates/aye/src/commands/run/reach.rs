@@ -1,7 +1,8 @@
 //! What a run reaches when some positional arguments aren't paths
 //! ([`Reach`]), which decides which of collection's diagnostics are the
 //! run's: a dotted name's reach into what collection skipped
-//! ([`dotted_reach`]), and the conftests that failed to load
+//! ([`Selector::reaches`], with the binary's reading of a word,
+//! [`DottedReading::AnyParts`]), and the conftests that failed to load
 //! ([`broken_conftest_dirs`]), which explain the files below them.
 //!
 //! Decided (implementation, October 2026):
@@ -29,9 +30,9 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use aye_events::{Case, Diagnostic, DiagnosticCode, Severity};
+use aye_events::{Case, Diagnostic, DiagnosticCode, ProjectPathRef, Severity};
 use aye_fs::{normalize_absolute, root_relative};
-use aye_select::{Named, Selection, dotted_reach};
+use aye_select::{DottedReading, Reached, Selection, Selector};
 
 use crate::positional::{Positional, Positionals};
 use crate::registry;
@@ -54,7 +55,7 @@ pub(super) struct Reach {
     /// ([`aye_protocol::BatchContext::selected_paths`]).
     pub(super) selected: Vec<PathBuf>,
     /// The arguments that aren't paths, as given: dotted names and keys.
-    pub(super) words: Vec<String>,
+    pub(super) words: Vec<Selector>,
     /// Whether some argument named nothing: an error collection reported
     /// elsewhere may be why, and is kept.
     pub(super) unmatched: bool,
@@ -81,7 +82,7 @@ impl Reach {
                     }
                 }
                 Positional::Word(word) => {
-                    words.push(word.clone());
+                    words.push(Selector::parse(word));
                     let one = Selection::default().with_ids([word.as_str()]);
                     for case in cases {
                         if one.truth(case).is_false() {
@@ -106,7 +107,7 @@ impl Reach {
     /// Whether a diagnostic collection reported is the run's. A `skipped`
     /// info (a module or directory the framework skipped, which the
     /// summaries count as a skip) is when a path argument holds it, or lies
-    /// in it, or a dotted name reaches it ([`dotted_reach`]): what keys
+    /// in it, or a dotted name reaches it ([`Selector::reaches`]): what keys
     /// select are tests, and a skipped module has none. A `usage-error` on
     /// a file (a conftest that failed at start-up in refinement's session)
     /// is when it lies in a path argument, or its directory holds a path
@@ -120,10 +121,10 @@ impl Reach {
                 self.paths
                     .iter()
                     .any(|path| at.starts_with(path) || path.starts_with(&at))
-                    || self
-                        .words
-                        .iter()
-                        .any(|word| dotted_reach(word, diagnostic.path.as_str()) != Named::Nothing)
+                    || self.words.iter().any(|word| {
+                        let path = ProjectPathRef::as_written(diagnostic.path.as_str());
+                        word.reaches(path, DottedReading::AnyParts) != Reached::Nothing
+                    })
             }
             (Severity::Error, DiagnosticCode::UsageError) if !diagnostic.path.is_nowhere() => {
                 if self.unmatched {

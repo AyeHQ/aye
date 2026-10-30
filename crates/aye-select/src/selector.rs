@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use aye_events::{Case, Certainty, KeyPrefix, TestId, TestIdParts};
+use aye_events::{Case, Certainty, KeyPrefix, ProjectPathRef, TestId, TestIdParts};
 
 use crate::Truth;
 use crate::expression::is_python_identifier;
@@ -76,6 +76,39 @@ impl Selector {
         }
     }
 
+    /// How this argument, read as a dotted name by `reading`
+    /// (`pkg.mod.Class.test`, read from the root as selection reads one:
+    /// `pkg/mod.py` then the names in it, or the package `pkg/mod`),
+    /// reaches `path`, which collection reported skipped (a module, or a
+    /// directory a conftest skipped), relative to the root. An argument
+    /// `reading` reads as no dotted name (an id, a path with `/`) reaches
+    /// nothing.
+    pub fn reaches(&self, path: ProjectPathRef<'_>, reading: DottedReading) -> Reached {
+        let parts: Vec<&str> = match reading {
+            DottedReading::Identifiers => {
+                let Some(names) = self.readings.iter().find_map(|reading| match reading {
+                    Reading::Dotted { names, .. } => Some(names),
+                    _ => None,
+                }) else {
+                    return Reached::Nothing;
+                };
+                names.iter().map(String::as_str).collect()
+            }
+            DottedReading::AnyParts => {
+                let word = self.text.as_str();
+                if word.contains("::") || word.contains('/') {
+                    return Reached::Nothing;
+                }
+                let parts: Vec<&str> = word.split('.').filter(|part| *part != "__init__").collect();
+                if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
+                    return Reached::Nothing;
+                }
+                parts
+            }
+        };
+        reach(&parts, path.as_str())
+    }
+
     /// The argument as given.
     pub fn as_str(&self) -> &str {
         &self.text
@@ -88,7 +121,7 @@ impl Selector {
         self.select_ranked(case, narrow).0
     }
 
-    /// As [`Selector::select`], with how specific the most general reading
+    /// As `Selector::select`, with how specific the most general reading
     /// that selects the case is: the number of path components, names and
     /// parameter ids it names (a key names a case outright). A more general
     /// selector subsumes a more specific one, as pytest's
@@ -331,9 +364,25 @@ fn normalize(path: &str) -> Vec<String> {
     components
 }
 
+/// How [`Selector::reaches`] reads an argument as a dotted name. Selection
+/// and the binary's reading of what collection skipped have read words
+/// differently since 0.0.1 (docs/reorganisation.md §6): each is kept, named,
+/// until the comparison harness decides between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DottedReading {
+    /// As selection reads it ([`Selector::parse`]): a word whose parts are
+    /// all Python identifiers, its parameter id left out.
+    Identifiers,
+    /// As the binary reads one for what collection skipped: any word
+    /// without `::` or `/` whose parts aren't empty, `__init__` parts left
+    /// out, no parameter id split off. So `my-mod` reaches a skipped
+    /// `my-mod.py`, which selection reads as no dotted name.
+    AnyParts,
+}
+
 /// What a dotted name names of a path collection reported skipped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Named {
+pub enum Reached {
     Nothing,
     /// Something the skip holds or that holds it, but not the name's
     /// whole: tests of a skipped module (`mod.test_x`), a module in a
@@ -345,35 +394,23 @@ pub enum Named {
     Whole,
 }
 
-/// How the dotted name `word` (`pkg.mod.Class.test`, read from the root as
-/// [`Selector`] reads one: `pkg/mod.py` then the names in it, or
-/// the package `pkg/mod`; `__init__` left out) reaches `path`, which
-/// collection reported skipped (a module, or a directory a conftest
-/// skipped), relative to the root. A word that isn't a dotted name (a key,
-/// an id) names nothing.
-pub fn dotted_reach(word: &str, path: &str) -> Named {
-    if word.contains("::") || word.contains('/') {
-        return Named::Nothing;
-    }
-    let parts: Vec<&str> = word.split('.').filter(|part| *part != "__init__").collect();
-    if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
-        return Named::Nothing;
-    }
+/// How the dotted name `parts` reaches `path` ([`Selector::reaches`]).
+fn reach(parts: &[&str], path: &str) -> Reached {
     let inside = |inner: &str, outer: &str| {
         inner
             .strip_prefix(outer)
             .is_some_and(|rest| rest.starts_with('/'))
     };
-    let mut named = Named::Nothing;
+    let mut named = Reached::Nothing;
     for k in 1..=parts.len() {
         let base = parts[..k].join("/");
         let module = format!("{base}.py");
         let whole = k == parts.len();
         if whole && (path == base || path == module || inside(path, &base)) {
-            return Named::Whole;
+            return Reached::Whole;
         }
         if path == module || inside(&module, path) || (whole && inside(&base, path)) {
-            named = Named::Part;
+            named = Reached::Part;
         }
     }
     named
@@ -633,28 +670,80 @@ mod tests {
     #[test]
     fn a_dotted_name_reaches_the_skips_of_what_it_names() {
         for (word, path, named) in [
-            ("other.test_mod", "other/test_mod.py", Named::Whole),
-            ("other.test_mod.__init__", "other/test_mod.py", Named::Whole),
-            ("other", "other/test_mod.py", Named::Whole),
-            ("tests.sub", "tests/sub", Named::Whole),
-            ("tests", "tests/sub", Named::Whole),
-            ("other.test_mod.test_m", "other/test_mod.py", Named::Part),
+            ("other.test_mod", "other/test_mod.py", Reached::Whole),
+            (
+                "other.test_mod.__init__",
+                "other/test_mod.py",
+                Reached::Whole,
+            ),
+            ("other", "other/test_mod.py", Reached::Whole),
+            ("tests.sub", "tests/sub", Reached::Whole),
+            ("tests", "tests/sub", Reached::Whole),
+            ("other.test_mod.test_m", "other/test_mod.py", Reached::Part),
             (
                 "other.test_mod.Class.test_m",
                 "other/test_mod.py",
-                Named::Part,
+                Reached::Part,
             ),
-            ("tests.sub.test_s", "tests/sub", Named::Part),
-            ("tests.sub.deep.test_s.test_x", "tests/sub", Named::Part),
-            ("tests.test_a", "tests/sub", Named::Nothing),
-            ("tests.test_a.TestX", "tests/test_a.py.bak", Named::Nothing),
-            ("tests.subway", "tests/sub", Named::Nothing),
-            ("other.test_mod", "other/test_mod_two.py", Named::Nothing),
-            ("cd12fbc3", "tests/sub", Named::Nothing),
-            ("tests.sub::x", "tests/sub", Named::Nothing),
-            ("tests..sub", "tests/sub", Named::Nothing),
+            ("tests.sub.test_s", "tests/sub", Reached::Part),
+            ("tests.sub.deep.test_s.test_x", "tests/sub", Reached::Part),
+            ("tests.test_a", "tests/sub", Reached::Nothing),
+            (
+                "tests.test_a.TestX",
+                "tests/test_a.py.bak",
+                Reached::Nothing,
+            ),
+            ("tests.subway", "tests/sub", Reached::Nothing),
+            ("other.test_mod", "other/test_mod_two.py", Reached::Nothing),
+            ("cd12fbc3", "tests/sub", Reached::Nothing),
+            ("tests.sub::x", "tests/sub", Reached::Nothing),
+            ("tests..sub", "tests/sub", Reached::Nothing),
         ] {
-            assert_eq!(dotted_reach(word, path), named, "{word} {path}");
+            assert_eq!(
+                Selector::parse(word)
+                    .reaches(ProjectPathRef::as_written(path), DottedReading::AnyParts),
+                named,
+                "{word} {path}"
+            );
+        }
+    }
+
+    /// Selection reads a word as a dotted name only when each part is an
+    /// identifier, and leaves its parameter id out; the binary's reading of
+    /// skips takes any parts and leaves `__init__` out. Where both read the
+    /// word, they reach alike.
+    #[test]
+    fn the_two_dotted_readings_differ_on_what_selection_reads_as_no_name() {
+        use DottedReading::{AnyParts, Identifiers};
+        use Reached::{Nothing, Part, Whole};
+        let reaches = |word: &str, path: &str, reading| {
+            Selector::parse(word).reaches(ProjectPathRef::as_written(path), reading)
+        };
+        for (word, path, reached) in [
+            ("other.test_mod", "other/test_mod.py", Whole),
+            ("other.test_mod.Class.test_m", "other/test_mod.py", Part),
+            ("tests", "tests/sub", Whole),
+            ("tests.sub.test_s", "tests/sub", Part),
+            ("tests.test_a", "tests/sub", Nothing),
+            ("tests.sub::x", "tests/sub", Nothing),
+            ("tests/sub", "tests/sub", Nothing),
+        ] {
+            assert_eq!(reaches(word, path, Identifiers), reached, "{word} {path}");
+            assert_eq!(reaches(word, path, AnyParts), reached, "{word} {path}");
+        }
+        for (word, path, identifiers, any_parts) in [
+            ("test_my-mod", "test_my-mod.py", Nothing, Whole),
+            ("test_my-mod.test_x", "test_my-mod.py", Nothing, Part),
+            ("pkg.__init__", "pkg", Part, Whole),
+            ("mod.test_x[1.5]", "mod.py", Part, Part),
+            ("mod[1]", "mod.py", Whole, Nothing),
+        ] {
+            assert_eq!(
+                reaches(word, path, Identifiers),
+                identifiers,
+                "{word} {path}"
+            );
+            assert_eq!(reaches(word, path, AnyParts), any_parts, "{word} {path}");
         }
     }
 }
