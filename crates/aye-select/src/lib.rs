@@ -1,9 +1,31 @@
-//! Selection: filtering collected cases by explicit ids, a keyword
-//! expression and a tag expression, with three-valued logic so that anything
-//! static analysis cannot decide is kept and left to the engine to re-apply,
-//! and putting what is kept in the order of the explicit ids.
+//! Selection: which of the collected cases a run runs, and in what order,
+//! in three-valued logic ([`Truth`], `truth.rs`), so that what static
+//! analysis can't decide is kept. In the order a selection goes:
+//! - the positional arguments ([`Selector`], `selector.rs`), each at its
+//!   place among them (a [`SelectorIndex`]) and read every way it can be:
+//!   a path, an id, a dotted name, a key; and what a word reaches of a
+//!   path collection skipped ([`Selector::reaches`], by a
+//!   [`DottedReading`]);
+//! - pytest's `-k`/`-m` language (`expression.rs`, its scanner and parser
+//!   in `expression/`), and what `-k` and `-m` each match of a case and
+//!   when each is off (`keyword.rs`, `marker.rs`);
+//! - a [`Selection`] (`selection.rs`): the arguments, the command line's
+//!   `-k` and `-m`, and each adapter's own `-k`, `-m` and `--deselect`
+//!   ([`AdapterSelection`]), applied to the cases into what is
+//!   [`Selected`]: each kept case with what of it runs ([`SelectedCase`],
+//!   [`RunAs`]), how many were deselected, and the arguments that named
+//!   nothing;
+//! - last failed (`last_failed.rs`): what failed last time ([`LastFailed`],
+//!   each a [`FailedEntry`]), the cases it keeps, and which of the others
+//!   pytest's summary counts;
+//! - the order a run's cases run in ([`Order`], `order.rs`): the
+//!   arguments', or, under `--ff`, what failed last time first.
 //!
-//! Owns: the selection language and its evaluation. Universal across engines.
+//! Owns: the selection language and its evaluation, last failed, and the
+//! order of a run's cases. Universal across adapters. Does not own which
+//! `-k` and `-m` count for an adapter's cases when the command line, the
+//! arguments after `--` and the framework each give one: that policy reads
+//! the framework's arguments, and is the binary's.
 //!
 //! Depends on: aye-events, aye-index (the positional arguments' places).
 //!
@@ -11,9 +33,10 @@
 //! - **One verdict per case**, a [`Truth`]: the explicit selectors (any of
 //!   them), the keyword expression and the tag expression, joined with
 //!   Kleene's `and`; last failed then filters what is left. A case is
-//!   dropped only on `False`. The engine re-applies both expressions at
-//!   runtime ([`Expression::as_str`] is the text to hand it), so `Unknown`
-//!   costs a little planning, never a test.
+//!   dropped only on `False`, and one that is `Unknown` runs: static
+//!   selection is a superset of what the framework would run, and, since
+//!   no adapter applies an expression at runtime, the last word on every
+//!   case (architecture.md's Core decision 5).
 //! - **Positional arguments** ([`Selector`]) are relative to the project
 //!   root, with `/` separators; the caller makes them so, since selection
 //!   never touches the file system. One containing `::` is a canonical id
@@ -38,15 +61,17 @@
 //!   own id has it; keys of parameter ids that collection cannot know are
 //!   for the caller to resolve (from history) into ids.
 //! - **Selectors that match no case** are listed in [`Selected::unmatched`],
-//!   so the runner can fail like pytest's `not found:`. Like pytest's
-//!   `normalize_collection_arguments`, an argument another one subsumes (a
-//!   path below a directory argument, an id below a file or a shorter id, a
-//!   repeat) is never listed.
+//!   by their places, so the runner can fail like pytest's `not found:`.
+//!   Like pytest's `normalize_collection_arguments`, an argument another
+//!   one subsumes (a path below a directory argument, an id below a file or
+//!   a shorter id, a repeat) is never listed.
 //! - **Order follows the arguments**, as pytest collects them: each kept case
 //!   is placed at the most general argument that selects it (the first among
 //!   equals), and keeps the order it came in within one argument. A
 //!   `Partial` case's narrowed parameter ids stay together, in the order the
-//!   arguments name them.
+//!   arguments name them. Under `--ff` ([`Order::FailedFirst`]), the cases
+//!   whose own ids failed last time come first, then the others, each part
+//!   in that order.
 //! - **Deselected** counts what the expressions, `--deselect` and last
 //!   failed drop from what the positional arguments select, as pytest's
 //!   summary does; cases no argument selects were never collected as far as
@@ -86,10 +111,18 @@
 //!   `Partial` cases, whose parameter ids and tags are not all known.
 //! - **Last failed** filters after everything else, as pytest's does. A case
 //!   is kept when its id failed, when a file or directory containing it
-//!   failed (a collection error), or when it is `Partial` and some of its
+//!   failed (a collection error: [`FailedEntry::Path`], which history keeps
+//!   as an id without `::`), or when it is `Partial` and some of its
 //!   parameter ids failed, which narrows it to those. When no remaining
 //!   case failed, or nothing failed at all, every remaining case is kept
 //!   (pytest's default, `--lfnf=all`).
+//! - **What a word reaches of a skip.** A dotted name naming a module or
+//!   directory collection skipped names something, as `pytest --pyargs`
+//!   finds it, though it selects no test ([`Selector::reaches`]). The
+//!   binary reads a word for it as it always has, with any parts
+//!   ([`DottedReading::AnyParts`]), where selection reads a dotted name
+//!   only when each part is an identifier ([`DottedReading::Identifiers`]):
+//!   both are kept, named, until the comparison harness decides.
 //!
 //! [`TestKey`]: aye_events::TestKey
 //! [`Case::keywords`]: aye_events::Case::keywords

@@ -135,14 +135,14 @@ boundaries and decisions.
 | `aye-index` | Index newtypes (`newtype_index!`) and the collections they index, `IndexVec` and `IndexSlice`. Depends on no aye crate. |
 | `aye-static` | `EnvVars`, every environment variable aye reads by name or sets, in Rust or in the Python it sends to workers, with what each does; `ProcessEnv`, the environment as aye read it, looked up as `os.environ` does: the binary reads it once and hands it down, and `clippy.toml` disallows `std::env`'s readers elsewhere (the tests' own settings excepted). Depends on no aye crate. |
 | `aye-fs` | Lexical path algebra (`normpath` and `normalize_absolute`, both of aye's normalizers, named; `absolute`, `relative_to`, `common_ancestor`, the two relativizers, paths shown with `/`, `expand_path` over a lookup it is given) and the state directory: `StateDir` (`.aye`) and its buckets (`history.json`, `runs`, `cache`), `prepare_dir` with the `.gitignore` and `CACHEDIR.TAG` markers, `atomic_write`. Depends on no aye crate. |
-| `aye` | The binary, a library whose `main` `main.rs` calls: the command line as clap reads it (`cli/`: `Command`, `RunArgs`, `ShowArgs`, and the `Verbosity` both take), the environment it reads once (`EnvironmentOptions`: the variables it reads by name and the whole of it, which it hands down), each command's settings resolved once from those and `[tool.aye]`, in the order that decides which usage error wins (`settings/`: `RunSettings`, with its `OutputSettings` and `JunitTarget`, and `ShowSettings`), the positional arguments, each read as a path, an id or a word (`positional.rs`: `Positional`, and a run's `Positionals`), the commands (`commands/`: the run, in the steps of [A run](#a-run), `commands/run/`: collect, reach, select, plan, the stop signals, and the one place its exit code is decided, `exit.rs`: `RunVerdict`; `aye config`, `config.rs`; `aye show`, `commands/show/`: what it chooses, what it feeds the renderers, `--runs`), a run's event stream (`stream/`: the `Passes` that rewrite the runner's records, over one fold of the batches' adapters, and the `Sink` every record goes to: the reporters, history and the run store), what ends aye before a run's stream starts (`error.rs`: `AyeError`), everything it writes beside the stream (`printer.rs`: `Printer`), and the adapter registry (`registry.rs`: pytest, unittest and doctest, each with the `AdapterTraits` the binary knows it by, which of them a project runs, prepared, as `ActiveAdapters`, and the prelude every worker installs before an adapter's modules, aye's `pytest` module and what it stands on). |
+| `aye` | The binary, a library whose `main` `main.rs` calls: the command line as clap reads it (`cli/`: `Command`, `RunArgs`, `ShowArgs`, and the `Verbosity` both take), the environment it reads once (`EnvironmentOptions`: the variables it reads by name and the whole of it, which it hands down), each command's settings resolved once from those and `[tool.aye]`, in the order that decides which usage error wins (`settings/`: `RunSettings`, with its `OutputSettings` and `JunitTarget`, and `ShowSettings`), the positional arguments, each read as a path, an id or a word (`positional.rs`: `Positional`, and a run's `Positionals`), the commands (`commands/`: the run, in the steps of [A run](#a-run), `commands/run/`: collect, reach, select (with which `-k` and `-m` count for each adapter's cases, `Pick`), plan, the stop signals, and the one place its exit code is decided, `exit.rs`: `RunVerdict`; `aye config`, `config.rs`; `aye show`, `commands/show/`: what it chooses, what it feeds the renderers, `--runs`), a run's event stream (`stream/`: the `Passes` that rewrite the runner's records, over one fold of the batches' adapters, and the `Sink` every record goes to: the reporters, history and the run store), what ends aye before a run's stream starts (`error.rs`: `AyeError`), everything it writes beside the stream (`printer.rs`: `Printer`), and the adapter registry (`registry.rs`: pytest, unittest and doctest, each with the `AdapterTraits` the binary knows it by, which of them a project runs, prepared, as `ActiveAdapters`, and the prelude every worker installs before an adapter's modules, aye's `pytest` module and what it stands on). |
 | `aye-events` | The wire types: events, the envelope and the `Stamper` that writes a run's part of it, outcomes and a test's earlier ones (`OutcomeTrail`), failures (an assertion's `ComparisonOp`, a comparison's `CompareKind`, the `FailureSignature` that groups them), the `RerunCommand` a bad outcome's `reproduce` holds, cases, a batch's `FrameworkStatus`, why a run stopped (`StopReason`), exit codes, `SCHEMA_VERSION`; the identities and paths they hold, each taken apart in one place (`TestId` and its parts, the `IdPrefix` that deselects tests, `TestKey`, `AdapterName`, `LifetimeId` and its `Scope`, `AffinityKey`, `RunId`, `RunNumber`, `WorkerIndex`, `BatchIndex`, `EnvironmentId`, `ProjectPath`, `DiagnosticPath`, `FramePath`, `LineNumber`); the diagnostic codes (`DiagnosticCode`, `Severity`) and the one classification of an error the exit code, the summary and the run store answer from (`ErrorClass`); FNV-1a, the one hash aye computes (`Fnv64`, `Fnv128`), and a file's `ContentDigest`, which the run store and the refinement cache keep. Depends on serde and `aye-index`. |
 | `aye-protocol` | The worker protocol: what the runner sends a worker and what it answers (`Request`, `Reply`, `WorkerLine`), a `Batch`, its `Policy` and its `BatchContext` (the adapter's opaque `AdapterContext` and the keys the binary and the runner add, `context_keys`), a `maxfail` limit (`MaxFail`), refinement's messages (`RefineRequest`, `Refined`), the handshake's modules, borrowed from the binary (`ModuleSource`), in the order a worker installs them (`ModuleSet`), and its executors (`ExecutorSpec`), an adapter's runtime face (`Runtime`: its modules, its executor's `EntryPoint` and its `SessionMode`), the services a worker may provide (`ServiceName`), `PROTOCOL_VERSION`, and the `Refiner` trait the runner implements for collection; `FrameworkStatus`, re-exported. Depends on `aye-events` only. |
 | `aye-engine` | aye's engine: the Python every executor builds on (`python/aye_engine.py`, which every worker installs first: `ENGINE`), the test model, assertion rewriting and the native engine (`aye_model.py`, `aye_rewrite.py`, `aye_native_engine.py`), embedded as `ModuleSource`s with their Python tests; and the vocabulary. Depends on `aye-protocol` only. |
 | `aye-adapter` | What an adapter implements: the `Adapter` trait (which prepares a recognizer, and gives the `Runtime` its workers install and build) and the `Recognizer` trait (a recognizer claims paths as they were `Requested`, named or found, and says whether it `claims_any_name` of a kind), `Claim`, `Recognition` with its `RefineReason`, `SourceFile`, `Project` (with the environment and `[tool.aye]` the binary read), `Setting` with its `ValueSource`, what a framework's configuration says about the run (`FrameworkDefaults`, `JunitDefaults`), `AdapterError`; Ruff's syntax tree, line index and text ranges, re-exported with the `get-size2` pin, so collection and the adapters share one version. Depends on `aye-events`, `aye-protocol`, `aye-config` and `aye-static`. |
 | `aye-config` | The project root, `[tool.aye]` as written (`AyeOptions`) and resolved (`AyeSettings`), its values, typed and shared with the command line where it takes the same one (`WorkerCount`, `OutputFormat`, `Timeout`, `KeepRuns`, `AdapterList`), where a resolved value came from (`ValueSource`, and `Sourced` values, equal by their values) and how `aye config` shows it (in a table's row, `pyproject.toml [tool.aye]`, or beside a setting's name, `[tool.aye] output`), and generic TOML and INI loaders. Paths come from `aye-fs`, adapters' names from `aye-events`. |
-| `aye-collect` | Discovery: what a run collects from (`Targets`: the paths given, the recognizers' roots, or both), the walk into a table of files (each a `FileId`, with what each recognizer, an `AdapterId` in priority order, claims of it, as a `RecognizerSet`), parsing with Ruff's parser, recognizers, refinement and its cache (`refine/cache.rs`: an entry per file and adapter, read only for a file whose `Cacheability` allows it; `refine/key.rs`: its key, typed part by part: the run's inputs, with `aye-provision`'s `EnvironmentFingerprint`, through which alone it reads the interpreter, then the adapter's and the file's), merging, collection's own diagnostics (`CollectDiagnostic`), strict mode, and the files of each adapter's session (`Collection::session_files`). Knows no framework's rules. Depends on `aye-adapter`, `aye-events`, `aye-fs`, `aye-index`, `aye-protocol` and `aye-provision`. |
-| `aye-select` | Selection by path, id, dotted name, key, keyword expression, tag expression and last failed, with three-valued logic. |
+| `aye-collect` | Discovery: what a run collects from (`Targets`: the paths given, the recognizers' roots, or both), the walk into a table of files (each a `FileId`, with what each recognizer, an `AdapterId` in priority order, claims of it, as a `RecognizerSet`), parsing with Ruff's parser, recognizers, refinement and its cache (`refine/cache.rs`: an entry per file and adapter, read only for a file whose `Cacheability` allows it; `refine/key.rs`: its key, typed part by part: the run's inputs, with `aye-provision`'s `EnvironmentFingerprint`, through which alone it reads the interpreter, then the adapter's and the file's), merging, collection's own diagnostics (`CollectDiagnostic`), strict mode, and the files of each adapter's session (`Collection::session_files`, within the `StartPaths` a run starts from). Knows no framework's rules. Depends on `aye-adapter`, `aye-events`, `aye-fs`, `aye-index`, `aye-protocol` and `aye-provision`. |
+| `aye-select` | Selection, in three-valued logic (`Truth`: what static analysis can't decide is `Unknown`, and kept): the positional arguments (`Selector`, each at its `SelectorIndex`, read as a path, an id, a dotted name or a key, and what a word reaches of what collection skipped, `Selector::reaches`, by a `DottedReading`, selection's or the binary's, each named), pytest's `-k`/`-m` language, the command line's `-k` and `-m` and each adapter's own `-k`, `-m` and `--deselect` (`AdapterSelection`), applied to the cases into what is kept (`Selected`: each `SelectedCase` with what of it runs, `RunAs`); last failed (`LastFailed`, each `FailedEntry` a test, or a path that failed to collect); and the order a run's cases run in (`Order`: the arguments', or under `--ff` what failed last time first). Which `-k` and `-m` count for an adapter's cases is the binary's policy, which reads the framework's arguments. Depends on `aye-events` and `aye-index`. |
 | `aye-runner` | The spawn path (of the interpreter it is given) and the handshake (aye's engine, the binary's prelude, then each runtime's modules), the transport, scheduling, `maxfail`, crash recovery, the log's stamping (with `aye-events`' `Stamper`), and the worker (`python/aye_worker.py`). |
 | `aye-stream` | The folds over the event stream that aren't presentation, which the renderers, the run store and `aye show` share: what consumes the log (`Consumer`), one stream fanned out to several (`Tee`) and what a consumer's error does to the rest (`StopAfterError` on stdout, `FailOnFinish` for a report written at the end); test keys (`Keys`, of a `Subject`, a test or a lifetime, shown as a `ShortKey`); what the summaries count beside the tests (`Tally`, `Extra`, `ModuleSkips`); a test's bad sub-outcomes held until it finishes (`SubOutcomes`, and which of its own failures `Repeats` theirs); tests a failed lifetime kept from running (`BlockedTests`, and whether a lifetime that fails `Again` is shown again); the first failure of each signature (`FirstBySignature`), the diagnostics that came already (`SeenDiagnostics`, so each is shown once), the line each test is defined on (`DefinitionLines`) and the run's facts (`RunFacts`); a stored run's log indexed for `aye show` (`RunIndex`: its `RunItem`s, by `ItemIndex`, and their records, by `RecordIndex`); and how a file changed since a run (`FileChange`). Where the renderers' rules differ, each says which it takes. Depends on `aye-events` and `aye-index`. |
 | `aye-render` | Renderers, presentation only, each an `aye_stream::Consumer` over aye-stream's folds, each a module tree by concept: text, JSON lines (its line types typed, their fields in the order they are written), JUnit XML, GitHub annotations; how much each shows (`Level`, the net count of `-v` less `-q`; `DetailLevel`, how much of a bad outcome; `Ladder`, a table per format, tested against the ladder below); what a renderer is fed (`RenderMode`: a run's stream, or for `aye show` part of a stored log with `ShowMode`, the log's keys and `ShowContext`, with each stale file's `FileChange`); what they say of a failure alike (`failure`, with the adapters' text rules, kept for 0.1.0 so that logs 0.0.1 stored read the same); the words they share (`words`: durations, plurals, and the times `aye show` says, which the binary reuses) and the summary's (`summary_words`, which `aye show --runs` reuses). Depends on `aye-stream` and `aye-events`; the binary reads the environment for it (`GITHUB_ACTIONS`). |
@@ -224,17 +224,20 @@ live workers.
    would collect every project in it. On a terminal, a `collecting…` line
    shows if this takes over half a second (the pytest adapter's look at the
    directories the run collects can, in a big tree).
-2. **Collect.** `aye-collect` walks the explicit paths, or else each
-   recognizer's roots (pytest's `testpaths`, unittest's start directory, or
-   the current directory), which it also walks when dotted names or keys
-   come with the paths. Dotted names and keys are resolved among the cases
+2. **Collect.** `aye-collect` walks what the run collects from (its
+   `Targets`): the explicit paths, or else each recognizer's roots
+   (pytest's `testpaths`, unittest's start directory, or the current
+   directory), or both, the roots first, when dotted names or keys come
+   with the paths. Dotted names and keys are resolved among the cases
    of that whole walk, so refinement reports on all of it, its sessions
    starting from the framework's default: the binary keeps only what the
-   run reaches (a `skipped` info a path argument or dotted name reaches; a
-   start-up `usage-error` on a conftest in a path argument or whose
-   directory holds a path the run starts from, or any when an argument
-   named nothing), as `pytest <the paths and the selected files>` would
-   report. It offers each file to every recognizer, and parses
+   run reaches (a `skipped` info a path argument or dotted name reaches,
+   the word read with any parts, `DottedReading::AnyParts`; a start-up
+   `usage-error` on a conftest in a path argument or whose directory
+   holds a path the run starts from, or any when an argument named
+   nothing), as `pytest <the paths and the selected files>` would report,
+   and the run's session is the files in the paths it starts from (its
+   `StartPaths`). It offers each file to every recognizer, and parses
    claimed Python files on every core. A file is claimed for tests, as
    support (pytest's conftests) or as both (a conftest matching
    `python_files`), and yields tests only for the recognizers whose walk
@@ -247,26 +250,33 @@ live workers.
    --co --no-refine`, which lists the static recognizer's prediction
    without importing anything. The worker that refines pytest's files is
    kept: it becomes the run's first lane. Refinement is cached under
-   `.aye/cache/refine/` (see [Static collection](#static-collection-pytest)).
+   `.aye/cache/refine/`, for a file whose `Cacheability` allows it, under
+   a key typed part by part (see [Static collection](#static-collection-pytest)).
    A `refine-failed` warning is an error: without the front-end, pytest's
    tests are unknown. A hook that fails while the front-end collects is
    pytest's `INTERNALERROR`: the run exits 3 before anything runs. Cases
    are merged by file, then adapter priority; an id two adapters collect
    keeps the higher-priority adapter's case.
 3. **Select.** `aye-select` keeps every case whose verdict isn't `False`,
-   then applies last failed, and puts what is kept in the order of the
-   arguments, as pytest does. A `-k` or `-m` after `--` applies to every
-   case, else the command line's, else each adapter's own, from its context
-   (pytest's from `addopts` or `PYTEST_ADDOPTS`), to its own cases. When the
-   arguments after `--` can't be read (an `@file`, a short option aye
-   doesn't know that might hold the letter), every adapter's cases get the
-   command line's, else their own: no adapter applies an expression at
-   runtime. An adapter's `--deselect` prefixes (its context's `deselect`)
+   then applies last failed (what failed last time, each a test or a path
+   that failed to collect: a `FailedEntry`), and puts what is kept in the
+   order of the arguments, as pytest does; under `--ff`, what failed last
+   time comes first (its `Order`). Each kept case says what of it runs:
+   the case, or the parameter ids it is narrowed to (a `SelectedCase`). A
+   `-k` or `-m` after `--` applies to every case, else the command line's,
+   else each adapter's own, from its `FrameworkDefaults` (pytest's from
+   `addopts` or `PYTEST_ADDOPTS`), to its own cases (its
+   `AdapterSelection`): which one counts is the binary's policy (`Pick`).
+   When the arguments after `--` can't be read (an `@file`, a short option
+   aye doesn't know that might hold the letter), every adapter's cases get
+   the command line's, else their own: no adapter applies an expression at
+   runtime. An adapter's `--deselect` prefixes (its `FrameworkDefaults`')
    drop its cases whose ids start with one and count them as deselected.
-   An argument that names
-   nothing (a missing path; an id, dotted name or key that matches no test)
-   is a `not-found` diagnostic, and the run exits 4 before anything runs, as
-   pytest does. An existing file or directory without tests is no error.
+   An argument that names nothing (a missing path; an id, dotted name or
+   key that matches no test) is a `not-found` diagnostic, and the run exits
+   4 before anything runs, as pytest does; two that read alike are
+   reported as the first of them. An existing file or directory without
+   tests is no error.
 4. **Run.** `aye-runner` groups the cases into batches, each of one
    adapter, and starts workers, which pull batches until none are left.
    Each adapter's context gets the ids with parameters the command line

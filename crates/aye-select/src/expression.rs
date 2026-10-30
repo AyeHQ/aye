@@ -100,7 +100,7 @@ impl Expression {
         })
     }
 
-    /// The text the expression was parsed from, as the engine re-applies it.
+    /// The text the expression was parsed from.
     pub fn as_str(&self) -> &str {
         &self.input
     }

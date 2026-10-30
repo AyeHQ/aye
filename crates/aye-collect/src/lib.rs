@@ -17,7 +17,8 @@
 //!   (`CollectDiagnostic`, `diagnostic.rs`: files with no tests, ids given
 //!   twice, what can't be found, read, parsed or refined), strict mode
 //!   applied, and which gives a run its sessions' files
-//!   ([`Collection::session_files`]).
+//!   ([`Collection::session_files`], within the [`StartPaths`] a run
+//!   starts from).
 //!
 //! Owns: the mechanism of discovery. Does not own: what counts as a test, which
 //! is each adapter's recognizer. If a framework's name pattern or id algorithm
