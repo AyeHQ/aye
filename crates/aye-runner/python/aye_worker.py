@@ -6,7 +6,7 @@ knows nothing about any framework: aye's engine and each adapter's executor
 arrive as source in the handshake, and the worker installs them, builds the
 executors and relays requests to them.
 
-Protocol (``aye_engine::Request`` and ``aye_engine::Reply``), one JSON object
+Protocol (``aye_protocol::Request`` and ``aye_protocol::Reply``), one JSON object
 per line:
 
 - stdin: ``hello`` first, then ``refine``, ``run`` or ``shutdown``, which (as

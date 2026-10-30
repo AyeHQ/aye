@@ -1,9 +1,9 @@
 //! Index newtypes and the collections they index.
 //!
 //! A position held as a bare `usize` (collection's files and recognizers,
-//! `aye show`'s records) or a `u32` alias (`WorkerId`, `BatchId`) says
-//! nothing about which collection it is a position in, and mixes with every
-//! other number. An index made with [`newtype_index!`] is a type of its own,
+//! `aye show`'s records) or a `u32` alias (0.0.1's `WorkerId` and
+//! `BatchId`) says nothing about which collection it is a position in, and
+//! mixes with every other number. An index made with [`newtype_index!`] is a type of its own,
 //! and an [`IndexVec`] or an [`IndexSlice`] takes only its own index type:
 //! indexing the workers with a batch's index doesn't compile.
 //!

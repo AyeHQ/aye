@@ -11,6 +11,7 @@ authors.workspace = true
 
 [dependencies]
 aye-events = { workspace = true }
+aye-index = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]

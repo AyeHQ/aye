@@ -1,0 +1,27 @@
+[package]
+name = "aye-adapter"
+description = "The aye adapter contract: what an adapter implements to map a framework onto aye's engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+aye-config = { workspace = true }
+aye-events = { workspace = true }
+aye-protocol = { workspace = true }
+aye-static = { workspace = true }
+get-size2 = { workspace = true } # version pin only; see the workspace Cargo.toml
+ruff_python_ast = { workspace = true }
+ruff_source_file = { workspace = true }
+ruff_text_size = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+ruff_python_parser = { workspace = true }
+
+[lints]
+workspace = true

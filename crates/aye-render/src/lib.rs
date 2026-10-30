@@ -4,32 +4,46 @@
 //! everything about each bad outcome, bounded), JUnit XML, GitHub
 //! annotations, and later the TUI.
 //!
-//! Owns: presentation. If a renderer needs more, the schema grows; runner state
-//! never passes around it.
+//! Owns: presentation: what each format shows of a record, in what words,
+//! layout and limits. If a renderer needs more, the schema grows; runner
+//! state never passes around it. What the renderers derive from the log
+//! alike (keys, the tally, held sub-outcomes and blocked tests, the first of
+//! each signature, the diagnostics seen, definition lines, the run's facts)
+//! are aye-stream's folds, and each renderer is an `aye_stream::Consumer`.
+//! Each format is a module and a tree by concept (`text/`, `json/`,
+//! `junit/`, `github/`), its specification in its module's docs; what they
+//! say of a failure alike is `failure`, with the adapters' text rules, each
+//! documented where it is read and kept so that a log 0.0.1 stored reads
+//! the same; the words they share are [`words`], public for the times `aye
+//! show` says, which the binary's printer reuses; the rerun command is
+//! `rerun`; how much each level shows is [`Level`], [`DetailLevel`] and
+//! [`Ladder`]; what a renderer is fed is [`RenderMode`].
 //!
-//! Depends on: aye-events, and aye-static for the one variable it reads,
-//! `GITHUB_ACTIONS`.
+//! Depends on: aye-stream and aye-events. It reads no variable itself: the
+//! binary says whether to annotate for GitHub, and `anstream` reads
+//! `NO_COLOR` and `CLICOLOR_FORCE` under [`ColorChoice::Auto`].
 //!
 //! Decided (implementation, October 2026):
 //! - **Two formats, one ladder.** `--output text` ([`Text`]) and
-//!   `--output json` ([`JsonLines`]) take the verbosity (`-v` count minus
+//!   `--output json` ([`JsonLines`]) take a [`Level`] (`-v` count minus
 //!   `-q` count, clamped to -1..=3) and show a bad outcome (a failed or
 //!   errored test, a failed sub-outcome, a failed lifetime) at one of
-//!   three levels of detail, the same in both: L1, its line (key, id,
-//!   outcome, phase, where, and why in one line); L2, the detail (the
-//!   pointed code, the structured comparison or the exception's message,
-//!   the hint, the fixture that broke, the setup chain, history, the
-//!   rerun, the duration); L3, everything (every frame, the captured
-//!   output, the innermost frame's locals). Text shows L1 by default, L2
-//!   at `-v`, L3 at `-vv`; JSON lines the summary alone by default (with
-//!   the keys of what failed), L1 lines at `-v`, L2 at `-vv`, L3 at
-//!   `-vvv`. `aye show` takes the same flags with the same meaning. Each
-//!   module's docs give its format exactly.
-//! - **Keys** ([`Keys`]): every test and lifetime is named by its key, the
-//!   start of its `TestKey` (5 hex digits, more when an earlier id starts
-//!   the same way), a fold over the log alone, so a run's lines and `aye
-//!   show` later, given the whole log's keys, name a test alike.
-//! - **Why, in one line** (`shared::why`), the same in both formats: a
+//!   three levels of detail ([`DetailLevel`]), the same in both: L1, its
+//!   line (key, id, outcome, phase, where, and why in one line); L2, the
+//!   detail (the pointed code, the structured comparison or the
+//!   exception's message, the hint, the fixture that broke, the setup
+//!   chain, history, the rerun, the duration); L3, everything (every
+//!   frame, the captured output, the innermost frame's locals). Text shows
+//!   L1 by default, L2 at `-v`, L3 at `-vv`; JSON lines the summary alone
+//!   by default (with the keys of what failed), L1 lines at `-v`, L2 at
+//!   `-vv`, L3 at `-vvv`: a table each ([`Ladder::TEXT`],
+//!   [`Ladder::JSON`]), tested against `docs/architecture.md`'s. `aye
+//!   show` takes the same flags with the same meaning, its details at L2
+//!   without them ([`Ladder::first_at`]). Each module's docs give its
+//!   format exactly.
+//! - **Keys** (`aye_stream::Keys`): every test and lifetime is named by its
+//!   key, the same in every format and in `aye show` later.
+//! - **Why, in one line** (`failure::why`), the same in both formats: a
 //!   test's failed teardown says it passed, a fixture's failed setup names
 //!   it, a comparison says what was expected and what was got, and
 //!   otherwise the message speaks, with its hint.
@@ -39,10 +53,9 @@
 //!   with colour off, and the line is blanked before anything else is
 //!   written. Off a terminal, and in every other renderer, the event changes
 //!   nothing.
-//! - **The fold.** A [`Reporter`] receives every [`Record`] in log order and
-//!   is told when the stream ends ([`Reporter::finish`]); [`Tee`] fans one
-//!   stream out to several and keeps going when one of them fails, returning
-//!   the first error. Records of kinds a renderer does not know are ignored.
+//! - **The fold.** Each renderer receives every record in log order and is
+//!   told when the stream ends (`aye_stream::Consumer`). Records of kinds a
+//!   renderer does not know are ignored.
 //! - **Colour** goes through `anstream`, so [`ColorChoice::Auto`] honours the
 //!   terminal, `NO_COLOR` and `CLICOLOR_FORCE`, and `Never` strips every
 //!   escape, including any in captured output.
@@ -87,9 +100,9 @@
 //!   `lifetime_finished`; no renderer pairs it with its `lifetime_started`
 //!   (only text at `-vvv` reads that, as a line of its own), and a test
 //!   whose failed lifetime never reports is shown on its own.
-//! - **Error diagnostics** are shown once: one that every batch repeats (the
-//!   framework rejecting its arguments) is one line, one annotation, one
-//!   count.
+//! - **Error diagnostics** are shown once (`aye_stream::SeenDiagnostics`):
+//!   one that every batch repeats (the framework rejecting its arguments)
+//!   is one line, one annotation, one count.
 //! - **Failure signatures** come from the engine; failures without one are
 //!   never grouped, and none is at L3: below it, a failure whose signature
 //!   an earlier one had names that one's key (`same as 3fae6`, `same_as`).
@@ -125,19 +138,20 @@
 //!   `<system-out>`, stderr in `<system-err>`, only when there is some.
 //! - **What the summaries count beside the tests** (modules skipped while
 //!   collecting, failed lifetimes that kept no test from running, error
-//!   diagnostics by kind; see above) is one fold, [`Tally`], which both
-//!   summaries keep, and which the binary keeps beside a stored run
-//!   ([`Extra`], worded by [`summary_words`] for `aye show --runs`).
-//! - **`aye show`** ([`ShowMode`], [`Text::for_show`],
-//!   [`JsonLines::for_show`]): the binary feeds a renderer part of a stored
-//!   log with the whole log's [`Keys`] and what the run store knows beside
-//!   it ([`ShowContext`]: the run's number, how long ago it finished, the
-//!   files changed since), so a test shows the key it had in the run.
-//!   [`ShowMode::List`] makes a line per result then the summary;
-//!   [`ShowMode::Details`] shows the records as a run does, adding to a
-//!   bad outcome the run, its worker's Python and whether its file
-//!   changed. `stale` warns, before anything else, of a file that changed
-//!   since the run.
+//!   diagnostics by kind; see above) is one fold, `aye_stream::Tally`,
+//!   which both summaries keep, and which the binary keeps beside a stored
+//!   run (`aye_stream::Extra`, worded by [`summary_words`] for `aye show
+//!   --runs`).
+//! - **`aye show`** ([`RenderMode::Show`], [`ShowMode`]): the binary feeds
+//!   a renderer ([`Text::with_mode`], [`JsonLines::with_mode`]) part of a
+//!   stored log with the whole log's keys and what the run store knows
+//!   beside it ([`ShowContext`]: the run's number, how long ago it
+//!   finished, the files changed since), so a test shows the key it had
+//!   in the run. [`ShowMode::List`] makes a line per result then the
+//!   summary; [`ShowMode::Details`] shows the records as a run does,
+//!   adding to a bad outcome the run, its worker's Python and whether its
+//!   file changed. `stale` warns, before anything else, of a file that
+//!   changed since the run.
 //! - **GitHub annotations** ([`GithubAnnotations`]): one `::error` per failure
 //!   signature (the first test or bad sub-outcome names it, the rest are
 //!   counted), one per failed lifetime, error diagnostic and failed worker.
@@ -146,126 +160,26 @@
 //!   the run finishes, capped at 50; paths can be prefixed for projects below
 //!   the repository's root (the binary prefixes the root's path relative to
 //!   `GITHUB_WORKSPACE`). A diagnostic about no file is annotated on none.
-//!   The binary enables them when [`github_actions_enabled`].
+//!   The binary enables them in a GitHub Actions step (`GITHUB_ACTIONS`
+//!   is `true` in the environment it read).
 
-use std::io;
-
-use aye_events::Record;
-
+mod failure;
 mod github;
 mod json;
 mod junit;
-mod keys;
-mod shared;
-mod tally;
+mod level;
+mod rerun;
+mod show;
 mod text;
+pub mod words;
 
 pub use anstream::ColorChoice;
-pub use github::{GithubAnnotations, github_actions_enabled};
+pub use github::GithubAnnotations;
 pub use json::JsonLines;
 pub use junit::{Junit, JunitDuration, JunitFamily, JunitLogging, JunitOptions};
-pub use keys::{Keys, ShowContext};
-pub use tally::{Extra, Tally, module_skip, summary_words};
-pub use text::{Text, TextOptions};
-
-/// What [`Text`] and [`JsonLines`] make of a stored run's records, for `aye
-/// show`, which feeds them part of a log with the whole log's [`Keys`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShowMode {
-    /// One line per `test_finished` and the summary: text's result line
-    /// (a bad outcome's with its key and why), JSON's `test` line.
-    List,
-    /// The tests as the run showed them, at the verbosity asked for; in
-    /// text, a test that didn't fail has its result line.
-    Details,
-}
-
-/// A consumer of the run's log.
-pub trait Reporter {
-    /// Fold one record into the output.
-    fn report(&mut self, record: &Record) -> io::Result<()>;
-
-    /// The stream has ended: write anything held back and flush.
-    fn finish(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<R: Reporter + ?Sized> Reporter for Box<R> {
-    fn report(&mut self, record: &Record) -> io::Result<()> {
-        (**self).report(record)
-    }
-
-    fn finish(&mut self) -> io::Result<()> {
-        (**self).finish()
-    }
-}
-
-impl<R: Reporter + ?Sized> Reporter for &mut R {
-    fn report(&mut self, record: &Record) -> io::Result<()> {
-        (**self).report(record)
-    }
-
-    fn finish(&mut self) -> io::Result<()> {
-        (**self).finish()
-    }
-}
-
-/// Fans one stream out to several reporters. Every reporter sees every
-/// record even when another fails; the first error is returned.
-#[derive(Default)]
-pub struct Tee<'a> {
-    reporters: Vec<Box<dyn Reporter + Send + 'a>>,
-}
-
-impl<'a> Tee<'a> {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn push(&mut self, reporter: impl Reporter + Send + 'a) {
-        self.reporters.push(Box::new(reporter));
-    }
-
-    #[must_use]
-    pub fn with(mut self, reporter: impl Reporter + Send + 'a) -> Self {
-        self.push(reporter);
-        self
-    }
-
-    pub fn len(&self) -> usize {
-        self.reporters.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.reporters.is_empty()
-    }
-
-    fn each(
-        &mut self,
-        mut call: impl FnMut(&mut (dyn Reporter + Send + 'a)) -> io::Result<()>,
-    ) -> io::Result<()> {
-        let mut first = Ok(());
-        for reporter in &mut self.reporters {
-            if let Err(error) = call(reporter.as_mut())
-                && first.is_ok()
-            {
-                first = Err(error);
-            }
-        }
-        first
-    }
-}
-
-impl Reporter for Tee<'_> {
-    fn report(&mut self, record: &Record) -> io::Result<()> {
-        self.each(|reporter| reporter.report(record))
-    }
-
-    fn finish(&mut self) -> io::Result<()> {
-        self.each(Reporter::finish)
-    }
-}
+pub use level::{DetailLevel, Ladder, Level};
+pub use show::{RenderMode, ShowContext, ShowMode};
+pub use text::{Text, TextOptions, summary_words};
 
 #[cfg(test)]
 mod tests;
