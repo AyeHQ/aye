@@ -5,12 +5,10 @@
 use std::path::{Path, PathBuf};
 
 use aye_adapter::{AdapterError, Setting};
-use aye_config::{AyeSettings, Sourced, ValueSource};
+use aye_config::{AyeSettings, Sourced};
 use aye_python_stdlib::os_path;
 
-use crate::options::{
-    DEFAULT_PATTERN, DEFAULT_START, PATTERN, START_DIRECTORY, TOP_LEVEL_DIRECTORY,
-};
+use crate::options::{PATTERN, START_DIRECTORY, TOP_LEVEL_DIRECTORY, UnittestOptions, invalid};
 
 /// The unittest adapter's settings, resolved against the project root.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,46 +29,20 @@ pub struct UnittestConfig {
 
 impl UnittestConfig {
     /// Read `[tool.aye.unittest]` from `tool_aye`, `[tool.aye]` as the
-    /// binary loaded it from `root/pyproject.toml`. Unknown keys, values
-    /// that aren't strings, a start or top-level directory that isn't one,
-    /// a start directory outside the top-level directory (unittest's "Path
-    /// must be within the project"), and one below it that is no package
-    /// (unittest's "Start directory is not importable") are errors.
+    /// binary loaded it from `root/pyproject.toml`, and resolve it. Unknown
+    /// keys, values that aren't strings, an empty pattern, a start or
+    /// top-level directory that isn't one, a start directory outside the
+    /// top-level directory (unittest's "Path must be within the project"),
+    /// and one below it that is no package (unittest's "Start directory is
+    /// not importable") are errors.
     pub fn load(root: &Path, tool_aye: &AyeSettings) -> Result<Self, AdapterError> {
         let path = root.join("pyproject.toml");
-        let source = ValueSource::file(&path, "[tool.aye.unittest]");
-        let shown = || format!("invalid [tool.aye.unittest] in {}", path.display());
-        let mut start_directory = Sourced::default_value(DEFAULT_START.to_string());
-        let mut pattern = Sourced::default_value(DEFAULT_PATTERN.to_string());
-        let mut top_level_directory = Sourced::default_value(None);
-        for (key, value) in tool_aye.unittest.iter().flatten() {
-            let Some(text) = value.as_str() else {
-                return Err(AdapterError::Config(format!(
-                    "{}: {key} must be a string, not {value}",
-                    shown()
-                )));
-            };
-            match key.as_str() {
-                START_DIRECTORY => start_directory = Sourced::new(text.to_string(), source.clone()),
-                PATTERN => pattern = Sourced::new(text.to_string(), source.clone()),
-                TOP_LEVEL_DIRECTORY => {
-                    top_level_directory = Sourced::new(Some(text.to_string()), source.clone());
-                }
-                other => {
-                    return Err(AdapterError::Config(format!(
-                        "{}: unknown key {other:?} (expected {START_DIRECTORY}, {PATTERN} or \
-                         {TOP_LEVEL_DIRECTORY})",
-                        shown()
-                    )));
-                }
-            }
-        }
-        if pattern.value.is_empty() {
-            return Err(AdapterError::Config(format!(
-                "{}: {PATTERN} is empty",
-                shown()
-            )));
-        }
+        let shown = || invalid(&path);
+        let UnittestOptions {
+            start_directory,
+            pattern,
+            top_level_directory,
+        } = UnittestOptions::read(&path, tool_aye)?;
         let start = os_path::abspath(root, Path::new(&start_directory.value));
         let top = top_level_directory.value.as_deref().map_or_else(
             || start.clone(),
