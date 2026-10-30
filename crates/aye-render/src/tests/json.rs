@@ -7,11 +7,11 @@ use aye_events::{
 use serde_json::Value;
 
 use super::{feed, lines, streams};
-use crate::JsonLines;
+use crate::{JsonLines, Level};
 
 /// JSON lines at `verbosity`.
 fn json(records: &[Record], verbosity: i8) -> String {
-    let mut json = JsonLines::new(Vec::new(), verbosity);
+    let mut json = JsonLines::new(Vec::new(), Level::from_count(verbosity.into()));
     feed(&mut json, records);
     String::from_utf8(json.into_inner()).unwrap()
 }

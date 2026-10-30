@@ -12,7 +12,7 @@
 //!
 //! Decided (implementation, October 2026):
 //! - **Two formats, one ladder.** `--output text` ([`Text`]) and
-//!   `--output json` ([`JsonLines`]) take the verbosity (`-v` count minus
+//!   `--output json` ([`JsonLines`]) take a [`Level`] (`-v` count minus
 //!   `-q` count, clamped to -1..=3) and show a bad outcome (a failed or
 //!   errored test, a failed sub-outcome, a failed lifetime) at one of
 //!   three levels of detail, the same in both: L1, its line (key, id,
@@ -157,6 +157,7 @@ mod github;
 mod json;
 mod junit;
 mod keys;
+mod level;
 mod shared;
 mod tally;
 mod text;
@@ -166,6 +167,7 @@ pub use github::{GithubAnnotations, github_actions_enabled};
 pub use json::JsonLines;
 pub use junit::{Junit, JunitDuration, JunitFamily, JunitLogging, JunitOptions};
 pub use keys::{Keys, ShowContext};
+pub use level::Level;
 pub use tally::{Extra, Tally, module_skip, summary_words};
 pub use text::{Text, TextOptions};
 

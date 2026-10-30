@@ -6,13 +6,13 @@ use aye_events::{
 };
 
 use super::{feed, lines, streams};
-use crate::{ColorChoice, Reporter, Text, TextOptions};
+use crate::{ColorChoice, Level, Reporter, Text, TextOptions};
 
 fn text(records: &[Record], verbosity: i8) -> String {
     let mut text = Text::new(
         Vec::new(),
         TextOptions {
-            verbosity,
+            verbosity: Level::from_count(verbosity.into()),
             color: ColorChoice::Never,
             live: false,
         },
@@ -639,11 +639,11 @@ fn long_explanations_and_output_are_cut_below_very_verbose() {
 
 #[test]
 fn colour_is_honoured() {
-    let colored = |records: &[Record], verbosity| {
+    let colored = |records: &[Record], verbosity: i8| {
         let mut text = Text::new(
             Vec::new(),
             TextOptions {
-                verbosity,
+                verbosity: Level::from_count(verbosity.into()),
                 color: ColorChoice::Always,
                 live: false,
             },
@@ -684,7 +684,7 @@ fn locations_are_hyperlinks_on_a_live_terminal_with_colour() {
         let mut text = Text::new(
             Vec::new(),
             TextOptions {
-                verbosity: 0,
+                verbosity: Level::Default,
                 color,
                 live: true,
             },
@@ -761,7 +761,7 @@ fn renderers_can_move_between_threads() {
     send::<crate::Junit>();
     send::<crate::GithubAnnotations<std::io::Stdout>>();
     send::<crate::Tee<'static>>();
-    assert_eq!(TextOptions::default().verbosity, 0);
+    assert_eq!(TextOptions::default().verbosity, Level::Default);
 }
 
 /// What the pytest adapter sends for a test that failed only through a
@@ -1113,7 +1113,7 @@ fn live_text(records: &[Record], live: bool) -> String {
     let mut text = Text::new(
         Vec::new(),
         TextOptions {
-            verbosity: 0,
+            verbosity: Level::Default,
             color: ColorChoice::Never,
             live,
         },

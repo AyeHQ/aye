@@ -7,7 +7,7 @@
 //!
 //! # The levels
 //!
-//! The verbosity (`-v` count minus `-q` count, clamped to -1..=3) says
+//! The [`Level`] (`-v` count minus `-q` count, clamped to -1..=3) says
 //! which lines are written and how much a bad outcome's line holds (its
 //! level of detail, L1 to L3, below), each level adding to the one below:
 //! - **-1** (`-q`): the `summary` alone, without `failures` or `more`.
@@ -143,7 +143,7 @@ use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
 
 use crate::tally::{Noted, Tally};
-use crate::{Keys, Reporter, ShowContext, ShowMode, shared};
+use crate::{Keys, Level, Reporter, ShowContext, ShowMode, shared};
 
 const ID_MAX: usize = 1000;
 const PATH_MAX: usize = 500;
@@ -704,12 +704,11 @@ fn output_tails(output: &Captured) -> Option<Output> {
 }
 
 impl<W: Write> JsonLines<W> {
-    /// `verbosity`: `-v` count minus `-q` count; clamped to -1..=3 (see the
-    /// module's docs).
-    pub fn new(out: W, verbosity: i8) -> Self {
+    /// At `level` (see the module's docs).
+    pub fn new(out: W, level: Level) -> Self {
         Self {
             out,
-            verbosity: verbosity.clamp(QUIET, ALL),
+            verbosity: level.count(),
             collect_only: false,
             run: None,
             selected: None,

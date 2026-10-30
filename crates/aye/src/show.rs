@@ -199,7 +199,7 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
     let feed = feed(&records, &log, &shown, mode, filtered, meta.exit_code);
     let stale = stale(&meta, &root, &shown);
     let context = context(&meta, &stale, now_ms());
-    let verbosity = args.verbosity(details, format);
+    let verbosity = args.level(details, format);
     let mut out: Box<dyn Reporter> = match format {
         OutputFormat::Text => {
             let color = match args.color {

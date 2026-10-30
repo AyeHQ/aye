@@ -85,7 +85,8 @@
 //!
 //! # The levels
 //!
-//! The verbosity (`-v` count minus `-q` count, clamped to -1..=3):
+//! The [`Level`](crate::Level) (`-v` count minus `-q` count, clamped to
+//! -1..=3):
 //! - **-1** (`-q`): the summary line alone, with what never hides: error
 //!   diagnostics, failed workers, why a run stopped early. A collect-only
 //!   run still lists its cases.
@@ -202,9 +203,8 @@ const LABEL: usize = 7;
 
 #[derive(Debug, Clone, Copy)]
 pub struct TextOptions {
-    /// `-v` count minus `-q` count, clamped to -1..=3: how much is shown
-    /// (see the module's docs).
-    pub verbosity: i8,
+    /// How much is shown (see the module's docs).
+    pub verbosity: crate::Level,
     pub color: ColorChoice,
     /// The output is a terminal a person watches: a long collection shows
     /// a line that says how far it got, rewritten in place and cleared
@@ -216,7 +216,7 @@ pub struct TextOptions {
 impl Default for TextOptions {
     fn default() -> Self {
         Self {
-            verbosity: 0,
+            verbosity: crate::Level::Default,
             color: ColorChoice::Auto,
             live: false,
         }
@@ -380,7 +380,7 @@ impl<W: RawStream + AsLockedWrite> Write for Out<W> {
 
 impl<W: RawStream + AsLockedWrite> Text<W> {
     pub fn new(out: W, options: TextOptions) -> Self {
-        let verbosity = options.verbosity.clamp(QUIET, ENGINE);
+        let verbosity = options.verbosity.count();
         let stream = AutoStream::new(out, options.color);
         let links = options.live && stream.current_choice() == ColorChoice::AlwaysAnsi;
         Self {

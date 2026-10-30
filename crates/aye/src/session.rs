@@ -666,7 +666,7 @@ impl Session {
         Policy {
             maxfail: self.maxfail(),
             capture: !self.args.no_capture,
-            verbosity: self.args.framework_verbosity(),
+            verbosity: self.args.verbosity().framework(),
             timeout: self.tool_aye.timeout(),
             keyword: self.args.keyword.clone(),
             tags: self.args.tags.clone(),
@@ -705,18 +705,15 @@ impl Session {
     /// format came from, for `aye config`.
     pub(crate) fn output_shown(&self) -> (String, ValueSource) {
         let Sourced { value, source } = output(&self.args, &self.tool_aye);
-        let verbosity = self.args.verbosity();
-        let flags = match verbosity {
-            ..0 => " -q".to_string(),
-            0 => String::new(),
-            n => format!(" -{}", "v".repeat(usize::from(n.unsigned_abs()))),
-        };
-        (format!("{}{flags}", value.as_str()), source)
+        (
+            format!("{}{}", value.as_str(), self.args.verbosity()),
+            source,
+        )
     }
 
     fn reporters<'a>(&self, junit: Option<PathBuf>, file_failed: &Arc<AtomicBool>) -> Tee<'a> {
         let mut tee = Tee::new();
-        let verbosity = self.args.verbosity();
+        let verbosity = self.args.verbosity().level();
         match self.output() {
             OutputFormat::Text => {
                 let color = match self.args.color {

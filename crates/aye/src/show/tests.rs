@@ -75,7 +75,8 @@ fn details_come_at_the_second_level_unless_the_flags_say() {
         all.extend(argv);
         ShowArgs::try_parse_from(all)
             .unwrap()
-            .verbosity(details, format)
+            .level(details, format)
+            .count()
     };
     // Details: text's -v, JSON's -vv.
     assert_eq!(verbosity(&[], true, OutputFormat::Text), 1);

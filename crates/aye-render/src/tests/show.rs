@@ -12,7 +12,7 @@ use aye_events::{
 
 use super::{feed, lines, streams};
 use crate::{
-    ColorChoice, Extra, JsonLines, Keys, ShowContext, ShowMode, Tally, Text, TextOptions,
+    ColorChoice, Extra, JsonLines, Keys, Level, ShowContext, ShowMode, Tally, Text, TextOptions,
     summary_words,
 };
 
@@ -29,7 +29,7 @@ fn text_with(
     let mut text = Text::new(
         Vec::new(),
         TextOptions {
-            verbosity,
+            verbosity: Level::from_count(verbosity.into()),
             color: ColorChoice::Never,
             live: false,
         },
@@ -51,7 +51,7 @@ fn json_with(
     show: Option<(ShowMode, Keys)>,
     context: ShowContext,
 ) -> String {
-    let mut json = JsonLines::new(Vec::new(), verbosity);
+    let mut json = JsonLines::new(Vec::new(), Level::from_count(verbosity.into()));
     if let Some((mode, keys)) = show {
         json = json.for_show(mode, keys, context);
     }
@@ -345,7 +345,7 @@ fn a_file_changed_since_the_run_is_said_first() {
     let mut text = Text::new(
         Vec::new(),
         TextOptions {
-            verbosity: -1,
+            verbosity: Level::Quiet,
             color: ColorChoice::Never,
             live: false,
         },
@@ -362,7 +362,7 @@ fn a_file_changed_since_the_run_is_said_first() {
             "✓ 1 passed   0.00 s",
         ])
     );
-    let mut json = JsonLines::new(Vec::new(), 0);
+    let mut json = JsonLines::new(Vec::new(), Level::Default);
     json.stale("tests/test_a.py", false).unwrap();
     json.stale("tests/test_b.py", true).unwrap();
     feed(&mut json, &records);
@@ -375,7 +375,7 @@ fn a_file_changed_since_the_run_is_said_first() {
         ])
     );
     // JSON's -q is the summary alone.
-    let mut json = JsonLines::new(Vec::new(), -1);
+    let mut json = JsonLines::new(Vec::new(), Level::Quiet);
     json.stale("tests/test_a.py", false).unwrap();
     assert_eq!(json.into_inner(), [] as [u8; 0]);
 }

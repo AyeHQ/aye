@@ -1,6 +1,8 @@
+use std::fmt;
 use std::path::PathBuf;
 
 use aye_config::{OutputFormat, WorkerCount};
+use aye_render::Level;
 use clap::builder::{PossibleValue, PossibleValuesParser, TypedValueParser};
 use clap::{ArgAction, Parser, ValueEnum};
 
@@ -141,20 +143,9 @@ impl Args {
         Ok(())
     }
 
-    /// How much the output shows: the number of `-v` less the number of
-    /// `-q`, from -1 (`-q`: the summary alone) to 3 (`-vvv`: everything).
-    /// A batch's policy carries it unclamped ([`Args::framework_verbosity`]).
-    pub(crate) fn verbosity(&self) -> i8 {
-        let net = (i16::from(self.verbose) - i16::from(self.quiet)).clamp(-1, 3);
-        i8::try_from(net).unwrap_or_default()
-    }
-
-    /// The verbosity a batch's policy carries (`Policy::verbosity`): the
-    /// number of `-v` less the number of `-q`, unclamped, as pytest counts
-    /// them.
-    pub(crate) fn framework_verbosity(&self) -> i8 {
-        let net = i16::from(self.verbose) - i16::from(self.quiet);
-        i8::try_from(net.clamp(i16::from(i8::MIN), i16::from(i8::MAX))).unwrap_or_default()
+    /// How much the output shows, as `-v` and `-q` ask.
+    pub(crate) const fn verbosity(&self) -> Verbosity {
+        Verbosity::new(self.verbose, self.quiet)
     }
 
     /// The `maxfail` the command line asks for.
@@ -278,19 +269,70 @@ impl ShowArgs {
         Ok(())
     }
 
-    /// As a run's ([`Args::verbosity`]) when `-v` or `-q` is given. Without
-    /// either, `details` (of tests named, or `--failed`) come at the detail
-    /// ladder's second level, which is text's 1 and JSON's 2; the list at a
-    /// run's default, 0.
-    pub(crate) fn verbosity(&self, details: bool, format: OutputFormat) -> i8 {
-        if details && self.verbose == 0 && self.quiet == 0 {
+    /// As a run's ([`Verbosity::level`]) when `-v` or `-q` is given.
+    /// Without either, `details` (of tests named, or `--failed`) come at the
+    /// detail ladder's second level, which is text's `-v` and JSON's `-vv`;
+    /// the list at a run's default.
+    pub(crate) fn level(&self, details: bool, format: OutputFormat) -> Level {
+        let verbosity = Verbosity::new(self.verbose, self.quiet);
+        if details && verbosity.is_unset() {
             return match format {
-                OutputFormat::Text => 1,
-                OutputFormat::Json => 2,
+                OutputFormat::Text => Level::Verbose,
+                OutputFormat::Json => Level::VeryVerbose,
             };
         }
-        let net = (i16::from(self.verbose) - i16::from(self.quiet)).clamp(-1, 3);
+        verbosity.level()
+    }
+}
+
+/// How much the output shows, as the command line asks it: the number of
+/// `-v` and of `-q`, which a run and `aye show` each take.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Verbosity {
+    verbose: u8,
+    quiet: u8,
+}
+
+impl Verbosity {
+    pub(crate) const fn new(verbose: u8, quiet: u8) -> Self {
+        Self { verbose, quiet }
+    }
+
+    /// The renderers' level: the number of `-v` less the number of `-q`,
+    /// from -1 (`-q`: the summary alone) to 3 (`-vvv`: everything). A
+    /// batch's policy carries the count unclamped ([`Verbosity::framework`]).
+    pub(crate) fn level(self) -> Level {
+        Level::from_count(self.net())
+    }
+
+    /// What a batch's policy carries (`Policy::verbosity`): the number of
+    /// `-v` less the number of `-q`, unclamped, as pytest counts them.
+    pub(crate) fn framework(self) -> i8 {
+        let net = self.net().clamp(i16::from(i8::MIN), i16::from(i8::MAX));
         i8::try_from(net).unwrap_or_default()
+    }
+
+    /// Neither `-v` nor `-q` (`-v -q` is both: a run's default).
+    pub(crate) const fn is_unset(self) -> bool {
+        self.verbose == 0 && self.quiet == 0
+    }
+
+    fn net(self) -> i16 {
+        i16::from(self.verbose) - i16::from(self.quiet)
+    }
+}
+
+/// As `aye config` shows it after the format, as the command line would
+/// ask for its level: ` -q`, nothing, ` -v`, ` -vv` or ` -vvv`.
+impl fmt::Display for Verbosity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self.level() {
+            Level::Quiet => " -q",
+            Level::Default => "",
+            Level::Verbose => " -v",
+            Level::VeryVerbose => " -vv",
+            Level::Engine => " -vvv",
+        })
     }
 }
 
@@ -581,8 +623,7 @@ fn looks_like_negative_number(value: &str) -> bool {
 /// `--output`'s parser: the formats in any case, listed in the help, and
 /// the names they had until October 2026 (`human`, `agent`; never
 /// published), hidden, rejected by [`OutputFormat::from_str`] with what to
-/// use instead. How much each shows is the verbosity's
-/// ([`Args::verbosity`]).
+/// use instead. How much each shows is the verbosity's ([`Verbosity`]).
 fn output_format() -> impl TypedValueParser<Value = OutputFormat> {
     PossibleValuesParser::new([
         PossibleValue::new("text").help("For people: quiet on success, readable failures"),
@@ -896,7 +937,8 @@ mod tests {
     }
 
     /// The output's verbosity is `-v`s less `-q`s, from -1 to 3; the
-    /// framework's isn't clamped.
+    /// framework's isn't clamped. `aye config` shows the output's as the
+    /// command line would ask for it.
     #[test]
     fn verbosity_is_clamped_for_the_output_alone() {
         for (argv, output, framework) in [
@@ -912,13 +954,27 @@ mod tests {
             (&["-vv", "-q"], 1, 1),
             (&["--verbose", "--verbose", "--quiet"], 1, 1),
         ] {
-            let args = parse(argv);
-            assert_eq!(args.verbosity(), output, "{argv:?}");
-            assert_eq!(args.framework_verbosity(), framework, "{argv:?}");
+            let verbosity = parse(argv).verbosity();
+            assert_eq!(verbosity.level().count(), output, "{argv:?}");
+            assert_eq!(verbosity.framework(), framework, "{argv:?}");
         }
         let many: Vec<&str> = std::iter::repeat_n("-v", 200).collect();
-        assert_eq!(parse(&many).verbosity(), 3);
-        assert_eq!(parse(&many).framework_verbosity(), 127);
+        assert_eq!(parse(&many).verbosity().level(), Level::Engine);
+        assert_eq!(parse(&many).verbosity().framework(), 127);
+        let quiet: Vec<&str> = std::iter::repeat_n("-q", 200).collect();
+        assert_eq!(parse(&quiet).verbosity().framework(), -128);
+        for (argv, shown) in [
+            (&[][..], ""),
+            (&["-q"], " -q"),
+            (&["-qqq"], " -q"),
+            (&["-v"], " -v"),
+            (&["-vv", "-q"], " -v"),
+            (&["-vv"], " -vv"),
+            (&["-vvvvv"], " -vvv"),
+            (&["-v", "-q"], ""),
+        ] {
+            assert_eq!(parse(argv).verbosity().to_string(), shown, "{argv:?}");
+        }
     }
 
     #[test]

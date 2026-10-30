@@ -6,7 +6,7 @@
 use aye_events::Record;
 
 use super::{feed, lines};
-use crate::{ColorChoice, GithubAnnotations, JsonLines, Junit, Reporter, Text, TextOptions};
+use crate::{ColorChoice, GithubAnnotations, JsonLines, Junit, Level, Reporter, Text, TextOptions};
 
 /// The log (`aye --output json -vvv docs/test_failure.txt`) of
 /// `examples/doctest` with `AYE_EXAMPLE_FAIL=1`: one text file whose last
@@ -55,7 +55,7 @@ pub(super) fn text_of(records: &[Record], verbosity: i8) -> String {
     let mut text = Text::new(
         Vec::new(),
         TextOptions {
-            verbosity,
+            verbosity: Level::from_count(verbosity.into()),
             color: ColorChoice::Never,
             live: false,
         },
@@ -70,7 +70,7 @@ fn text(jsonl: &str, verbosity: i8) -> String {
 
 /// JSON lines at `verbosity`.
 pub(super) fn json_of(records: &[Record], verbosity: i8) -> String {
-    let mut json = JsonLines::new(Vec::new(), verbosity);
+    let mut json = JsonLines::new(Vec::new(), Level::from_count(verbosity.into()));
     feed(&mut json, records);
     String::from_utf8(json.into_inner()).unwrap()
 }
