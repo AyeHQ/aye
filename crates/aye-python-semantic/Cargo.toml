@@ -1,0 +1,13 @@
+[package]
+name = "aye-python-semantic"
+description = "What a Python module binds, read statically on Ruff's AST, for aye's adapters: namespaces, escape analysis, static values, classes and their MRO, imports and module resolution"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
