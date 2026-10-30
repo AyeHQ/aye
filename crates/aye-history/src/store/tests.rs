@@ -570,6 +570,36 @@ fn a_store_unwritable_is_an_error_for_the_caller_to_report() {
     assert!(writer.finish(BTreeMap::new()).is_err());
 }
 
+/// A claim that failed is said only when a run to keep starts after it
+/// (above): not when no run starts, nor when the run only collects. A
+/// second `run_started` is a record like any other.
+#[test]
+fn a_failed_claim_is_said_only_when_a_run_to_keep_starts() {
+    let project = project();
+    let dir = project.path().join(".aye");
+    fs::write(&dir, b"not a directory").unwrap();
+    let mut writer = RunWriter::new(dir.join("runs"), 10);
+    assert_eq!(writer.claim(), None);
+    assert_eq!(writer.claim(), None);
+    assert_eq!(writer.finish(BTreeMap::new()).unwrap(), None);
+    let mut writer = RunWriter::new(dir.join("runs"), 10);
+    assert_eq!(writer.claim(), None);
+    let mut records = run("eeee", project.path(), OUTCOMES);
+    if let Event::RunStarted { collect_only, .. } = &mut records[0].event {
+        *collect_only = true;
+    }
+    for record in &records {
+        writer.record(record);
+    }
+    assert_eq!(writer.finish(BTreeMap::new()).unwrap(), None);
+    let runs = project.path().join("elsewhere/runs");
+    let mut records = run("ffff", project.path(), OUTCOMES);
+    let again = records[0].clone();
+    records.insert(2, again);
+    assert_eq!(keep(&runs, 10, &records).as_deref(), Some("r1"));
+    assert_eq!(RunStore::new(&runs).log("r1").unwrap(), records);
+}
+
 /// A run of `outcomes` whose log also holds `events`, before its
 /// `run_finished`, which says `exit_code`.
 fn run_with(
