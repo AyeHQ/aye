@@ -34,7 +34,7 @@
 //! and the batches holding them are handed out before the others, as
 //! pytest runs last run's failures before everything else.
 //!
-//! A worker runs batches of one adapter only (see `run.rs`), so with
+//! A worker runs batches of one adapter only (see `run/lane.rs`), so with
 //! several lanes a worker that asks for its next batch prefers one of its
 //! own adapter's, after those holding tests to run first: switching
 //! adapters costs a new worker. With one lane, batches go in plan order.
@@ -45,11 +45,14 @@
 //!
 //! A batch may be pinned to the first lane ([`Queue::pin`]): the ids of the
 //! files whose tests a lane lists otherwise than the first lane does (see
-//! `run.rs`). While other lanes may still pin some, the first lane waits for
-//! them rather than finishing.
+//! `run/lane.rs`). While other lanes may still pin some, the first lane
+//! waits for them rather than finishing.
 
-//! The plan is in `plan.rs`, the weights it goes by in `weights.rs`, a
-//! batch as planned and handed out in `batch.rs`, and the hand-out in
+//! The plan is in `plan.rs` (a case's group is its `GroupKey`: its
+//! outermost affinity key, or its file), the weights it goes by in
+//! `weights.rs`, a batch in `batch.rs` (what it runs and how it may be
+//! handed out, a [`BatchSpec`](batch::BatchSpec): where it comes from, the
+//! lanes it may run on, whether it runs first), and the hand-out in
 //! `queue.rs`.
 
 mod batch;

@@ -1,10 +1,37 @@
-//! Execution at scale. The warm daemon and fork-per-run, the single spawn
-//! path every backend wraps (local, sandboxed, container, remote), the
-//! scheduler (affinity groups, duration-aware, dynamic hand-out, serial
-//! groups, crash recovery), capability routing, the sandbox policy and its
-//! enforcers, services provided into the worker, the transport, and the
-//! embedded worker (`python/aye_worker.py`) that hosts whichever adapters'
-//! executors the runner sends it.
+//! How tests run, on workers, as batches:
+//! - the workers (`worker/`): the one spawn path, from a [`WorkerSpec`]
+//!   (`spec.rs`) through the handshake ([`spawn`]: `handshake.rs`), the
+//!   protocol stream (`transport.rs`), the process and its group, killed
+//!   or interrupted from any thread (`process.rs`), how a worker ended
+//!   (`exit.rs`), its stderr and what of it goes into a crash report
+//!   (`stderr.rs`, `crash_report.rs`), every grace period and poll
+//!   (`timeouts.rs`); and the embedded worker (`python/aye_worker.py`),
+//!   which hosts whichever adapters' executors it is sent;
+//! - scheduling (`schedule/`): a plan's cases grouped by their outermost
+//!   affinity key or their file and weighed by history (`plan.rs`,
+//!   `weights.rs`), each batch a `BatchSpec`, with where it comes from (the
+//!   plan, a crash's retry, a session's close), the lanes it may run on and
+//!   whether it runs first (`batch.rs`), handed out as lanes ask
+//!   (`queue.rs`);
+//! - the run (`run/`): [`Runner::run`]'s lanes, each of which gets its
+//!   worker ready and pulls batches (`lane.rs`), runs them (`batch.rs`) and
+//!   recovers from its worker's crashes (`crash.rs`); `maxfail` across the
+//!   lanes and how the run stops them (`maxfail.rs`); and the log thread,
+//!   which the lanes tell what happens (`message.rs`), and which stamps and
+//!   delivers the records, keeps the summary and moves the run's `RunPhase`
+//!   on as it stops (`log.rs`);
+//! - what a runner is given ([`RunnerOptions`], with each adapter's runtime
+//!   found by its name, and the [`Plan`]: `options.rs`) and what a run
+//!   reports beside its records ([`RunSummary`]: `summary.rs`); the
+//!   [`StopHandle`] and the live workers it kills (`stop.rs`); a lane's
+//!   environment variables (`env.rs`); refinement on workers, [`Runner`] as
+//!   collection's [`aye_protocol::Refiner`] (`refine.rs`), and the workers the
+//!   session listing keeps from it or starts beside it (`listing.rs`).
+//!
+//! Later: the warm daemon and fork-per-run; backends the spawn path is
+//! wrapped in (sandboxed, container, remote), capability routing, and the
+//! sandbox policy and its enforcers; services provided into the worker
+//! beyond `context` and `cleanup`, the two aye's engine provides.
 //!
 //! Owns: how tests run, where, and in what order. Does not own: what a test is
 //! or how one executes inside the framework; it calls the engine for that.

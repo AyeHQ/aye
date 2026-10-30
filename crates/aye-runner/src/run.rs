@@ -121,7 +121,7 @@ impl Runner {
     /// reached or the stop handle is used, workers' records are dropped and
     /// only the closing records follow, with, after `maxfail`, the
     /// `lifetime_finished` records that close lifetimes the log holds open
-    /// as batches tear down (see [`Shared::wind_down`]).
+    /// as batches tear down.
     pub fn run(
         &self,
         plan: &Plan,
