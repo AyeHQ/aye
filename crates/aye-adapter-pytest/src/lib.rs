@@ -462,7 +462,6 @@
 mod adapter;
 mod context;
 pub mod embedded;
-mod ids;
 mod marks;
 mod module;
 mod options;
@@ -503,8 +502,8 @@ pub use aye_pytest::config::PytestConfig;
 pub use aye_pytest::env::PytestEnv;
 
 use crate::context::PytestContext;
-use crate::ids::IdOptions;
 use crate::marks::EmptyMark;
+use crate::marks::ids::IdOptions;
 use crate::support::{Summary, Supports};
 
 /// How pytest's patterns read `[...]` sets here (`python_files`,
