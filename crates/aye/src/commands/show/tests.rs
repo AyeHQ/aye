@@ -1,5 +1,14 @@
-use aye_events::{Failure, Phase, RunNumber};
+use std::collections::HashMap;
+use std::time::Duration;
 
+use aye_events::{
+    Case, Counts, Diagnostic, Event, ExitCode, Failure, Outcome, Phase, ProjectPath, Record,
+    RunNumber, Severity, TestId, TestResult, WorkerIndex,
+};
+
+use super::choose::{closest, distance};
+use super::feed::ago;
+use super::runs::{rfc3339, utc};
 use super::*;
 
 #[test]
