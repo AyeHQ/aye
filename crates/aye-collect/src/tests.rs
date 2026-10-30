@@ -2,12 +2,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use aye_adapter::{Claim, Ranged, Requested, Setting, ast};
-use aye_events::{Certainty, DiagnosticCode, ProjectPath};
+use aye_adapter::{Claim, Ranged, Recognition, Requested, Setting, SourceFile, ast};
+use aye_events::{Certainty, ContentDigest, DiagnosticCode, ProjectPath, TestId};
 use aye_protocol::{AdapterContext, RefineError, RefineRequest, Refined};
 use aye_static::ProcessEnv;
 
 use super::*;
+use crate::refine::standalone;
 
 fn extension(rel: &str) -> Option<&str> {
     Path::new(rel).extension()?.to_str()
