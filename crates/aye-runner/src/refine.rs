@@ -20,9 +20,13 @@ impl Refiner for Runner {
     /// one started for each other lane lists the same files meanwhile
     /// (unless [`RunnerOptions::collect_only`](crate::RunnerOptions::collect_only)).
     fn refine(&self, request: &RefineRequest) -> Result<Refined, RefineError> {
-        let runtime = self.runtime(&request.adapter).ok_or_else(|| {
-            RefineError(format!("no executor for the {} adapter", request.adapter))
-        })?;
+        let runtime = self
+            .runtimes
+            .get(&request.adapter)
+            .cloned()
+            .ok_or_else(|| {
+                RefineError(format!("no executor for the {} adapter", request.adapter))
+            })?;
         if self.stop.is_stopped() {
             return Err(RefineError("interrupted".into()));
         }

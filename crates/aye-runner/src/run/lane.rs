@@ -236,7 +236,7 @@ impl Shared<'_> {
             return self.take_prelisted(lane, prelisted);
         }
         let mut spec = self.spec.clone();
-        spec.runtimes.retain(|runtime| runtime.adapter == *adapter);
+        spec.runtimes = self.runtimes.get(adapter).cloned().into_iter().collect();
         spec.env.extend(lane_env(lane, self.lanes));
         let mut worker = Worker::launch(&spec).map_err(|e| e.to_string())?;
         if !self.busy(lane, worker.killer()) {
@@ -355,11 +355,7 @@ impl Shared<'_> {
         adapter: &AdapterName,
         mut listed: Digests,
     ) -> Result<(Worker, Option<Digests>), String> {
-        let lists = self
-            .spec
-            .runtimes
-            .iter()
-            .any(|runtime| runtime.adapter == *adapter && runtime.session.lists_session());
+        let lists = self.lists_session(adapter);
         let Some(session) = self.sessions.get(adapter).filter(|_| lists) else {
             return Ok((worker, None));
         };

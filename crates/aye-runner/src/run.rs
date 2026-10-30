@@ -24,7 +24,7 @@ use aye_events::{
 use aye_protocol::{Policy, Runtime};
 
 use crate::listing::{Listings, Prelisting, Warm, shut_down};
-use crate::options::{Plan, RunnerOptions};
+use crate::options::{Plan, RunnerOptions, Runtimes};
 use crate::schedule::{self, Queue};
 use crate::stop::StopHandle;
 use crate::summary::RunSummary;
@@ -46,6 +46,8 @@ use maxfail::Busy;
 #[derive(Debug)]
 pub struct Runner {
     pub(crate) options: RunnerOptions,
+    /// The options' runtimes, by adapter.
+    pub(crate) runtimes: Runtimes,
     pub(crate) stop: StopHandle,
     /// The worker that refined for an adapter whose executor lists the
     /// session, kept for the next run's first lane.
@@ -88,6 +90,7 @@ impl Drop for Runner {
 impl Runner {
     pub fn new(options: RunnerOptions) -> Self {
         Self {
+            runtimes: Runtimes::new(&options.runtimes),
             options,
             stop: StopHandle::default(),
             warm: Mutex::new(None),
@@ -144,7 +147,7 @@ impl Runner {
         let mut cases = Vec::with_capacity(plan.cases.len());
         let mut orphans: Vec<(&AdapterName, &str, u32)> = Vec::new();
         for case in &plan.cases {
-            if self.runtime(&case.adapter).is_some() {
+            if self.runtimes.get(&case.adapter).is_some() {
                 cases.push(case.clone());
                 continue;
             }
@@ -179,13 +182,7 @@ impl Runner {
 
         // Batches of executors that list the session keep plan order on
         // each lane, as each pytest-xdist worker runs its tests in order.
-        let ordered: HashSet<&AdapterName> = self
-            .options
-            .runtimes
-            .iter()
-            .filter(|runtime| runtime.session.lists_session())
-            .map(|runtime| &runtime.adapter)
-            .collect();
+        let ordered: HashSet<&AdapterName> = self.runtimes.listing_session().collect();
         let batches = schedule::plan(
             &cases,
             &plan.durations,
@@ -202,14 +199,7 @@ impl Runner {
             .max(1)
             .min(u32::try_from(batches.len()).unwrap_or(u32::MAX));
         let adapters: HashSet<&AdapterName> = batches.iter().map(|b| &b.spec.adapter).collect();
-        let runtimes = self
-            .options
-            .runtimes
-            .iter()
-            .filter(|runtime| adapters.contains(&runtime.adapter))
-            .cloned()
-            .collect();
-        let mut spec = self.spec(runtimes);
+        let mut spec = self.spec(Vec::new());
         spec.echo = (!policy.capture).then_some(self.options.echo);
 
         // The worker kept from refinement is the first lane's, if the run
@@ -234,8 +224,7 @@ impl Runner {
                     .iter()
                     .map(|batch| &batch.spec.adapter)
                     .find(|adapter| {
-                        self.runtime(adapter)
-                            .is_some_and(|runtime| runtime.session.lists_session())
+                        self.runtimes.lists_session(adapter)
                             && plan
                                 .session_files
                                 .get(*adapter)
@@ -269,6 +258,7 @@ impl Runner {
             bad: AtomicU32::new(0),
             phase: Mutex::new(RunPhase::Running),
             spec,
+            runtimes: &self.runtimes,
             policy: &policy,
             plan,
             sessions: &plan.session_files,
@@ -322,14 +312,6 @@ impl Runner {
         log.summary
     }
 
-    pub(crate) fn runtime(&self, adapter: &AdapterName) -> Option<Runtime> {
-        self.options
-            .runtimes
-            .iter()
-            .find(|runtime| runtime.adapter == *adapter)
-            .cloned()
-    }
-
     pub(crate) fn spec(&self, runtimes: Vec<Runtime>) -> WorkerSpec {
         let mut spec = WorkerSpec::new(&self.options.python, &self.options.root, &self.options.cwd);
         spec.prelude = self.options.prelude;
@@ -353,7 +335,10 @@ struct Shared<'a> {
     /// and a lane whose batch the framework stopped; the lanes read it
     /// before they start anything, and the log for every record.
     phase: Mutex<RunPhase>,
+    /// How the run's workers start, without a runtime: each gets its
+    /// adapter's ([`Shared::start`]).
     spec: WorkerSpec,
+    runtimes: &'a Runtimes,
     /// The plan's, with `maxfail` 0 made `None`.
     policy: &'a Policy,
     plan: &'a Plan,
@@ -382,10 +367,7 @@ impl Shared<'_> {
 
     /// Whether `adapter`'s executor lists the session.
     fn lists_session(&self, adapter: &AdapterName) -> bool {
-        self.spec
-            .runtimes
-            .iter()
-            .any(|runtime| runtime.adapter == *adapter && runtime.session.lists_session())
+        self.runtimes.lists_session(adapter)
     }
 }
 

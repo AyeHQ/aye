@@ -1,5 +1,6 @@
 //! What a [`Runner`](crate::Runner) is given: how to start workers
-//! ([`RunnerOptions`]) and what to run ([`Plan`]).
+//! ([`RunnerOptions`], with each adapter's runtime found by its name in
+//! [`Runtimes`]) and what to run ([`Plan`]).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
@@ -26,8 +27,8 @@ pub struct RunnerOptions {
     /// What every worker installs after aye's engine, whatever its
     /// runtimes ([`WorkerSpec::prelude`](crate::WorkerSpec::prelude)).
     pub prelude: ModuleSet,
-    /// Every adapter's runtime face. Workers get only those the cases at
-    /// hand need.
+    /// Every adapter's runtime face, one each (of several, the first
+    /// counts). Workers get only those the cases at hand need.
     pub runtimes: Vec<Runtime>,
     /// Environment variables for every worker.
     pub env: Vec<(OsString, OsString)>,
@@ -38,6 +39,43 @@ pub struct RunnerOptions {
     /// No run follows refinement (`--co`): no worker starts for the other
     /// lanes while one refines for an executor that lists the session.
     pub collect_only: bool,
+}
+
+/// The runtimes of [`RunnerOptions::runtimes`], by adapter: what a
+/// worker of an adapter's batches installs and builds, and whether its
+/// executor lists the session.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Runtimes(BTreeMap<AdapterName, Runtime>);
+
+impl Runtimes {
+    /// `runtimes` by adapter, an adapter's first if it has several.
+    pub(crate) fn new(runtimes: &[Runtime]) -> Self {
+        let mut by_adapter = BTreeMap::new();
+        for runtime in runtimes {
+            by_adapter
+                .entry(runtime.adapter.clone())
+                .or_insert_with(|| runtime.clone());
+        }
+        Self(by_adapter)
+    }
+
+    pub(crate) fn get(&self, adapter: &AdapterName) -> Option<&Runtime> {
+        self.0.get(adapter)
+    }
+
+    /// Whether `adapter`'s executor lists the session.
+    pub(crate) fn lists_session(&self, adapter: &AdapterName) -> bool {
+        self.get(adapter)
+            .is_some_and(|runtime| runtime.session.lists_session())
+    }
+
+    /// The adapters whose executors list the session.
+    pub(crate) fn listing_session(&self) -> impl Iterator<Item = &AdapterName> {
+        self.0
+            .values()
+            .filter(|runtime| runtime.session.lists_session())
+            .map(|runtime| &runtime.adapter)
+    }
 }
 
 /// What to run.
@@ -101,5 +139,38 @@ impl Plan {
             selected_paths: self.selected_paths.clone(),
             ran_ids: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use aye_protocol::{EntryPoint, SessionMode};
+
+    use super::*;
+
+    fn runtime(adapter: &'static str, class: &'static str, session: SessionMode) -> Runtime {
+        Runtime {
+            adapter: AdapterName::new_static(adapter),
+            modules: ModuleSet::default(),
+            entry: EntryPoint::new("m", class),
+            session,
+        }
+    }
+
+    #[test]
+    fn a_runtime_is_found_by_its_adapter() {
+        let runtimes = Runtimes::new(&[
+            runtime("a", "A", SessionMode::PerBatch),
+            runtime("b", "B", SessionMode::ListsSession),
+            runtime("a", "Again", SessionMode::ListsSession),
+        ]);
+        let a = AdapterName::new_static("a");
+        let b = AdapterName::new_static("b");
+        let entry = runtimes.get(&a).map(|runtime| runtime.entry.to_string());
+        assert_eq!(entry.as_deref(), Some("m:A"), "an adapter's first");
+        assert!(!runtimes.lists_session(&a) && runtimes.lists_session(&b));
+        let none = AdapterName::new_static("c");
+        assert!(runtimes.get(&none).is_none() && !runtimes.lists_session(&none));
+        assert_eq!(runtimes.listing_session().collect::<Vec<_>>(), [&b]);
     }
 }
