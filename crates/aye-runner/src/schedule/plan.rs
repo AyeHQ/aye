@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use aye_events::{AdapterName, AffinityKey, Case, TestId};
+use aye_events::{AdapterName, AffinityKey, Case, ProjectPathRef, TestId};
 
 use super::batch::Planned;
 use super::weights::Weights;
@@ -13,22 +13,24 @@ use super::weights::Weights;
 /// `workers × BATCHES_PER_WORKER` are merged.
 const BATCHES_PER_WORKER: u32 = 4;
 
+/// Cases that run together, each at its position in the plan.
 #[derive(Debug)]
 struct Group<'a> {
     adapter: &'a AdapterName,
-    cases: Vec<(usize, &'a TestId)>,
+    cases: Vec<(usize, &'a Case)>,
     weight: Duration,
     serial: bool,
     /// Its cases declare no affinity: it may be split.
     free: bool,
 }
 
-/// What a case is grouped by: its outermost affinity key, or its file for
-/// a free case (kept apart from affinity keys, which may be file names).
+/// What a case is grouped by: its outermost affinity key, or, for a free
+/// case, its file. The two are kept apart where they read alike: a key may
+/// be a file's name ([`AffinityKey::file`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Key<'a> {
+enum GroupKey<'a> {
     Affinity(&'a AffinityKey),
-    Free(&'a str),
+    File(ProjectPathRef<'a>),
 }
 
 /// Split `cases` into batches, in the order they should be handed out.
@@ -44,26 +46,24 @@ pub(crate) fn plan(
     let weigh = Weights::new(durations);
     // A file's free cases go with its first lifetime group, if it has one,
     // so that they keep their place among its other cases.
-    let mut lifetimes: HashMap<(&AdapterName, &str), &AffinityKey> = HashMap::new();
+    let mut lifetimes: HashMap<(&AdapterName, ProjectPathRef<'_>), &AffinityKey> = HashMap::new();
     for case in cases {
         if let Some(key) = case.affinity.first() {
             lifetimes
-                .entry((&case.adapter, case.id.path().as_str()))
+                .entry((&case.adapter, case.id.path()))
                 .or_insert(key);
         }
     }
-    let mut index: HashMap<(&AdapterName, Key<'_>), usize> = HashMap::new();
+    let mut index: HashMap<(&AdapterName, GroupKey<'_>), usize> = HashMap::new();
     let mut groups: Vec<Group<'_>> = Vec::new();
     for (position, case) in cases.iter().enumerate() {
         let adapter = &case.adapter;
         let key = match case.affinity.first() {
-            Some(key) => Key::Affinity(key),
-            None => lifetimes
-                .get(&(adapter, case.id.path().as_str()))
-                .map_or_else(
-                    || Key::Free(case.id.path().as_str()),
-                    |key| Key::Affinity(key),
-                ),
+            Some(key) => GroupKey::Affinity(key),
+            None => lifetimes.get(&(adapter, case.id.path())).map_or_else(
+                || GroupKey::File(case.id.path()),
+                |key| GroupKey::Affinity(key),
+            ),
         };
         let at = *index.entry((adapter, key)).or_insert_with(|| {
             groups.push(Group {
@@ -71,12 +71,12 @@ pub(crate) fn plan(
                 cases: Vec::new(),
                 weight: Duration::ZERO,
                 serial: false,
-                free: matches!(key, Key::Free(_)),
+                free: matches!(key, GroupKey::File(_)),
             });
             groups.len() - 1
         });
         let group = &mut groups[at];
-        group.cases.push((position, &case.id));
+        group.cases.push((position, case));
         group.weight += weigh.of(&case.id);
         group.serial |= case.serial;
     }
@@ -98,7 +98,7 @@ pub(crate) fn plan(
         let target = total / workers.saturating_mul(BATCHES_PER_WORKER);
         let (in_order, mut groups): (Vec<Group<'_>>, Vec<Group<'_>>) = groups
             .into_iter()
-            .flat_map(|group| split(group, target, &weigh, cases))
+            .flat_map(|group| split(group, target, &weigh))
             .partition(|group| ordered.contains(group.adapter));
         groups.sort_by(|a, b| {
             b.weight
@@ -129,8 +129,10 @@ pub(crate) fn plan(
     .into_iter()
     .map(|mut batch| {
         batch.sort_by_key(|g| g.cases[0].0);
-        let mut ids: Vec<(usize, &TestId)> =
-            batch.iter().flat_map(|g| g.cases.iter().copied()).collect();
+        let mut ids: Vec<(usize, &TestId)> = batch
+            .iter()
+            .flat_map(|g| g.cases.iter().map(|&(position, case)| (position, &case.id)))
+            .collect();
         // Tests to run first go first, in plan order; the rest keep their
         // groups.
         let runs_first = |id: &TestId| first.contains(id);
@@ -210,18 +212,13 @@ fn weight(groups: &[Group<'_>]) -> Duration {
 /// A free group heavier than `target`, as chunks of about that weight, in
 /// order: each closes once it weighs `target` or more. Other groups, and
 /// every group when `target` is zero, stay whole.
-fn split<'a>(
-    group: Group<'a>,
-    target: Duration,
-    weigh: &Weights<'_>,
-    cases: &[Case],
-) -> Vec<Group<'a>> {
+fn split<'a>(group: Group<'a>, target: Duration, weigh: &Weights<'_>) -> Vec<Group<'a>> {
     if !group.free || target.is_zero() || group.weight <= target {
         return vec![group];
     }
     let mut chunks: Vec<Group<'a>> = Vec::new();
     let mut open: Option<Group<'a>> = None;
-    for (position, id) in group.cases {
+    for (position, case) in group.cases {
         let chunk = open.get_or_insert_with(|| Group {
             adapter: group.adapter,
             cases: Vec::new(),
@@ -229,9 +226,9 @@ fn split<'a>(
             serial: false,
             free: true,
         });
-        chunk.cases.push((position, id));
-        chunk.weight += weigh.of(id);
-        chunk.serial |= cases[position].serial;
+        chunk.cases.push((position, case));
+        chunk.weight += weigh.of(&case.id);
+        chunk.serial |= case.serial;
         if chunk.weight >= target {
             chunks.extend(open.take());
         }
