@@ -1,15 +1,16 @@
 //! pytest's configuration: rootdir and inifile discovery
 //! (`_pytest/config/findpaths.py`) and the ini options collection depends
-//! on, read with `aye-config`'s loaders, with the options `addopts`,
-//! `PYTEST_ADDOPTS` and the arguments after `--` add, in pytest's order.
+//! on, read with the INI reader ([`crate::ini`]) and `aye-config`'s TOML
+//! loader, with the options `addopts`, `PYTEST_ADDOPTS` and the arguments
+//! after `--` add, in pytest's order.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::ini::{self, ini_section};
 use aye_adapter::{AdapterError, Project, Setting};
 use aye_config::{Sourced, ValueSource, read_toml, split_args};
 use aye_fs::common_ancestor;
-use aye_pytest::ini::{self, ini_section};
 use aye_python_stdlib::os_path;
 use aye_static::{EnvVars, ProcessEnv};
 
@@ -807,7 +808,7 @@ const DOCTEST_VALUED: [&str; 2] = ["--doctest-glob", "--doctest-report"];
 /// runs doctests and reads them itself. A valued option missing its value
 /// is left in place, for the front-end to reject, as pytest does. pytest's parser takes no abbreviations, so
 /// only the full names count.
-pub(crate) fn split_doctest(args: &[String]) -> (Vec<String>, Vec<String>) {
+pub fn split_doctest(args: &[String]) -> (Vec<String>, Vec<String>) {
     let mut kept = Vec::new();
     let mut lifted = Vec::new();
     let mut iter = args.iter().peekable();

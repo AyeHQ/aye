@@ -1,16 +1,17 @@
 //! The pytest adapter, a faithful implementation of pytest's rules: pytest
 //! is a front-end of aye's engine, and pytest itself is never imported.
 //!
-//! Rust half: pytest's configuration (rootdir, inifile, ini values and the
-//! options `addopts`, `PYTEST_ADDOPTS` and the arguments after `--` add,
-//! with what the runner takes over lifted out), the files it claims, the
+//! Rust half: pytest's configuration, read through aye-pytest (rootdir,
+//! inifile, ini values and the options `addopts`, `PYTEST_ADDOPTS` and the
+//! arguments after `--` add, with what the runner takes over lifted out),
+//! the files it claims, the
 //! context the front-end starts from ([`native`]), and the static
 //! recognizer: file patterns, `Test*` classes and `test*` functions from
 //! the project's pytest config, inherited methods, markers, parametrize
 //! and pytest's id algorithm (including `pytest.param`, `ids=`, stacked
 //! decorators, duplicate suffixes, escaping), conftest parsing for fixtures
 //! and collection-affecting hooks, pytest's rootdir and ini semantics
-//! (asked from `aye-config`'s loaders). The static recognizer predicts the
+//! (asked from aye-pytest). The static recognizer predicts the
 //! cases `aye --co --no-refine` lists without importing anything; every
 //! other run has the front-end list each test file (see [`native`]).
 //!
@@ -24,16 +25,16 @@
 //! Owns: everything pytest-specific. Nothing here is questioned; the
 //! differential harness against plain pytest is the referee.
 //!
-//! Depends on: aye-adapter, aye-config (the INI and TOML loaders, where a
-//! setting came from, the worker count), aye-engine (the modules its
-//! front-end runs on), aye-events, aye-fs (pytest's common ancestor),
-//! aye-protocol, aye-python-semantic (what a module binds, read with
+//! Depends on: aye-adapter, aye-config (where a setting came from, the
+//! worker count), aye-engine (the modules its front-end runs on),
+//! aye-events, aye-protocol, aye-pytest (pytest's configuration, the
+//! variables it reads, the raw ini values the front-end's `getini`
+//! coerces), aye-python-semantic (what a module binds, read with
 //! pytest's `Framework`, `PYTEST`: namespaces and the escape analysis,
 //! static values, classes and their MRO, decorators, import-time facts,
 //! `sys.path` and module resolution), aye-python-stdlib (`fnmatch`, `glob`,
-//! `os.path`, ids' reprs and `str.isdigit`, identifiers, unittest's bases),
-//! aye-static (the variables it reads by name). Must not be depended on by
-//! any runner crate; only the binary links it.
+//! `os.path`, ids' reprs and `str.isdigit`, identifiers, unittest's bases).
+//! Must not be depended on by any runner crate; only the binary links it.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **The project scan covers what pytest's session can load**: the
@@ -50,10 +51,9 @@
 //!   collection follows `PyCollector.collect`, `Class.collect` and
 //!   `UnitTestCase.collect` (unittest methods sorted by name, parametrize not
 //!   applied). Venvs are detected as pytest does (`pyvenv.cfg` or
-//!   `conda-meta/history`). The crate also depends on `aye-config`, for its
-//!   loaders, on `aye-fs` for paths, and on `aye-static` for the variables
-//!   it reads. [`Pytest::prepare`] always returns a recognizer: pytest is
-//!   the default for Python tests.
+//!   `conda-meta/history`). The crate reads pytest's configuration through
+//!   `aye-pytest`. [`Pytest::prepare`] always returns a recognizer: pytest
+//!   is the default for Python tests.
 //! - **Canonical ids are relative to the aye project root**; pytest's own
 //!   node ids are relative to its rootdir. The two differ only in the file
 //!   part, which the front-end translates using the rootdir in
@@ -459,7 +459,6 @@
 //! gone. What it did that pytest users rely on is the front-end's and the
 //! engine's now; their modules say how.
 
-mod config;
 mod context;
 mod ids;
 mod marks;
@@ -481,6 +480,7 @@ use aye_adapter::{
 use aye_config::ValueSource;
 use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 use aye_protocol::AdapterContext;
+use aye_pytest::config;
 use aye_python_semantic::framework::Framework;
 use aye_python_semantic::module_resolver::{absolute_imports, find_module, found_in};
 use aye_python_semantic::namespace::Namespace;
@@ -490,9 +490,9 @@ use aye_python_stdlib::glob;
 use aye_python_stdlib::identifier::is_identifier;
 use aye_python_stdlib::os_path::normalize_absolute;
 use aye_python_stdlib::unittest;
-use aye_static::{EnvVars, ProcessEnv};
 
-pub use config::{PytestConfig, split_xdist};
+pub use aye_pytest::config::{PytestConfig, split_xdist};
+pub use aye_pytest::env::PytestEnv;
 pub use native::{NAME, Pytest};
 
 use crate::context::PytestContext;
@@ -591,29 +591,6 @@ struct Scan {
     /// tests (its module makes items: [`support::Summary::makes_items`]),
     /// the first found, for messages.
     adds_items: Option<String>,
-}
-
-/// What the pytest adapter reads from the environment, which the workers
-/// inherit.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PytestEnv<'e> {
-    /// `PYTEST_ADDOPTS`.
-    pub pytest_addopts: Option<&'e str>,
-    /// `PYTEST_PLUGINS`.
-    pub pytest_plugins: Option<&'e str>,
-    /// `PYTHONPATH`.
-    pub pythonpath: Option<&'e str>,
-}
-
-impl<'e> PytestEnv<'e> {
-    /// The variables, as `env` holds them.
-    pub fn of(env: &'e ProcessEnv) -> Self {
-        Self {
-            pytest_addopts: env.get(EnvVars::PYTEST_ADDOPTS),
-            pytest_plugins: env.get(EnvVars::PYTEST_PLUGINS),
-            pythonpath: env.get(EnvVars::PYTHONPATH),
-        }
-    }
 }
 
 /// pytest's `builtin_plugins`, and the plugins merged into pytest that it

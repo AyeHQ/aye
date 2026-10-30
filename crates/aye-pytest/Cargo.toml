@@ -10,7 +10,14 @@ homepage.workspace = true
 authors.workspace = true
 
 [dependencies]
+aye-adapter = { workspace = true }
 aye-config = { workspace = true }
+aye-fs = { workspace = true }
+aye-python-stdlib = { workspace = true }
+aye-static = { workspace = true }
+serde_json = { workspace = true }
+shlex = { workspace = true }
+toml = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
