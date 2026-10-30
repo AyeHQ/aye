@@ -4,10 +4,9 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use aye_events::{
-    Case, Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPathRef, Severity, TestId,
-};
+use aye_events::{Case, Diagnostic, ProjectPathRef, Severity, TestId};
 
+use crate::diagnostic::CollectDiagnostic;
 use crate::recognize::TestFile;
 use crate::refine::Refinement;
 use crate::walk::{AdapterId, FileId, Tree, WalkKey};
@@ -19,7 +18,7 @@ impl Collector<'_> {
         tree: &Tree<'_>,
         test_files: Vec<TestFile>,
         mut refinement: Refinement,
-        mut diagnostics: Vec<Diagnostic>,
+        collected: Vec<CollectDiagnostic>,
     ) -> Collection {
         /// One file's diagnostics, and its final cases by recognizer.
         struct Merged {
@@ -60,7 +59,7 @@ impl Collector<'_> {
         let mut refined_files = 0;
         let mut probes = HashMap::new();
         for TestFile { job, found } in test_files {
-            let mut notes: Vec<Diagnostic> = found.diagnostic.into_iter().collect();
+            let mut notes: Vec<Diagnostic> = found.diagnostic.into_iter().map(Into::into).collect();
             let mut groups = Vec::new();
             let (mut refined, mut fell_back) = (false, false);
             let rel = &tree.entries[job.file].rel;
@@ -83,7 +82,7 @@ impl Collector<'_> {
                     notes.extend(recognition.diagnostics);
                     if let Some(diagnostic) = refinement.fallbacks.remove(&(job.file, i)) {
                         fell_back = true;
-                        notes.push(diagnostic);
+                        notes.push(diagnostic.into());
                     }
                     recognition.cases
                 };
@@ -108,17 +107,15 @@ impl Collector<'_> {
                     !claims_any_name(&mut probes, &self.recognizers[*i], *i, rel.as_str())
                 })
             {
-                let names: Vec<&str> = groups
+                let adapters = groups
                     .iter()
-                    .map(|(i, _)| self.recognizers[*i].0.as_str())
+                    .map(|(i, _)| self.recognizers[*i].0.clone())
                     .collect();
-                notes.push(Diagnostic {
-                    severity: Severity::Info,
-                    code: DiagnosticCode::NoTests,
-                    path: rel.clone().into(),
-                    span: None,
-                    message: format!("claimed for tests by {}, but has none", names.join(", ")),
-                });
+                let note = CollectDiagnostic::NoTests {
+                    path: rel.clone(),
+                    adapters,
+                };
+                notes.push(note.into());
             }
             files.push(Merged {
                 rel: rel.as_str().to_owned(),
@@ -188,6 +185,7 @@ impl Collector<'_> {
                 .and_modify(|best| *best = (*best).min(i))
                 .or_insert(i);
         }
+        let mut diagnostics: Vec<Diagnostic> = collected.into_iter().map(Into::into).collect();
         let mut emitted = HashSet::new();
         let mut cases = Vec::new();
         for file in files {
@@ -198,7 +196,7 @@ impl Collector<'_> {
                     if winner == i && emitted.insert(case.id.clone()) {
                         cases.push(case);
                     } else if winner == i {
-                        diagnostics.push(self.duplicate(&case, i));
+                        diagnostics.push(self.duplicate(&case, i).into());
                     }
                     // Another adapter's case for an id a higher-priority
                     // one collects is dropped quietly: listing unittest
@@ -217,18 +215,11 @@ impl Collector<'_> {
     }
 
     /// A case the adapter `by` collects again under an id it already gave.
-    fn duplicate(&self, case: &Case, by: AdapterId) -> Diagnostic {
-        // The framework selects by id, so it runs them all (pytest does).
-        Diagnostic {
-            severity: Severity::Warning,
-            code: DiagnosticCode::DuplicateId,
-            path: DiagnosticPath::as_written(case.id.path().as_str()),
+    fn duplicate(&self, case: &Case, by: AdapterId) -> CollectDiagnostic {
+        CollectDiagnostic::DuplicateId {
+            adapter: self.recognizers[by].0.clone(),
+            id: case.id.clone(),
             span: case.span.clone(),
-            message: format!(
-                "{} collects `{}` more than once; aye lists it once, \
-                 but running it runs every test with that id",
-                self.recognizers[by].0, case.id
-            ),
         }
     }
 }

@@ -4,8 +4,10 @@
 
 use std::path::Path;
 
-use aye_events::{Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
+use aye_events::DiagnosticPath;
 use walkdir::WalkDir;
+
+use crate::diagnostic::CollectDiagnostic;
 
 mod order;
 mod tree;
@@ -53,14 +55,11 @@ impl Tree<'_> {
                     // the rest as if it held no tests.
                     if !missing && err.loop_ancestor().is_none() {
                         let path = err.path().unwrap_or(top);
-                        self.diagnostics.push(Diagnostic {
-                            severity: Severity::Error,
-                            code: DiagnosticCode::Unreadable,
+                        self.diagnostics.push(CollectDiagnostic::Unreadable {
                             path: DiagnosticPath::as_written(aye_fs::relative_through_root(
                                 path, self.root,
                             )),
-                            span: None,
-                            message: format!("cannot read: {err}"),
+                            error: err.to_string(),
                         });
                     }
                     continue;

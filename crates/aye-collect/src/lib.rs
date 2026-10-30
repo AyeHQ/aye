@@ -184,6 +184,7 @@ use aye_protocol::Refiner;
 use aye_provision::{EnvironmentFingerprint, InstalledModules};
 
 mod assemble;
+mod diagnostic;
 mod parallel;
 mod recognize;
 mod refine;

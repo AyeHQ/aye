@@ -6,9 +6,10 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use aye_adapter::{Recognition, RefineReason, SourceFile};
-use aye_events::{ContentDigest, Diagnostic};
+use aye_events::ContentDigest;
 
 use crate::Collector;
+use crate::diagnostic::CollectDiagnostic;
 use crate::refine::standalone;
 use crate::source::{self, Source};
 use crate::walk::{AdapterId, FileId, Tree};
@@ -32,7 +33,7 @@ impl Job {
 /// What the recognizers said about one test file.
 pub(crate) struct Recognized {
     /// Why the file couldn't be read or parsed.
-    pub(crate) diagnostic: Option<Diagnostic>,
+    pub(crate) diagnostic: Option<CollectDiagnostic>,
     pub(crate) parsed: bool,
     /// By recognizer, in priority order.
     pub(crate) by: Vec<(AdapterId, Recognition)>,

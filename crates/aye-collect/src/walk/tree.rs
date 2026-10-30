@@ -6,10 +6,11 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use aye_adapter::{Claim, Requested};
-use aye_events::{Diagnostic, ProjectPath};
+use aye_events::ProjectPath;
 use aye_index::{IndexSlice, IndexVec, newtype_index};
 
 use crate::Prepared;
+use crate::diagnostic::CollectDiagnostic;
 
 newtype_index! {
     /// A file collection knows: its place in the table of files, which is
@@ -109,7 +110,7 @@ pub(crate) struct Tree<'r> {
     listings: HashMap<PathBuf, Vec<FileId>>,
     /// One recognizer's support files directly in a directory.
     support_in: HashMap<(PathBuf, AdapterId), Vec<FileId>>,
-    pub diagnostics: Vec<Diagnostic>,
+    pub diagnostics: Vec<CollectDiagnostic>,
     /// Files and directories the walks went through, for progress.
     pub walked: u64,
     /// Files some recognizer claimed for tests, for progress.

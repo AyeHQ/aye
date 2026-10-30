@@ -6,10 +6,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use aye_adapter::RefineReason;
-use aye_events::{ContentDigest, Diagnostic, DiagnosticCode, Fnv128, ProjectPath, Severity};
+use aye_events::{ContentDigest, Fnv128, ProjectPath};
 use aye_protocol::{RefineRequest, Refined, Refiner};
 
 use crate::Collector;
+use crate::diagnostic::CollectDiagnostic;
 use crate::recognize::{Job, Recognized, TestFile};
 use crate::source::Source;
 use crate::walk::{AdapterId, FileId, Tree};
@@ -29,7 +30,7 @@ pub(crate) struct Refinement {
     /// What a worker or the cache reported, by file and recognizer.
     pub refined: HashMap<(FileId, AdapterId), Refined>,
     /// Why a file kept its static guess, by file and recognizer.
-    pub fallbacks: HashMap<(FileId, AdapterId), Diagnostic>,
+    pub fallbacks: HashMap<(FileId, AdapterId), CollectDiagnostic>,
     /// Reported cases and diagnostics outside the requested files.
     pub stray: Vec<Stray>,
 }
@@ -167,17 +168,11 @@ impl Collector<'_> {
 
             let Some(refiner) = refiner else {
                 for (at, reason, _) in misses {
-                    let message = format!(
-                        "{adapter} must import this file to know its tests ({reason}), \
-                         but refinement is off; keeping the static guess"
-                    );
-                    let diagnostic = fallback(
-                        Severity::Info,
-                        DiagnosticCode::NotRefined,
-                        tree,
-                        at,
-                        message,
-                    );
+                    let diagnostic = CollectDiagnostic::NotRefined {
+                        adapter: adapter.clone(),
+                        path: tree.entries[at].rel.clone(),
+                        reason: reason.clone(),
+                    };
                     out.fallbacks.insert((at, i), diagnostic);
                 }
                 continue;
@@ -235,18 +230,11 @@ impl Collector<'_> {
                 }
                 Err(err) => {
                     for (at, _, _) in misses {
-                        let message = format!(
-                            "{adapter} could not import this file to know its tests ({}); \
-                             keeping the static guess",
-                            err.0
-                        );
-                        let diagnostic = fallback(
-                            Severity::Warning,
-                            DiagnosticCode::RefineFailed,
-                            tree,
-                            at,
-                            message,
-                        );
+                        let diagnostic = CollectDiagnostic::RefineFailed {
+                            adapter: adapter.clone(),
+                            path: tree.entries[at].rel.clone(),
+                            error: err.0.clone(),
+                        };
                         out.fallbacks.insert((at, i), diagnostic);
                     }
                 }
@@ -292,22 +280,6 @@ impl Collector<'_> {
         }
         out.reverse();
         Some(out)
-    }
-}
-
-fn fallback(
-    severity: Severity,
-    code: DiagnosticCode,
-    tree: &Tree<'_>,
-    at: FileId,
-    message: String,
-) -> Diagnostic {
-    Diagnostic {
-        severity,
-        code,
-        path: tree.entries[at].rel.clone().into(),
-        span: None,
-        message,
     }
 }
 

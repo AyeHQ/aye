@@ -5,9 +5,10 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use aye_adapter::Project;
-use aye_events::{Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
+use aye_events::DiagnosticPath;
 
 use crate::Collector;
+use crate::diagnostic::CollectDiagnostic;
 use crate::walk::{RecognizerSet, Tree};
 
 /// What a collection walks, from the paths a run was given.
@@ -53,8 +54,9 @@ impl Collector<'_> {
         }
         let all: RecognizerSet = self.recognizers.indices().collect();
         for (abs, target) in self.normalize_targets(&targets) {
-            let rel = aye_fs::relative_through_root(&abs, self.project.root);
-            let (code, message) = if abs.is_dir() {
+            let path =
+                DiagnosticPath::as_written(aye_fs::relative_through_root(&abs, self.project.root));
+            let diagnostic = if abs.is_dir() {
                 if !tree.walk(&abs, all, tick) {
                     return false;
                 }
@@ -65,21 +67,14 @@ impl Collector<'_> {
                 if !entry.tests.union(entry.support).is_empty() {
                     continue;
                 }
-                (
-                    DiagnosticCode::Unclaimed,
-                    "no adapter collects this file".to_string(),
-                )
+                CollectDiagnostic::Unclaimed { path }
             } else {
-                let message = format!("file or directory not found: {}", target.display());
-                (DiagnosticCode::NotFound, message)
+                CollectDiagnostic::NotFound {
+                    path,
+                    given: target.clone(),
+                }
             };
-            tree.diagnostics.push(Diagnostic {
-                severity: Severity::Error,
-                code,
-                path: DiagnosticPath::as_written(rel),
-                span: None,
-                message,
-            });
+            tree.diagnostics.push(diagnostic);
         }
         true
     }
