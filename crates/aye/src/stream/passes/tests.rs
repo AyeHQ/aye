@@ -15,7 +15,7 @@ fn reruns_name_the_test_from_where_aye_runs() {
     fs::write(root.join("tests/test_b.py"), "").unwrap();
     fs::write(root.join("tests/tests/test_a.py"), "").unwrap();
     let tests = root.join("tests");
-    let here = Here {
+    let here = RerunFromHere {
         cwd: &tests,
         root,
         rerun_args: &[],
@@ -28,7 +28,7 @@ fn reruns_name_the_test_from_where_aye_runs() {
     // No other file of that name here: the id reruns as it is.
     assert_eq!(here.local_id(&TestId::new("tests/test_b.py::test_x")), None);
     assert_eq!(
-        Here {
+        RerunFromHere {
             cwd: root,
             root,
             rerun_args: &[],
@@ -47,7 +47,7 @@ fn reruns_name_the_test_from_where_aye_runs() {
             ..aye_events::Reproduce::default()
         });
         let mut record = Record::new(Event::TestFinished(Box::new(result)));
-        here.rerun_from_here(&mut record);
+        here.apply(&mut record);
         let Event::TestFinished(result) = record.event else {
             unreachable!()
         };
@@ -107,7 +107,7 @@ fn reruns_name_the_test_from_where_aye_runs() {
                 .to_vec()
         )
     );
-    let configured = Here {
+    let configured = RerunFromHere {
         cwd: &tests,
         root,
         rerun_args: &["-c".to_string(), "alt.ini".to_string()],
@@ -116,7 +116,7 @@ fn reruns_name_the_test_from_where_aye_runs() {
         aye_events::TestId::new("tests/test_a.py::test_x"),
         aye_events::Outcome::Failed,
     ))));
-    configured.rerun_from_here(&mut record);
+    configured.apply(&mut record);
     let Event::TestFinished(result) = record.event else {
         unreachable!()
     };
@@ -166,12 +166,13 @@ fn a_file_two_adapters_load_in_one_module_is_one_collection_error() {
         _ => unreachable!(),
     };
     let mut once = OneModuleErrors::default();
+    let mut batches = BatchAdapters::default();
     for (id, adapter) in [(0, "unittest"), (1, "pytest"), (2, "doctest")] {
-        once.see(&mut started(id, adapter));
+        batches.see(&started(id, adapter));
     }
     let mut seen = |id: u32, path: &str| {
         let mut record = error(id, path);
-        once.see(&mut record);
+        once.see(&mut record, &batches);
         record
     };
     let first = seen(0, "test_imp.py");
@@ -234,11 +235,12 @@ fn a_collection_error_from_refinement_counts_as_the_pytest_adapters() {
         cases: 1,
     });
     started.envelope.batch = Some(BatchIndex::from_u32(3));
-    once.see(&mut started);
+    let mut batches = BatchAdapters::default();
+    batches.see(&started);
     let severity = |path: &str, once: &mut OneModuleErrors| {
         let mut record = Record::new(Event::Diagnostic(error(path)));
         record.envelope.batch = Some(BatchIndex::from_u32(3));
-        once.see(&mut record);
+        once.see(&mut record, &batches);
         match record.event {
             Event::Diagnostic(d) => (d.severity, d.message),
             _ => unreachable!(),
@@ -310,8 +312,9 @@ fn a_conftest_two_adapters_fail_to_load_is_one_error() {
         record
     };
     let mut once = OneConftestError::default();
+    let mut batches = BatchAdapters::default();
     for (id, adapter) in [(0, "pytest"), (1, "pytest"), (2, "doctest")] {
-        once.see_record(&mut batch(
+        batches.see(&batch(
             id,
             Event::BatchStarted {
                 adapter: adapter.into(),
@@ -328,7 +331,7 @@ fn a_conftest_two_adapters_fail_to_load_is_one_error() {
                 message,
             )),
         );
-        once.see_record(&mut record);
+        once.see_record(&mut record, &batches);
         let Event::Diagnostic(diagnostic) = record.event else {
             unreachable!()
         };

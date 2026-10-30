@@ -1,15 +1,30 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 use aye_events::RunNumber;
 use aye_history::{History, RunWriter};
-use aye_render::{Junit, Reporter};
+use aye_render::{Junit, Reporter, Tee};
 
 use super::sink::{File, Stdout};
 use super::*;
+use crate::printer::Printer;
+
+/// A stream of the run `run` into `reporters`, history and the run store,
+/// whose report files say they failed in `failed`.
+fn stream_of<'a>(
+    run: &str,
+    reporters: Tee<'a>,
+    failed: &Arc<AtomicBool>,
+    history: Option<Remember<'a>>,
+    store: Keep,
+) -> Stream<'a> {
+    let sink = Sink::new(reporters, Arc::clone(failed), history, store, Printer);
+    Stream::new(Stamper::with_run(run), sink, Instant::now())
+}
 
 /// A reporter that fails like a closed pipe after `ok` records.
 struct Closing {
@@ -42,25 +57,23 @@ impl Reporter for Counting {
 fn a_closed_stdout_starves_no_other_reporter() {
     let stdout_calls = Arc::new(AtomicU32::new(0));
     let seen = Arc::new(AtomicU32::new(0));
-    let mut stream = Stream {
-        reporters: Tee::new()
+    let failed = Arc::new(AtomicBool::new(false));
+    let mut stream = stream_of(
+        "r",
+        Tee::new()
             .with(Stdout::new(Closing {
                 ok: 1,
                 calls: Arc::clone(&stdout_calls),
             }))
             .with(Counting(Arc::clone(&seen))),
-        history: None,
-        store: Keep::new(RunWriter::new(std::env::temp_dir().join("aye-no-store"), 0)),
-        stamper: Stamper::with_run("r"),
-        errors: Errors::default(),
-        started: Instant::now(),
-        printer: Printer,
-    };
+        &failed,
+        None,
+        Keep::new(RunWriter::new(std::env::temp_dir().join("aye-no-store"), 0)),
+    );
     for _ in 0..5 {
         stream.emit(Event::CollectionStarted);
     }
-    let failed = AtomicBool::new(false);
-    let ended = stream.finish(ExitCode::Ok, Counts::default(), None, &failed);
+    let ended = stream.finish(ExitCode::Ok, Counts::default(), None);
     assert_eq!(ended.code, ExitCode::Ok);
     // Every record, run_finished included, reached the other reporter.
     assert_eq!(seen.load(Ordering::Relaxed), 6);
@@ -76,15 +89,14 @@ fn the_run_store_keeps_every_record_of_the_stream() {
     let dir = tempfile::tempdir().unwrap();
     let runs = dir.path().join(".aye/runs");
     let seen = Arc::new(AtomicU32::new(0));
-    let mut stream = Stream {
-        reporters: Tee::new().with(Counting(Arc::clone(&seen))),
-        history: None,
-        store: Keep::new(RunWriter::new(&runs, 10)),
-        stamper: Stamper::with_run("0123456789abcdef"),
-        errors: Errors::default(),
-        started: Instant::now(),
-        printer: Printer,
-    };
+    let failed = Arc::new(AtomicBool::new(false));
+    let mut stream = stream_of(
+        "0123456789abcdef",
+        Tee::new().with(Counting(Arc::clone(&seen))),
+        &failed,
+        None,
+        Keep::new(RunWriter::new(&runs, 10)),
+    );
     stream.emit(Event::RunStarted {
         schema_version: aye_events::SCHEMA_VERSION,
         aye_version: "0.0.1".into(),
@@ -107,12 +119,11 @@ fn the_run_store_keeps_every_record_of_the_stream() {
         }),
         duration: Duration::ZERO,
     });
-    let failed = AtomicBool::new(false);
     let counts = Counts {
         passed: 1,
         ..Counts::default()
     };
-    stream.finish(ExitCode::TestsFailed, counts, None, &failed);
+    stream.finish(ExitCode::TestsFailed, counts, None);
     assert_eq!(seen.load(Ordering::Relaxed), 5);
     let store = aye_history::RunStore::new(&runs);
     let meta = store.last().unwrap();
@@ -197,18 +208,17 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     let mut writer = RunWriter::new(&runs, 10);
     let number = writer.claim();
     assert_eq!(number, RunNumber::new(1));
-    let mut stream = Stream {
-        reporters: Tee::new().with(Keeping(Arc::clone(&seen))),
-        history: Some(Remember {
+    let failed = Arc::new(AtomicBool::new(false));
+    let mut stream = stream_of(
+        "0123456789abcdef",
+        Tee::new().with(Keeping(Arc::clone(&seen))),
+        &failed,
+        Some(Remember {
             history: &mut history,
             dir: state.clone(),
         }),
-        store: Keep::new(writer),
-        stamper: Stamper::with_run("0123456789abcdef"),
-        errors: Errors::default(),
-        started: Instant::now(),
-        printer: Printer,
-    };
+        Keep::new(writer),
+    );
     stream.emit(Event::RunStarted {
         schema_version: aye_events::SCHEMA_VERSION,
         aye_version: "0.0.1".into(),
@@ -224,8 +234,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     // A test without history, and one that didn't fail: none.
     stream.emit(finished("t.py::test_new", Outcome::Failed));
     stream.emit(finished("t.py::test_ok", Outcome::Passed));
-    let failed = AtomicBool::new(false);
-    stream.finish(ExitCode::TestsFailed, Counts::default(), None, &failed);
+    stream.finish(ExitCode::TestsFailed, Counts::default(), None);
     let said = |records: &[Record]| -> Vec<(String, Option<Previous>)> {
         records
             .iter()
@@ -279,20 +288,18 @@ fn a_report_that_fails_at_the_end_fails_the_run() {
     let failed = Arc::new(AtomicBool::new(false));
     let blocker = dir.path().join("file");
     fs::write(&blocker, "").unwrap();
-    let stream = Stream {
-        reporters: Tee::new().with(File {
+    let stream = stream_of(
+        "r",
+        Tee::new().with(File {
             inner: Junit::new(blocker.join("out.xml")),
             failed: Arc::clone(&failed),
             printer: Printer,
         }),
-        history: None,
-        store: Keep::new(RunWriter::new(std::env::temp_dir().join("aye-no-store"), 0)),
-        stamper: Stamper::with_run("r"),
-        errors: Errors::default(),
-        started: Instant::now(),
-        printer: Printer,
-    };
-    let ended = stream.finish(ExitCode::Ok, Counts::default(), None, &failed);
+        &failed,
+        None,
+        Keep::new(RunWriter::new(std::env::temp_dir().join("aye-no-store"), 0)),
+    );
+    let ended = stream.finish(ExitCode::Ok, Counts::default(), None);
     assert!(failed.load(Ordering::Relaxed));
     // `run_finished` said 0; the process exits 1 (`crate::main`).
     assert_eq!(

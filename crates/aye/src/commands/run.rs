@@ -28,7 +28,7 @@ use crate::positional::Positional;
 use crate::printer::Printer;
 use crate::registry;
 use crate::settings::RunSettings;
-use crate::stream::{Here, Keep, OneConftestError, OneModuleErrors, Remember, Stream, reporters};
+use crate::stream::{Keep, Passes, Remember, RerunFromHere, Sink, Stream, reporters};
 
 mod collect;
 mod exit;
@@ -114,18 +114,17 @@ pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> Result<RunEnd,
     } else {
         writer.claim()
     };
-    let mut out = Stream {
-        reporters: reporters(&settings, junit, &file_failed, printer),
-        history: Some(Remember {
+    let sink = Sink::new(
+        reporters(&settings, junit, &file_failed, printer),
+        Arc::clone(&file_failed),
+        Some(Remember {
             history: &mut history,
             dir: state.path().to_path_buf(),
         }),
-        store: Keep::new(writer),
-        stamper: Stamper::with_run(run_id),
-        errors: Errors::default(),
-        started,
+        Keep::new(writer),
         printer,
-    };
+    );
+    let mut out = Stream::new(Stamper::with_run(run_id), sink, started);
 
     out.emit(Event::RunStarted {
         schema_version: SCHEMA_VERSION,
@@ -212,7 +211,6 @@ pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> Result<RunEnd,
             verdict.exit_code(RunStage::Collection),
             verdict.counts,
             Some(StopReason::Interrupted),
-            &file_failed,
         ));
     }
     // Dotted names and keys are resolved among what collection found,
@@ -263,12 +261,14 @@ pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> Result<RunEnd,
         unmatched: !unmatched.is_empty(),
         ..reach
     });
-    let mut conftests = OneConftestError::default();
-    let mut once = OneModuleErrors::default();
-    let pytest_runs = settings
-        .prepared
-        .iter()
-        .any(|(name, _)| *name == aye_adapter_pytest::NAME);
+    let mut passes = Passes::new(RerunFromHere {
+        cwd: &settings.cwd,
+        root: &settings.root,
+        rerun_args: &settings.rerun_args,
+    });
+    let pytest = aye_adapter_pytest::NAME;
+    let pytest_runs = settings.prepared.iter().any(|(name, _)| *name == pytest);
+    let refined_by = pytest_runs.then_some(&pytest);
     let mut collection_errors = false;
     let broken = broken_conftest_dirs(&collection.diagnostics);
     for diagnostic in &collection.diagnostics {
@@ -285,10 +285,7 @@ pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> Result<RunEnd,
             // tests: without it there are none, which is no result.
             diagnostic.severity = Severity::Error;
         }
-        conftests.see(None, &mut diagnostic);
-        if pytest_runs {
-            once.refined(&aye_adapter_pytest::NAME, &diagnostic);
-        }
+        passes.collected(&mut diagnostic, refined_by);
         collection_errors |= diagnostic.severity == Severity::Error;
         out.emit(Event::Diagnostic(diagnostic));
     }
@@ -321,14 +318,14 @@ pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> Result<RunEnd,
     for diagnostic in not_found {
         out.emit(Event::Diagnostic(diagnostic));
     }
+    // Errors so far belong to collection; only later ones are the run's.
+    let collected_errors = out.sink.take_errors();
     // pytest refuses to run when an explicit argument names nothing.
-    let usage_error = out.errors.usage;
+    let usage_error = collected_errors.usage;
     // A hook that failed while pytest collected (aye's pytest front-end
     // runs the collection hooks in refinement) is pytest's
     // `INTERNALERROR`: the session ends there, status 3, `--co` too.
-    let internal_error = out.errors.internal;
-    // Errors so far belong to collection; only later ones are the run's.
-    out.errors = Errors::default();
+    let internal_error = collected_errors.internal;
 
     let mut cases: Vec<Case> = Vec::with_capacity(selected.cases.len());
     for case in &selected.cases {
@@ -368,12 +365,10 @@ pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> Result<RunEnd,
             collected.exit_code(RunStage::Collection),
             collected.counts,
             None,
-            &file_failed,
         ));
     }
 
     // -- run ----------------------------------------------------------------
-    let rerun_args = settings.rerun_args.clone();
     let plan = Plan {
         cases,
         policy: settings.policy.clone(),
@@ -383,7 +378,7 @@ pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> Result<RunEnd,
             .map(|(name, r)| (name.clone(), r.context()))
             .collect(),
         requested_ids: requested_ids(&settings.positionals),
-        rerun_args: rerun_args.clone(),
+        rerun_args: settings.rerun_args.clone(),
         selected_paths: reach
             .map(|reach| reach.selected)
             .unwrap_or_default()
@@ -398,38 +393,20 @@ pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> Result<RunEnd,
         },
         session_files,
     };
-    let summary = {
-        let Stream {
-            reporters,
-            history,
-            store,
-            stamper,
-            errors,
-            ..
-        } = &mut out;
-        let here = Here {
-            cwd: &settings.cwd,
-            root: &settings.root,
-            rerun_args: &rerun_args,
-        };
-        running.store(true, Ordering::SeqCst);
-        runner.run(&plan, stamper, &mut |mut record| {
-            here.rerun_from_here(&mut record);
-            once.see(&mut record);
-            conftests.see_record(&mut record);
-            Stream::deliver_to(reporters, history, store, errors, printer, &mut record);
-        })
-    };
+    running.store(true, Ordering::SeqCst);
+    let summary = runner.run(&plan, &mut out.stamper, &mut |mut record| {
+        passes.apply(&mut record);
+        out.sink.deliver(&mut record);
+    });
     let counts = Counts {
         deselected: selected.deselected,
         ..summary.counts
     };
-    let verdict = collected.with_run(&summary, out.errors, counts);
+    let verdict = collected.with_run(&summary, out.sink.take_errors(), counts);
     Ok(out.finish(
         verdict.exit_code(RunStage::Run),
         verdict.counts,
         summary.stopped,
-        &file_failed,
     ))
 }
 

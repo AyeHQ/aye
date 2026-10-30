@@ -1,21 +1,94 @@
-//! The passes that rewrite the runner's records before anything consumes
-//! them: a failed test's rerun spelled from where aye runs ([`Here`]), and
-//! one error for what pytest reports once, a file's collection errors from
-//! the adapters pytest collects in one module ([`OneModuleErrors`]) and a
-//! conftest that fails to load ([`OneConftestError`]).
+//! The passes that rewrite records before anything consumes them
+//! ([`Passes`], over one fold of the batches' adapters, [`BatchAdapters`]):
+//! a failed test's rerun spelled from where aye runs ([`RerunFromHere`]),
+//! and one error for what pytest reports once, a file's collection errors
+//! from the adapters pytest collects in one module ([`OneModuleErrors`])
+//! and a conftest that fails to load ([`OneConftestError`]); and, for every
+//! record, how a bad outcome's test ended before this run
+//! ([`PreviousOutcome`]), which the sink applies first, as it holds the
+//! history.
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use aye_events::{
-    AdapterName, Diagnostic, DiagnosticCode, Event, Record, RerunCommand, Severity, TestId,
+    AdapterName, BatchIndex, Diagnostic, DiagnosticCode, Event, Record, RerunCommand, Severity,
+    TestId,
 };
 use aye_fs::{normalize_absolute, relative_below_root};
+use aye_history::History;
 
 use crate::registry;
 
+/// The passes the runner's records go through before the sink, in this
+/// order: the batches' adapters are folded, a failed test's rerun is
+/// spelled from where aye runs, then a file's collection errors and a
+/// conftest's are counted as pytest counts them. The diagnostics
+/// collection reported, which the binary emits itself, go through the last
+/// two first ([`Self::collected`]).
+pub(crate) struct Passes<'a> {
+    batches: BatchAdapters,
+    rerun: RerunFromHere<'a>,
+    one_module: OneModuleErrors,
+    one_conftest: OneConftestError,
+}
+
+impl<'a> Passes<'a> {
+    pub(crate) fn new(rerun: RerunFromHere<'a>) -> Self {
+        Self {
+            batches: BatchAdapters::default(),
+            rerun,
+            one_module: OneModuleErrors::default(),
+            one_conftest: OneConftestError::default(),
+        }
+    }
+
+    /// A diagnostic collection reported, before the binary emits it: a
+    /// conftest's error that refinement reported already becomes an info,
+    /// and a file's collection error counts as `refined_by`'s, the adapter
+    /// whose refinement lists every file it collects, when it runs.
+    pub(crate) fn collected(
+        &mut self,
+        diagnostic: &mut Diagnostic,
+        refined_by: Option<&AdapterName>,
+    ) {
+        self.one_conftest.see(None, diagnostic);
+        if let Some(adapter) = refined_by {
+            self.one_module.refined(adapter, diagnostic);
+        }
+    }
+
+    /// A record from the runner.
+    pub(crate) fn apply(&mut self, record: &mut Record) {
+        self.batches.see(record);
+        self.rerun.apply(record);
+        self.one_module.see(record, &self.batches);
+        self.one_conftest.see_record(record, &self.batches);
+    }
+}
+
+/// Each batch's adapter, from its `batch_started`: what the passes that
+/// count by adapter read a batch's records by.
+#[derive(Debug, Default)]
+pub(crate) struct BatchAdapters(HashMap<BatchIndex, AdapterName>);
+
+impl BatchAdapters {
+    pub(crate) fn see(&mut self, record: &Record) {
+        if let (Event::BatchStarted { adapter, .. }, Some(batch)) =
+            (&record.event, record.envelope.batch)
+        {
+            self.0.insert(batch, adapter.clone());
+        }
+    }
+
+    /// The adapter of `batch`, the batch a record came from.
+    pub(crate) fn of(&self, batch: Option<BatchIndex>) -> Option<&AdapterName> {
+        batch.and_then(|batch| self.0.get(&batch))
+    }
+}
+
 /// Where aye runs, for the reruns it prints.
-pub(crate) struct Here<'a> {
+pub(crate) struct RerunFromHere<'a> {
     pub(crate) cwd: &'a Path,
     pub(crate) root: &'a Path,
     /// aye's options that shape the run, which a rerun repeats before the
@@ -23,14 +96,14 @@ pub(crate) struct Here<'a> {
     pub(crate) rerun_args: &'a [String],
 }
 
-impl Here<'_> {
+impl RerunFromHere<'_> {
     /// Make a failed test's rerun (`aye <id>`) rerun it from the current
     /// directory. Ids are relative to the root, and a path is taken from
     /// the current directory first, then from the root: from a
     /// subdirectory holding a path of the same name (`tests/tests/…`), the
     /// id would name another file. There the rerun names the test's file
     /// relative to the current directory; elsewhere it stays the id.
-    pub(crate) fn rerun_from_here(&self, record: &mut Record) {
+    pub(crate) fn apply(&self, record: &mut Record) {
         let Event::TestFinished(result) = &mut record.event else {
             return;
         };
@@ -63,7 +136,7 @@ impl Here<'_> {
     }
 
     /// `id` spelled from the current directory, when spelled from the root
-    /// it would name another file from here; see [`Self::rerun_from_here`].
+    /// it would name another file from here; see [`Self::apply`].
     fn local_id(&self, id: &TestId) -> Option<String> {
         if self.cwd == self.root {
             return None;
@@ -94,8 +167,6 @@ impl Here<'_> {
 /// to import there has its error from collection, not from a batch.
 #[derive(Debug, Default)]
 pub(crate) struct OneModuleErrors {
-    /// Each batch's adapter, from its `batch_started`.
-    adapters: HashMap<aye_events::BatchIndex, AdapterName>,
     /// By file, how many collection errors each adapter reported for it,
     /// in the order the adapters first did.
     reported: HashMap<String, Vec<(AdapterName, usize)>>,
@@ -126,20 +197,16 @@ impl OneModuleErrors {
         }
     }
 
-    pub(crate) fn see(&mut self, record: &mut Record) {
+    /// A record from a batch of the adapter `batches` say.
+    pub(crate) fn see(&mut self, record: &mut Record, batches: &BatchAdapters) {
         let batch = record.envelope.batch;
         match &mut record.event {
-            Event::BatchStarted { adapter, .. } => {
-                if let Some(batch) = batch {
-                    self.adapters.insert(batch, adapter.clone());
-                }
-            }
             Event::Diagnostic(diagnostic)
                 if diagnostic.severity == Severity::Error
                     && diagnostic.code == DiagnosticCode::CollectionError
                     && !diagnostic.path.is_nowhere() =>
             {
-                let Some(adapter) = batch.and_then(|batch| self.adapters.get(&batch)) else {
+                let Some(adapter) = batches.of(batch) else {
                     return;
                 };
                 if !registry::collects_in_one_module(adapter) {
@@ -190,30 +257,19 @@ impl OneModuleErrors {
 /// renderers show once.
 #[derive(Debug, Default)]
 pub(crate) struct OneConftestError {
-    /// Each batch's adapter, from its `batch_started`.
-    adapters: HashMap<aye_events::BatchIndex, AdapterName>,
     /// By code and path, who reported the error first (an adapter, or
     /// `None` for refinement), and its message.
     first: HashMap<(DiagnosticCode, String), (Option<AdapterName>, String)>,
 }
 
 impl OneConftestError {
-    /// A record from a batch.
-    pub(crate) fn see_record(&mut self, record: &mut Record) {
+    /// A record from a batch of the adapter `batches` say.
+    pub(crate) fn see_record(&mut self, record: &mut Record, batches: &BatchAdapters) {
         let batch = record.envelope.batch;
-        match &mut record.event {
-            Event::BatchStarted { adapter, .. } => {
-                if let Some(batch) = batch {
-                    self.adapters.insert(batch, adapter.clone());
-                }
-            }
-            Event::Diagnostic(diagnostic) => {
-                let adapter = batch.and_then(|batch| self.adapters.get(&batch)).cloned();
-                if adapter.is_some() {
-                    self.see(adapter.as_ref(), diagnostic);
-                }
-            }
-            _ => {}
+        if let Event::Diagnostic(diagnostic) = &mut record.event
+            && let Some(adapter) = batches.of(batch)
+        {
+            self.see(Some(adapter), diagnostic);
         }
     }
 
@@ -250,6 +306,22 @@ impl OneConftestError {
         diagnostic.severity = Severity::Info;
         diagnostic.message =
             format!("also reported by {by}, one {kind} as pytest loads a conftest once{words}");
+    }
+}
+
+/// How a bad outcome's test ended before this run, from `history` as it
+/// was then: its result's `history`, set before anything else sees the
+/// record, when the test has some.
+pub(crate) struct PreviousOutcome<'h>(pub(crate) &'h History);
+
+impl PreviousOutcome<'_> {
+    pub(crate) fn apply(&self, record: &mut Record) {
+        if let Event::TestFinished(result) = &mut record.event
+            && result.outcome.is_bad()
+            && result.history.is_none()
+        {
+            result.history = self.0.previous(&result.id);
+        }
     }
 }
 
