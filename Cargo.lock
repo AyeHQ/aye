@@ -190,6 +190,7 @@ dependencies = [
  "aye-fs",
  "aye-protocol",
  "aye-static",
+ "aye-test",
  "ruff_python_parser",
  "serde",
  "serde_json",
@@ -208,6 +209,7 @@ dependencies = [
  "aye-fs",
  "aye-protocol",
  "aye-static",
+ "aye-test",
  "ruff_python_parser",
  "serde",
  "serde_json",
@@ -225,6 +227,7 @@ dependencies = [
  "aye-events",
  "aye-fs",
  "aye-protocol",
+ "aye-test",
  "ruff_python_parser",
  "serde",
  "serde_json",
@@ -267,6 +270,7 @@ version = "0.0.1"
 dependencies = [
  "aye-events",
  "aye-protocol",
+ "aye-test",
  "serde_json",
 ]
 
@@ -344,8 +348,8 @@ dependencies = [
  "aye-engine",
  "aye-events",
  "aye-protocol",
- "aye-provision",
  "aye-static",
+ "aye-test",
  "serde_json",
  "tempfile",
  "thiserror",

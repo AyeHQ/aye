@@ -1,6 +1,6 @@
 //! The runner against real worker processes, with a fake adapter whose test
 //! names say what each test does. Skipped when no Python is available: they
-//! use `.venv` from `uv sync`, or `AYE_TEST_PYTHON`.
+//! use the interpreter aye-test finds.
 
 #![expect(
     clippy::iter_over_hash_type,
@@ -295,26 +295,12 @@ const LISTING: Runtime = Runtime {
     session: SessionMode::ListsSession,
 };
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the tests' own settings, not the environment aye reads"
-)]
-fn python() -> Option<PathBuf> {
-    if let Some(python) = env::var_os("AYE_TEST_PYTHON").filter(|p| !p.is_empty()) {
-        return Some(python.into());
-    }
-    let venv = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv");
-    aye_provision::venv_python(&venv)
-}
-
+/// The interpreter workers run, or, having said so, the end of the test.
 macro_rules! python_or_skip {
     () => {
-        match python() {
+        match aye_test::test_python(aye_test::Needs::Stdlib) {
             Some(python) => python,
-            None => {
-                eprintln!("skipped: no Python (run `uv sync`, or set AYE_TEST_PYTHON)");
-                return;
-            }
+            None => return,
         }
     };
 }

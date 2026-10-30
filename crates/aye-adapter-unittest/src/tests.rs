@@ -178,26 +178,9 @@ fn refined(found: &[(String, Recognition)]) -> Vec<String> {
 
 // ---------------------------------------------------------------- the referee
 
-/// The interpreter for differential tests: `AYE_TEST_PYTHON`, or the
-/// workspace's `.venv`.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the tests' own settings, not the environment aye reads"
-)]
+/// The interpreter for differential tests: aye-test's.
 fn python() -> Option<PathBuf> {
-    let candidate = std::env::var_os("AYE_TEST_PYTHON")
-        .map(PathBuf::from)
-        .or_else(|| {
-            let venv = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv");
-            [venv.join("bin/python"), venv.join("Scripts/python.exe")]
-                .into_iter()
-                .find(|p| p.is_file())
-        })?;
-    let ok = Command::new(&candidate)
-        .args(["-c", "import sys; assert sys.version_info >= (3, 10)"])
-        .output()
-        .is_ok_and(|o| o.status.success());
-    ok.then_some(candidate)
+    aye_test::test_python(aye_test::Needs::Stdlib)
 }
 
 /// What `python -m unittest discover` loads, as ids, in its order:
@@ -363,10 +346,7 @@ fn suites_are_recognized_as_pinned() {
 
 #[test]
 fn suites_match_unittest() {
-    let Some(python) = python() else {
-        eprintln!("skipping: no Python 3.10+ (set AYE_TEST_PYTHON, or run `uv sync`)");
-        return;
-    };
+    let Some(python) = python() else { return };
     for suite in SUITES {
         differential(&python, suite);
     }

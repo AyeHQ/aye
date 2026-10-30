@@ -1182,10 +1182,7 @@ fn p1_suites_match_pytest() {
 
 #[test]
 fn p1_suites_match_live_pytest() {
-    let Some(python) = python() else {
-        eprintln!("skipped: no Python with pytest (set AYE_TEST_PYTHON)");
-        return;
-    };
+    let Some(python) = python() else { return };
     for suite in SUITES {
         let dir = materialize(suite);
         let excluded = differential(&python, dir.path())

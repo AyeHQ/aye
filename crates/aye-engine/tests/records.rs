@@ -21,33 +21,9 @@ use aye_engine::ENGINE_MODULE;
 use aye_events::{Event, Record};
 use serde_json::Value;
 
-#[expect(clippy::print_stderr, reason = "a test says why it skips")]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the tests' own settings, not the environment aye reads"
-)]
+/// The interpreter the engine runs on: aye-test's.
 fn python() -> Option<PathBuf> {
-    let candidate = std::env::var_os("AYE_TEST_PYTHON").map_or_else(
-        || {
-            let venv = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv");
-            if cfg!(windows) {
-                venv.join("Scripts/python.exe")
-            } else {
-                venv.join("bin/python")
-            }
-        },
-        PathBuf::from,
-    );
-    let ok = Command::new(&candidate)
-        .args(["-c", "import sys; sys.exit(sys.version_info < (3, 10))"])
-        .output()
-        .is_ok_and(|o| o.status.success());
-    if ok {
-        Some(candidate)
-    } else {
-        eprintln!("skipping: no Python 3.10+ (run `uv sync`, or set AYE_TEST_PYTHON)");
-        None
-    }
+    aye_test::test_python(aye_test::Needs::Stdlib)
 }
 
 /// What `records.py` writes, line by line, given the embedded engine.

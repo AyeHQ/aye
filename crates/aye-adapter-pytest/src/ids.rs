@@ -775,27 +775,18 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the tests' own settings, not the environment aye reads"
-    )]
     fn digits_match_the_python_running_the_tests() {
-        let venv = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv/bin/python");
-        let python = std::env::var_os("AYE_TEST_PYTHON").map_or(venv, std::path::PathBuf::from);
-        let Ok(output) = std::process::Command::new(&python)
+        let Some(python) = aye_test::test_python(aye_test::Needs::Stdlib) else {
+            return;
+        };
+        let output = std::process::Command::new(&python)
             .args([
                 "-c",
                 "import sys; sys.stdout.write(' '.join(str(c) for c in range(0x110000) if chr(c).isdigit()))",
             ])
             .output()
-        else {
-            eprintln!("skipped: no Python");
-            return;
-        };
-        if !output.status.success() {
-            eprintln!("skipped: no Python");
-            return;
-        }
+            .unwrap();
+        assert!(output.status.success(), "{}", python.display());
         let digits: std::collections::HashSet<u32> = String::from_utf8(output.stdout)
             .unwrap()
             .split_whitespace()

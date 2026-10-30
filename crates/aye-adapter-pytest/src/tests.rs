@@ -167,26 +167,9 @@ fn recognize(source: &str) -> Recognition {
     recognizer.recognize(&file.file(), Requested::Found, &[])
 }
 
-/// The interpreter for differential tests: `AYE_TEST_PYTHON`, or the
-/// workspace's `.venv`, when it has pytest.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the tests' own settings, not the environment aye reads"
-)]
+/// The interpreter for differential tests, with pytest: aye-test's.
 fn python() -> Option<PathBuf> {
-    let candidate = std::env::var_os("AYE_TEST_PYTHON")
-        .map(PathBuf::from)
-        .or_else(|| {
-            let venv = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv");
-            [venv.join("bin/python"), venv.join("Scripts/python.exe")]
-                .into_iter()
-                .find(|p| p.is_file())
-        })?;
-    let ok = Command::new(&candidate)
-        .args(["-c", "import pytest"])
-        .output()
-        .is_ok_and(|o| o.status.success());
-    ok.then_some(candidate)
+    aye_test::test_python(aye_test::Needs::Pytest)
 }
 
 /// `pytest --collect-only -q` in `root`: the node ids, in order, and the
@@ -518,10 +501,7 @@ fn suites_match_pytest() {
 /// The same suites against the pytest at hand, tags and keywords included.
 #[test]
 fn suites_match_live_pytest() {
-    let Some(python) = python() else {
-        eprintln!("skipped: no Python with pytest (set AYE_TEST_PYTHON)");
-        return;
-    };
+    let Some(python) = python() else { return };
     for suite in suites::SUITES {
         let dir = materialize(suite);
         let excluded = differential(&python, dir.path())

@@ -14,6 +14,7 @@ aye-protocol = { workspace = true }
 
 [dev-dependencies]
 aye-events = { workspace = true }
+aye-test = { path = "../aye-test" }
 serde_json = { workspace = true }
 
 [lints]

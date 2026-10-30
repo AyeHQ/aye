@@ -5339,7 +5339,7 @@ mod tests {
     //! 9.1.1 (Python 3.13); `static_values_match_pytest` re-checks every
     //! exact reading against a real pytest when one is available.
 
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::process::Command;
 
     use aye_adapter::{LineIndex, Project, Recognition, Recognizer, Requested, SourceFile};
@@ -5991,10 +5991,7 @@ mod tests {
     /// Every value of [`RAISING`] does make pytest's import fail.
     #[test]
     fn raising_values_raise_in_pytest() {
-        let Some(python) = python() else {
-            eprintln!("skipped: no Python with pytest");
-            return;
-        };
+        let Some(python) = python() else { return };
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("pytest.ini"), "[pytest]\n").unwrap();
         for (i, value) in RAISING.iter().enumerate() {
@@ -6142,34 +6139,14 @@ mod tests {
         assert!(!regex_compiles(&Value::Bytes(br"\u00e9".to_vec())));
     }
 
-    /// The interpreter for differential tests: `AYE_TEST_PYTHON`, or the
-    /// workspace's `.venv`, when it has pytest.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the tests' own settings, not the environment aye reads"
-    )]
+    /// The interpreter for differential tests, with pytest: aye-test's.
     fn python() -> Option<PathBuf> {
-        let candidate = std::env::var_os("AYE_TEST_PYTHON")
-            .map(PathBuf::from)
-            .or_else(|| {
-                let venv = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv");
-                [venv.join("bin/python"), venv.join("Scripts/python.exe")]
-                    .into_iter()
-                    .find(|p| p.is_file())
-            })?;
-        let ok = Command::new(&candidate)
-            .args(["-c", "import pytest"])
-            .output()
-            .is_ok_and(|o| o.status.success());
-        ok.then_some(candidate)
+        aye_test::test_python(aye_test::Needs::Pytest)
     }
 
     #[test]
     fn regex_patterns_compile_in_python() {
-        let Some(python) = python() else {
-            eprintln!("skipped: no Python with pytest");
-            return;
-        };
+        let Some(python) = python() else { return };
         let script = r#"
 import json, re, sys, warnings
 warnings.simplefilter("error")
@@ -6193,10 +6170,7 @@ for pattern in json.loads(sys.stdin.read()):
 
     #[test]
     fn static_values_match_pytest() {
-        let Some(python) = python() else {
-            eprintln!("skipped: no Python with pytest");
-            return;
-        };
+        let Some(python) = python() else { return };
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("pytest.ini"), "[pytest]\n").unwrap();
         let mut expected = Vec::new();

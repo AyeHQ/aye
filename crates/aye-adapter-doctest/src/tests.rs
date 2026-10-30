@@ -1580,26 +1580,9 @@ fn suites_match_pytest() {
     }
 }
 
-/// The interpreter for live tests: `AYE_TEST_PYTHON`, or the workspace's
-/// `.venv`, when it has pytest.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the tests' own settings, not the environment aye reads"
-)]
+/// The interpreter for live tests, with pytest: aye-test's.
 fn python() -> Option<PathBuf> {
-    let candidate = std::env::var_os("AYE_TEST_PYTHON")
-        .map(PathBuf::from)
-        .or_else(|| {
-            let venv = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv");
-            [venv.join("bin/python"), venv.join("Scripts/python.exe")]
-                .into_iter()
-                .find(|p| p.is_file())
-        })?;
-    let ok = Command::new(&candidate)
-        .args(["-c", "import pytest"])
-        .output()
-        .is_ok_and(|o| o.status.success());
-    ok.then_some(candidate)
+    aye_test::test_python(aye_test::Needs::Pytest)
 }
 
 /// A pytest plugin that dumps each doctest item's id and the names `-k`
@@ -1766,10 +1749,7 @@ fn differential(python: &Path, root: &Path, errors_refined: bool) -> Result<Vec<
 /// The suites against the pytest at hand.
 #[test]
 fn suites_match_live_pytest() {
-    let Some(python) = python() else {
-        eprintln!("skipped: no Python with pytest (set AYE_TEST_PYTHON)");
-        return;
-    };
+    let Some(python) = python() else { return };
     for suite in suites::SUITES {
         let dir = materialize(suite);
         differential(&python, dir.path(), true)
@@ -1781,10 +1761,7 @@ fn suites_match_live_pytest() {
 /// keeps exact must be exactly what pytest collects.
 #[test]
 fn exact_samples_match_live_pytest() {
-    let Some(python) = python() else {
-        eprintln!("skipped: no Python with pytest (set AYE_TEST_PYTHON)");
-        return;
-    };
+    let Some(python) = python() else { return };
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     write(

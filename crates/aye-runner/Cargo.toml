@@ -18,7 +18,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-aye-provision = { workspace = true }
+aye-test = { path = "../aye-test" }
 tempfile = { workspace = true }
 
 [lints]

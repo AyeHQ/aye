@@ -20,6 +20,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+aye-test = { path = "../aye-test" }
 tempfile = { workspace = true }
 
 [lints]
