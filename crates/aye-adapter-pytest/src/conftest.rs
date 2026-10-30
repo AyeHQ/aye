@@ -3,6 +3,32 @@
 //! fixtures, `collect_ignore`, the modules they change and whether they
 //! reach module namespaces; and what project modules define, for telling
 //! whether a name a test module imports may be a unittest case.
+//!
+//! Decided (implementation, October 2026), each revisable until 0.1.0:
+//! - **Which support files count.** Hooks pytest calls per path count from
+//!   the conftests in the file's directory and above, within pytest's
+//!   confcutdir, the project files their `pytest_plugins` name or their
+//!   `pluginmanager.register(module)` / `import_plugin("name")` load, and the
+//!   project modules `-p NAME` loads (from addopts, `PYTEST_ADDOPTS` or the
+//!   arguments after `--`) or `PYTEST_PLUGINS` names; with `--noconftest`,
+//!   no conftest counts.
+//!   Session-wide hooks (`pytest_collection`, `pytest_make_parametrize_id`,
+//!   `pytest_collection_modifyitems`) count from any conftest of the
+//!   project, found once by walking it, and from the plugins test modules
+//!   load through `pytest_plugins`, since pytest applies them to every test
+//!   once loaded. What a support module imports (`from m import name`, `from
+//!   m import *`, honouring `__all__`) is followed into project files, for
+//!   fixtures and hooks; a test module's imports are followed for the names
+//!   its tests may request. Project files are found as Python finds them
+//!   (see "Imports" below) from the importing directory's package base,
+//!   the rootdir, the project root, their `src`, `pythonpath`, `PYTHONPATH`
+//!   and what conftests put on `sys.path`. Installed plugins and modules
+//!   are not seen. `-p
+//!   no:unittest` makes `TestCase` classes plain classes (pytest's
+//!   `class-has-init`), and `-p no:python` collects nothing: no `.py` file
+//!   is claimed for tests, not even one on the command line, which is then
+//!   `unclaimed`, as pytest's "found no collectors" (status 4), unless
+//!   pytest's doctest plugin collects it.
 
 mod fixtures;
 mod hooks;

@@ -3,6 +3,15 @@
 //! module loads, what a module's namespace holds once its imports are
 //! followed into project files, and whether a name may be a unittest case,
 //! a test or a class factory.
+//!
+//! Decided (fourth round: configuration, conftests, fixtures and imports),
+//! October 2026:
+//! - **Imports.** A module is looked up as Python's `FileFinder` does: each
+//!   part where the previous one says, a package (`name/__init__.py`)
+//!   before a module (`name.py`), either before a namespace portion. The
+//!   importing directory's package base comes first in the `prepend`
+//!   import mode, after the other bases with `append` (where pytest
+//!   appends it) and `importlib` (which adds none).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};

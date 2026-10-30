@@ -2,6 +2,14 @@
 //! command line ([`PytestRecognizer::python_module`]), what its ignore
 //! rules spare ([`ignore`]), and what its doctest plugin collects
 //! ([`doctest_plugin`]).
+//!
+//! Decided (implementation, October 2026), each revisable until 0.1.0:
+//! - **A `conftest.py` is a test module too** ([`Claim::TestsAndSupport`])
+//!   when it matches `python_files` (and isn't ignored) or is named on the
+//!   command line, as pytest's `pytest_collect_file` doesn't spare it; it
+//!   stays support when ignored. With `--noconftest` it is an ordinary file.
+//!
+//! [`Claim::TestsAndSupport`]: aye_adapter::Claim::TestsAndSupport
 
 pub(crate) mod doctest_plugin;
 pub(crate) mod ignore;

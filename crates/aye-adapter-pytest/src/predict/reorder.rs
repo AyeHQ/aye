@@ -1,4 +1,9 @@
 //! pytest's `reorder_items` over one file's tests.
+//!
+//! Decided (implementation, October 2026), each revisable until 0.1.0:
+//! - **Order** is pytest's: collection order, then `reorder_items` for
+//!   class- and module-scoped parameters (direct ones numbered by call, as
+//!   pytest renumbers them), which never reach across files.
 
 use std::collections::{HashMap, HashSet};
 

@@ -1,6 +1,150 @@
 //! Recognition of one test module, the way pytest's `Module`, `Class` and
 //! `UnitTestCase` collectors walk it (`_pytest/python.py`,
 //! `_pytest/unittest.py`), without importing it.
+//!
+//! Decided (implementation, October 2026), each revisable until 0.1.0:
+//! - **Refinement versus `Partial`.** A file is refined when its ids, or
+//!   which tests exist, may differ from the static reading (Core decision 5:
+//!   when unsure, pytest decides): parametrize arguments that are not
+//!   static, `ids=` callables, parametrized fixtures in the test's closure
+//!   (through arguments, fixtures, `usefixtures` and autouse, with pytest's
+//!   override rules), `pytest_generate_tests` in the module, the class or a
+//!   conftest in scope, `pytest_make_parametrize_id` with parametrize, the
+//!   collection hooks `pytest_pycollect_makeitem`,
+//!   `pytest_pycollect_makemodule`, `pytest_collection`,
+//!   `pytest_ignore_collect` and `pytest_collect_directory`,
+//!   `pytest_collect_file` when it mentions Python files, a conftest in
+//!   scope that loads plugins aye can't name (`pytest_plugins` it can't read,
+//!   `pluginmanager.register(make())`), a test module's own
+//!   `pytest_plugins`, classes whose bases aren't all known (whatever their
+//!   name, since a unittest subclass inherits its tests; classes from
+//!   packages that ship no test cases, such as the standard library's,
+//!   don't count), class members added at runtime (class decorators aye
+//!   can't see through, a metaclass other than `ABCMeta`, a base's
+//!   `__init_subclass__`, `exec` or `locals()` in a class body, test names
+//!   the module sets on the class), decorators aye can't see through on a
+//!   test (they may parametrize, rename, replace or multiply it: ddt,
+//!   `parameterized.expand`, registries), including the module's own unless
+//!   they visibly return their argument or a `functools.wraps` wrapper of
+//!   it, `pytestmark` entries it can't read and `test.pytestmark = …` (each
+//!   may be a parametrize; `.append`, `.extend` and `+=` on a list are
+//!   read), generator tests (pytest fails the module, which refinement
+//!   reports once; a decorated one may be a plain function), imported or
+//!   assigned names that may be tests (see "What may change which tests
+//!   exist" below; a capitalized name from a project file
+//!   that may be a unittest case, which pytest collects whatever its name,
+//!   counts: a class whose bases may make it one, or a name aye can't tell
+//!   is no class, followed through the project's re-exports), module
+//!   namespaces reached in ways aye can't follow (`sys.modules[…]` for a
+//!   computed name, frames, `f_globals`, `__globals__`, `gc`,
+//!   `importlib.import_module` or `__import__` of a computed name, the
+//!   module importing itself), and likewise a conftest in scope that does
+//!   so, imports a module of the test module's name or implements
+//!   `pytest_collectstart` or `pytest_make_collect_report` (they get the
+//!   module before pytest collects it), code that changes `pytest`'s API or
+//!   collection internals, a test file with no test aye can see (pytest
+//!   imports it all the same: an import error is a collection error, and
+//!   tests may exist only at runtime), star imports, test names defined in
+//!   a branch that may not run (`if`, loops, `match`, `except`, a `try`
+//!   body after a statement that may raise) or differently in alternative
+//!   branches, a
+//!   `del` that may not run, conditional `collect_ignore` entries,
+//!   parametrization of package, session or unknown scope (pytest reorders
+//!   the whole session by it), parametrize arguments pytest refuses (a
+//!   `scope` other than its five names, an `indirect` that is neither a
+//!   boolean nor a sequence of the argument names, `pytest.param` marks
+//!   that are a set, which isn't hashable, or hold something that is surely
+//!   no mark), `pytest.skip` or `pytest.importorskip` run while the
+//!   module or a conftest in scope is imported, and whatever pytest reports
+//!   as a collection error. The static guess keeps the unparametrized id
+//!   with `Partial` certainty. Hooks that only mark or deselect
+//!   (`pytest_collection_modifyitems`, unless its module makes items: see
+//!   "Tests a `pytest_collection_modifyitems` adds" below;
+//!   `pytest_itemcollected`), decorators of well-known libraries that keep
+//!   the test (Hypothesis, `flaky`), unread `pytestmark` entries of
+//!   unittest classes (parametrize doesn't apply there), fixtures imported
+//!   from modules that aren't project files and `-p NAME` or
+//!   `PYTEST_PLUGINS` plugins aye can't read (neither pytest's own nor
+//!   project modules: they may mark, deselect or parametrize anything) keep
+//!   their ids but make the case `Partial`.
+//! - **`pytest_plugins` in a non-top-level conftest fails its directory**,
+//!   as `_check_non_top_pytest_plugins` makes pytest fail it: a conftest
+//!   outside pytest's initial conftests (those of the collection arguments'
+//!   directories, their `test*` subdirectories and above; see
+//!   [`Recognizer::roots`]) that surely defines `pytest_plugins` (a plain
+//!   top-level assignment, never deleted) gives the tests below it no cases
+//!   and one `collection-error` diagnostic on its directory, with pytest's
+//!   message, unless `--pyargs` is given. A definition aye isn't sure of is
+//!   left alone, and so is a directory holding no test file: the
+//!   front-end starts from the user's paths, so it fails such a directory
+//!   there as pytest would in the user's run.
+//! - **What may change which tests exist** (Core decision 5: whatever aye
+//!   can't prove is refined, and its guess is `Partial`, never `Exact`).
+//!   Refined, besides the causes above:
+//!   - a class whose tests may be added or removed: one handed to code aye
+//!     can't follow (passed to a call, iterated over, held by a name whose
+//!     attributes are set, `setattr`, `del K.attr`, a method called on it;
+//!     the escape analysis, which doesn't count `super(K, …)`,
+//!     reads, or the module's own `K.attr = …` statements), one holding a
+//!     value when the module defines a `__set_name__`, one whose class or
+//!     base the module sets a test name, `pytestmark`, `runTest` or a dunder
+//!     on (`__bases__`, `__init__`; not `__doc__`, `__name__`,
+//!     `__qualname__`, `__module__`); its cases are `Partial`. A non-test
+//!     class with test methods handed on may get `__test__`;
+//!   - a test function handed to code aye can't follow (`mark(test)`,
+//!     `disable(test)`, `vars(test)[…] = …`, `TestK.test_a` handed on):
+//!     its marks or `__test__` may change; its case is `Partial`;
+//!   - a value bound by a call whatever its name, when the callee may make
+//!     a class: `type(…)` with three arguments, `types.new_class`, and
+//!     functions (or lambdas, or methods of the module's classes) of the
+//!     module or of project files whose bodies hold a class statement,
+//!     `type(…)`, `new_class` or `__test__`. Under a test function's name,
+//!     every call but a builtin that returns data or a class of the module
+//!     whose instances aren't callable (no `__new__`, `__call__`,
+//!     metaclass or unknown base) may make a function (`functools.partial`,
+//!     `update_wrapper`, a capitalized factory);
+//!   - names imported from project files (or bound to them) whose
+//!     `__test__` may be true (a class body setting it to anything but
+//!     `False`, a project base that does, or the module's `name.__test__ =
+//!     …`), and classes inheriting from them;
+//!   - a non-test class whose bases from project files are no unittest case
+//!     but whose other bases make it one or set `__test__` (pytest collects
+//!     it); its guess, from the bases aye reads, is `Partial`;
+//!   - names a function that runs at import binds or deletes through
+//!     `global` (unless a non-test name is bound to a literal); their cases
+//!     are `Partial`;
+//!   - test names defined, and `del`s, in a `with` body after a statement
+//!     that may raise (any context manager may swallow it, as
+//!     `contextlib.suppress` does), as in a `try` body;
+//!   - `from unittest import *` (it binds `FunctionTestCase`, which pytest
+//!     collects);
+//!   - module-level code that surely or may raise: a division of number
+//!     literals by zero, a `raise` statement (`unittest.SkipTest` skips the
+//!     module), an `assert` of a false literal.
+//!
+//!   `__test__` is read along the MRO from class bodies and from the
+//!   module's own `K.__test__ = <literal>` statements, which win over the
+//!   body's; a conditional or computed one is left to pytest. Private names
+//!   in class bodies are mangled as Python stores them (`__x` in `K` is
+//!   `_K__x`), which custom `python_functions`/`python_classes` globs may
+//!   match. A reason that holds for the whole module (it may raise or skip
+//!   itself at import, star imports, reflection, collection hooks, plugins
+//!   aye can't read, a `collect_ignore` that may exclude it) makes every
+//!   case of its guess `Partial`. Reasons name what implements a hook: "a
+//!   conftest.py (in scope)", "a -p plugin", "a `PYTEST_PLUGINS` plugin",
+//!   "a plugin a conftest.py loads". Known gaps: descriptors defined in
+//!   other modules, factories from installed packages, classes taken out
+//!   of containers (`A = CASES[0]`), and changes made by other modules.
+//! - **Diagnostics**: `class-has-init` (pytest's collection warning),
+//!   `duplicate-definition` (a test name bound twice in one namespace,
+//!   outside exclusive branches and with no `del` between; the last
+//!   definition is the one collected, at the position of the first, as
+//!   Python's dicts keep it), and `collection-error` for a non-top-level
+//!   `pytest_plugins`. A generator test is pytest's collection error too,
+//!   but it is left to refinement, so it is reported once, as pytest
+//!   reports it.
+//!
+//! [`Recognizer::roots`]: aye_adapter::Recognizer::roots
 
 mod case;
 mod class;

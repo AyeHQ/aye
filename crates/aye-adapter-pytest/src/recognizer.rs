@@ -146,7 +146,8 @@ impl Recognizer for PytestRecognizer {
         }
     }
 
-    /// The static prediction ([`Self::predict`]).
+    /// The static prediction: what pytest collects from `file`, predicted
+    /// without importing anything.
     fn recognize(
         &self,
         file: &SourceFile<'_>,
@@ -273,7 +274,7 @@ impl Recognizer for NativeRecognizer {
     }
 
     /// The pytest adapter's context (see [`PytestRecognizer`]'s), plus
-    /// [`NativeContext`].
+    /// [`NativeContext`](crate::context::NativeContext).
     fn context(&self) -> AdapterContext {
         AdapterContext::of(self.context.get_or_init(|| PytestContext {
             native: Some(native_context(self.inner.config())),

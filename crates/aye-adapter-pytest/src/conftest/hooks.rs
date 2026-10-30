@@ -2,6 +2,23 @@
 //! a file below their conftest has, those pytest calls for the whole
 //! session, those that only mark; and whether a module's
 //! `pytest_collection_modifyitems` makes items.
+//!
+//! Decided (fourth round: configuration, conftests, fixtures and imports),
+//! October 2026:
+//! - **Tests a `pytest_collection_modifyitems` adds** (finding C16;
+//!   `Function.from_parent(…)` in the hook) are listed, as `pytest --co`
+//!   lists them: when a module that implements the hook (a conftest of
+//!   the project, a plugin it or a test module loads, a `-p` or
+//!   `PYTEST_PLUGINS` plugin) makes items (`from_parent` in the hook's
+//!   body, or in a function or class of its module the hook names; in the
+//!   module at all when the hook isn't a plain function), every test file
+//!   is refined, its static cases `Partial`, since the hook gets the whole
+//!   session's items. A hook that only marks, reorders or deselects keeps the
+//!   ids, and so does one whose module makes collectors elsewhere.
+//!   Known gaps: a hook that makes items through a function of another
+//!   module, or adds copies (`copy.copy(item)`), and an added test's id
+//!   named on the command line, which pytest can't find (its `not found`,
+//!   exit 4), aye runs.
 
 use std::collections::HashSet;
 

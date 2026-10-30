@@ -1,5 +1,47 @@
 //! `@pytest.mark.parametrize` and `pytest.param`, read as
 //! `_pytest/mark/structures.py` reads them.
+//!
+//! Decided (implementation, October 2026), each revisable until 0.1.0:
+//! - **Static values.** Ids are computed from literals (strings with any
+//!   escapes, bytes, ints in any base, floats and complex numbers printed as
+//!   Python prints them, booleans, `None`), unary minus, `range(...)` and
+//!   `float("inf")`-style calls, `re.compile(...)` of patterns known to
+//!   compile, lambdas (`<lambda>`) and generators (`<genexpr>`), builtins
+//!   and classes or functions of the module (their `__name__`, unless
+//!   something may rename them), and module or class constants bound
+//!   unconditionally before use that an escape analysis of the whole module
+//!   shows nothing can change (`CASES = [...]`, concatenations and `*`
+//!   splats of such lists; a `del` in a class body falls through to the
+//!   module's name; see aye-python-semantic's `namespace`). Dict
+//!   argvalues keep one entry per key, as Python compares keys. Containers,
+//!   and instances of well-known classes without a `__name__`
+//!   (`Decimal(...)`, `Path(...)`, `np.array(...)`), make pytest fall back
+//!   to `argname + index`, which is known statically too, but only for
+//!   values aye knows are built: displays whose parts are known values,
+//!   bound names or attributes of imported modules (`[*1]`, `{[1]: 2}` and
+//!   `{**1}` raise), and calls whose arguments are of the types and values
+//!   the callable accepts (`range(0, 3, 0)`, `Decimal("x")`, `Path(1)`,
+//!   `frozenset([[1]])`, `dict([1])` raise; pandas' constructors are never
+//!   read). A call to one of these with literal arguments aye can't confirm
+//!   anywhere in the module's import-time code (`X = range(0, 3, 0)`)
+//!   refines the file. Module attributes (`math.pi`) are not read: another
+//!   module of the session may change them. Values that depend on a module
+//!   the module or a support file in scope may change (`re.compile = …`,
+//!   `setattr(builtins, "range", …)`, `vars(re)[…]`, `sys.modules["re"].x =
+//!   …`, a module handed to code aye can't follow, a `global` rebinding of
+//!   the name) are left to pytest. Left to refinement too: values whose id
+//!   depends on the Python version (complex sums whose zero's sign changed
+//!   in 3.14, digits `str.isdigit` changed on, builtins only some versions
+//!   have), strings holding U+FFFD or lone surrogates, ints over 640
+//!   digits, and `float()` or `re.compile()` calls that may raise. Known
+//!   gaps: changes made by another test module of the session (pytest
+//!   imports them all into one process), by installed plugins or
+//!   `sitecustomize`, through a module held under another name by a module
+//!   (`helpers.m.x = …` for `import math as m`), and module-level statements
+//!   that raise for other reasons (a missing import, a failing call) are not
+//!   seen statically: the run reports pytest's collection error. A value
+//!   aye doesn't read under an explicit id (`pytest.param(make(), id="x")`)
+//!   is taken as built.
 
 use aye_adapter::ast::{Expr, ExprCall};
 use aye_python_semantic::eval::{Elem, Value, deref};

@@ -1,6 +1,46 @@
 //! What walking pytest's session once finds ([`Scan`]): the session-wide
 //! hooks of its conftests and the plugins they and test modules load, what
 //! they put on `sys.path`, and the module names test directories share.
+//!
+//! Decided (implementation, October 2026), each revisable until 0.1.0:
+//! - **The project scan covers what pytest's session can load**: the
+//!   directories the run collects (the paths given, else `testpaths` or the
+//!   current directory) and the conftests above them up to the root, not the
+//!   whole project. pytest loads no other conftest, so hooks, `sys.path`
+//!   changes and colliding module names elsewhere can't matter, and a run
+//!   of one directory of a large repository doesn't walk all of it.
+//!
+//! Decided (fourth round: configuration, conftests, fixtures and imports),
+//! October 2026:
+//! - **`sys.path` is read where it can be.** A support module's code that
+//!   runs while pytest collects (at import, and in `pytest_*` hooks) may
+//!   put directories on `sys.path` (`insert`, `append`, `extend`, `+=`,
+//!   slice assignment, `site.addsitedir`). Those built from `__file__` and
+//!   literals through `os.path` (`dirname`, `join`, `abspath`, `realpath`,
+//!   `normpath`) and `pathlib` (`Path`, `.parent`, `.parents[n]`, `/`,
+//!   `joinpath`, `resolve`, `absolute`), directly or through a module
+//!   constant, are read, from every conftest of the project (found once by
+//!   walking it), and their modules are project files, as `PYTHONPATH`'s
+//!   are. Others (a relative path, a computed one, a new list) leave
+//!   `sys.path` unknown: then a capitalized name imported from a module
+//!   aye can't find may be a unittest case (pytest collects one whatever
+//!   its name), and a fixture name no readable definition has (pytest's own
+//!   aside) may come from a plugin a conftest in scope names but aye can't
+//!   find: both refine. What a test module puts on `sys.path` itself counts
+//!   for its own imports. Without such doubt, a module aye can't find is an
+//!   installed package's, whose classes are unittest cases only when named
+//!   like one (`…Test`, `…Tests`, `…TestCase`, `…TestCases`).
+//! - **Helpers that collide across test directories.** With `prepend` or
+//!   `append`, pytest puts each test module's package base on `sys.path`
+//!   and Python keeps the first module it imports under a name: a test
+//!   module that imports (absolutely) a module its own base holds and
+//!   another test directory's base holds too (`helpers.py` in two
+//!   rootdir-inserted directories) gets whichever pytest imported first.
+//!   Such a module is refined (its static cases `Partial`), and its first
+//!   affinity key is `import:NAME`, NAME being that module's name, so that
+//!   the modules sharing it run in one session, as pytest runs them. The
+//!   context's `colliding_modules` lists the names, for the front-end to
+//!   give the files it lists the same key.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};

@@ -1,4 +1,11 @@
 //! `--pyargs`: where pytest finds a dotted name its arguments give.
+//!
+//! Decided (fourth round: configuration, conftests, fixtures and imports),
+//! October 2026:
+//! - **`--pyargs` testpaths are looked up on `sys.path`** as pytest's
+//!   `search_pypath` does (`pythonpath` first, then the rootdir,
+//!   `PYTHONPATH` and `src`): a module's file or a regular package's
+//!   directory, else the entry as a path.
 
 use std::path::{Path, PathBuf};
 

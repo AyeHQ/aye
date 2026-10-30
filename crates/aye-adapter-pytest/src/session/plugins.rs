@@ -1,5 +1,13 @@
 //! The plugins of pytest's session: pytest's own, and what implements a
 //! hook, as the refinement reasons say it.
+//!
+//! Decided (fourth round: configuration, conftests, fixtures and imports),
+//! October 2026:
+//! - **`PYTEST_PLUGINS`** names plugins of the whole session, imported
+//!   after the `-p` ones and blocked by a `-p no:NAME`: project modules
+//!   there count as `-p` ones do, others make every case `Partial`, and
+//!   the context names them as `-p NAME` arguments (`env_plugins`), so the
+//!   refinement cache's rule for plugins loaded by name covers them.
 
 /// pytest's `builtin_plugins`, and the plugins merged into pytest that it
 /// refuses to register (`DEPRECATED_EXTERNAL_PLUGINS`): `-p NAME` for these

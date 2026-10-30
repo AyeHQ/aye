@@ -1,6 +1,37 @@
 //! What a support module's fixtures are, as far as parametrization is
 //! concerned: each name's definitions, read as pytest's `parsefactories`
 //! registers them, and what each requests.
+//!
+//! Decided (fourth round: configuration, conftests, fixtures and imports),
+//! October 2026:
+//! - **Fixtures are read from every binding that may be the final one.**
+//!   For each name of a module, class or support namespace: the final
+//!   binding, the bindings in exclusive branches before it (`if`/`else`,
+//!   `try`/`except`, `match`), and the previous one when the final one may
+//!   not run (`if` without `else`, a loop, a `try` body after a statement
+//!   that may raise). Merged, the fixture is parametrized if any of them
+//!   is, requests what any requests, and is `conditional`: it doesn't hide
+//!   the definitions further out (a conftest's parametrized one stays in
+//!   the closure). Besides `@pytest.fixture` functions, the call forms
+//!   `fixture(…)(function)` and `fixture(function, …)` are read (name,
+//!   parameters, scope, autouse and what the function requests) and an
+//!   alias of a fixture (`alias = some_fixture`) is that fixture under its
+//!   name, as pytest's `parsefactories` registers it. A name bound in a way
+//!   aye can't read that may make a fixture (a decorator or a call it can't
+//!   see through, `reg = register(reg)`, `held = _Holder.held`, unpacking)
+//!   is an opaque fixture, and a computed `name=` (or a support module that
+//!   binds names at runtime: `globals()`, `vars()`, `exec`, `setattr` on
+//!   `sys.modules[…]`) makes one under any name. A test whose closure
+//!   reaches an opaque fixture is refined, as one reaching a parametrized
+//!   one is. A call to a class of the module that makes its own instances
+//!   (unconditional and undecorated, with no metaclass, no `__new__`,
+//!   nothing that changes it afterwards, and only such classes or `object`
+//!   as bases), to a builtin, or to a function of a package that holds no
+//!   tests makes no fixture: pytest registers only objects whose type is
+//!   exactly its `FixtureFunctionDefinition`. A capitalized callee is not
+//!   taken for a class (`backend = Param("a", "b")` may return a
+//!   parametrized fixture), as for test names above; this was decided at
+//!   integration, where the two rounds' rules differed, for Core decision 5.
 
 use aye_adapter::ast::{Expr, ExprCall, Stmt, StmtFunctionDef};
 use aye_adapter::{Ranged, TextSize};
@@ -202,8 +233,8 @@ fn is_fixture_decorator(lookup: Lookup<'_, '_>, func: &Expr) -> bool {
 /// calls and aliases of fixtures (`alias = fixture_function`); names bound
 /// in ways aye can't read that may make a fixture (a decorator or a call
 /// it can't see through, unpacking) are `opaque`. `guarded` holds where the
-/// body's statements that may not run start ([`crate::module`]'s
-/// `guarded_by_try`).
+/// body's statements that may not run start
+/// ([`guarded_by_try`](aye_python_semantic::flow::guarded_by_try)).
 pub(crate) fn fixture_of<'a>(
     lookup: Lookup<'_, 'a>,
     ns: &Namespace<'a>,

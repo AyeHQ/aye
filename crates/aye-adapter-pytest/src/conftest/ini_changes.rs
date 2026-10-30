@@ -1,5 +1,27 @@
 //! What a support module's code changes in pytest's configuration that
 //! collection reads.
+//!
+//! Decided (fourth round: configuration, conftests, fixtures and imports),
+//! October 2026:
+//! - **A support module that changes collection's ini values refines the
+//!   files below it.** pytest calls a conftest's `pytest_configure` when it
+//!   registers it, before collecting the files below it, so what its code
+//!   (any hook, or the module itself) does to `config` holds there:
+//!   `addinivalue_line` of `python_functions`, `python_classes`,
+//!   `usefixtures`, `collect_imported_tests`, `empty_parameter_set_mark`,
+//!   `strict`, `strict_parametrization_ids`, the id-escaping option or
+//!   `consider_namespace_packages` (or of a name aye can't read), a
+//!   mutation of `config.getini(…)` of one of them, a write to the ini
+//!   cache (`_inicache`, `inicfg`), or to `config.option`'s `ignore`,
+//!   `ignore_glob`, `deselect`, `pyargs`, `importmode`, `noconftest`,
+//!   `collect_in_virtualenv`, `confcutdir` (`setattr` included). Those
+//!   files are refined and their static cases are `Partial`. A literal
+//!   `python_files` pattern is read instead: files below the conftest that
+//!   match it are test modules too (`claim`). Known gaps: a conftest that
+//!   pytest loads earlier but that is not among the file's (a sibling
+//!   directory's, collected first), a computed `python_files` pattern
+//!   (which can't claim files) or one a plugin the conftest loads adds,
+//!   `norecursedirs` additions, and a hook imported from another module.
 
 use aye_adapter::ast::visitor::{self, Visitor};
 use aye_adapter::ast::{Expr, ModModule, Stmt};

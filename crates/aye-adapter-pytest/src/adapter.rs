@@ -28,6 +28,15 @@
 //! - **What it can't run fails loudly**: the files pytest's own doctest
 //!   plugin would collect (a run without the doctest adapter) get a
 //!   `usage-error` naming the fix, rather than going missing.
+//!
+//! Decided (C5, October 2026): the adapter's executor is aye's engine
+//! with the pytest front-end ([`Pytest`]). The executor that drove a real
+//! pytest session per batch, and what only fed it (its filtered options as
+//! separate vectors and a `PYTEST_ADDOPTS` string, its `-p no:` lists, the
+//! context keys only it read: `addopts`, `pytest_addopts_env`,
+//! `framework_args`, `doctests`, `adds_items`, `single_session`), are
+//! gone. What it did that pytest users rely on is the front-end's and the
+//! engine's now; their modules say how.
 
 use aye_adapter::{Adapter, AdapterError, Project, Recognizer};
 use aye_events::AdapterName;
@@ -80,7 +89,7 @@ impl Adapter for Pytest {
 
     /// [`Pytest::prepare`]; without the doctest adapter, the files pytest's
     /// doctest plugin would collect are claimed, and refused
-    /// ([`NativeRecognizer::recognize`]).
+    /// (`NativeRecognizer::recognize`).
     fn prepare_among(
         &self,
         project: &Project<'_>,

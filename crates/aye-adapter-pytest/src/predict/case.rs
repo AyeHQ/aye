@@ -1,5 +1,17 @@
 //! An item, as pytest's `Function` holds it, made a case: its id, span,
 //! tags, keywords, timeout and affinity.
+//!
+//! Decided (implementation, October 2026), each revisable until 0.1.0:
+//! - **Tags** are mark names in pytest's `iter_markers` order (the function's
+//!   decorators, its parameter set's marks, then each class's, innermost
+//!   first, then the module's), deduplicated. **Keywords** are the names
+//!   pytest's `-k` matches: directories below the rootdir, the file name,
+//!   class names, the test name with and without parameters, the names in
+//!   the function's `__dict__` (`pytestmark` after mark decorators,
+//!   `__wrapped__` and `patchings` from other decorators, attributes the
+//!   module sets), and the tags. `timeout` comes from the closest
+//!   `@pytest.mark.timeout`, as pytest-timeout reads it; no other mark maps
+//!   onto case metadata.
 
 use aye_adapter::TextRange;
 use aye_events::{AffinityKey, Case, Certainty};

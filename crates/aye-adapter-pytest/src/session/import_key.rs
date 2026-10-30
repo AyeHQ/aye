@@ -1,5 +1,16 @@
 //! The name pytest imports a test file under, as its cases' first
 //! affinity key.
+//!
+//! Decided (implementation, October 2026), each revisable until 0.1.0:
+//! - **The first affinity key is the module's import name** (`import:NAME`),
+//!   as pytest computes it for the import mode in effect: the dotted name
+//!   from the outermost package for `prepend` and `append` (the basename
+//!   for a file outside packages), the rootdir-relative name for
+//!   `importlib` outside packages, and the stem with
+//!   `consider_namespace_packages`. The scheduler groups cases by their
+//!   first key, so files pytest can't import in one session (its "import
+//!   file mismatch") share a batch and the clash is reported as pytest
+//!   reports it, whatever the worker count. The file and its classes follow.
 
 use std::path::Path;
 

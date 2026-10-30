@@ -1,5 +1,40 @@
 //! pytest's own doctest plugin, in a run without the doctest adapter:
 //! what it collects, and what the recognizer makes of it.
+//!
+//! Decided (fourth round: configuration, conftests, fixtures and imports),
+//! October 2026:
+//! - **pytest's own doctests, without the doctest adapter** (finding F21).
+//!   [`Pytest::prepare_among`] tells whether the run uses the doctest
+//!   adapter; [`Pytest::prepare`] assumes it does. When it doesn't
+//!   (`[tool.aye] adapters = ["pytest"]`), pytest's doctest plugin would
+//!   collect doctests ([`PytestRecognizer::with_pytest_doctests`]), unless
+//!   `-p no:doctest` blocks it: the front-end gets the doctest options as
+//!   given, and the files the plugin collects (`_pytest/doctest.py`'s
+//!   `pytest_collect_file`) are claimed as test files, which the pytest
+//!   front-end refuses with a `usage-error` naming the fix (add the
+//!   doctest adapter): aye's engine doesn't run pytest's own doctests
+//!   ([`Pytest`]), and a test is never silently dropped. With
+//!   `--doctest-modules`, every `.py` file but `__main__.py` and a
+//!   `setup.py` mentioning setuptools or distutils; text files matching
+//!   `--doctest-glob` (pytest appends them across addopts,
+//!   `PYTEST_ADDOPTS` and the arguments after `--`), else `test*.txt`,
+//!   which pytest collects even without any doctest option, and a `.txt`
+//!   or `.rst` file named on the command line; `--ignore` and the other
+//!   ignore rules hold, but not for named files. Their doctests are
+//!   refined, never guessed (pytest's parser, `doctest_encoding` and the
+//!   module's import decide): a module only the doctest plugin collects
+//!   (`m.py`, not matching `python_files`) gives no static case, a test
+//!   module whose text holds `>>>`, `__test__` or `__doc__` is refined
+//!   with its static cases `Partial` (others keep theirs: a docstring with
+//!   examples holds a prompt), a text file is refined unless, read as
+//!   UTF-8, it holds no `>>>` (then it has no test). `aye config` shows a
+//!   `doctests` setting saying who would collect them.
+//!   Known gap: doctests of a test module whose text holds none of those
+//!   (a docstring built from escapes).
+//!
+//! [`Pytest`]: crate::Pytest
+//! [`Pytest::prepare`]: aye_adapter::Adapter::prepare
+//! [`Pytest::prepare_among`]: aye_adapter::Adapter::prepare_among
 
 use aye_adapter::{Recognition, SourceFile};
 use aye_pytest::doctest::{self, DoctestFile};

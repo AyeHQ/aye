@@ -2,6 +2,33 @@
 //! configuration, the session's plugins, the conftests above the project
 //! root, the collection arguments and their initial conftests, and where
 //! project modules are imported from.
+//!
+//! Decided (implementation, October 2026), each revisable until 0.1.0:
+//! - **pytest's options.** addopts, `PYTEST_ADDOPTS` and the arguments
+//!   after `--` ([`Project::framework_args`]) are read in pytest's order,
+//!   the last one winning; the latter two first, as pytest reads them to
+//!   find the config (their `-c`, `--rootdir` and `-o`, which may replace
+//!   `addopts`). `-o`, `--strict`, `--ignore`, `--ignore-glob`,
+//!   `--deselect`, `--confcutdir`, `--noconftest`,
+//!   `--collect-in-virtualenv`, `--pyargs`, `--import-mode`, `-p`, `-k` and
+//!   `-m` are read statically from all three. `--deselect` drops no case
+//!   here: the context names its prefixes as prefixes of aye's ids
+//!   (`deselect`), which the binary applies in selection, counting what
+//!   they drop as deselected.
+//!   pytest-xdist's options, `-x`, `--exitfirst`, `--maxfail`, the JUnit
+//!   options (`--junitxml`/`--junit-xml`, `--junitprefix`/`--junit-prefix`)
+//!   and pytest's doctest options (`--doctest-modules`, `--doctest-glob`,
+//!   `--doctest-report`, `--doctest-continue-on-failure`,
+//!   `--doctest-ignore-import-errors`) are taken out of all three: the
+//!   runner runs the workers and counts `maxfail` across them, aye writes
+//!   the JUnit report from the event stream, and the doctest adapter runs
+//!   doctests; without the doctest adapter in the run, the doctest options
+//!   stay (see "pytest's own doctests" below). The arguments after `--`
+//!   also lose `-o addopts=…`, whose value is `addopts`. What is left, in
+//!   pytest's order, is [`PytestConfig::args`], the options the front-end
+//!   parses (the context's `native.args`); [`Recognizer::context`] carries
+//!   what was lifted out (not the doctest options, which the doctest
+//!   adapter reads itself).
 
 pub(crate) mod import_key;
 pub(crate) mod plugins;
