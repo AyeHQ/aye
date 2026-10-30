@@ -70,11 +70,10 @@ fn signal_name(signal: i32) -> Option<&'static str> {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn exit_statuses_are_described() {
         use std::os::unix::process::ExitStatusExt;
