@@ -1,0 +1,636 @@
+//! `@pytest.mark.parametrize` and `pytest.param`, read as
+//! `_pytest/mark/structures.py` reads them.
+//!
+//! Decided (implementation, October 2026), each revisable until 0.1.0:
+//! - **Static values.** Ids are computed from literals (strings with any
+//!   escapes, bytes, ints in any base, floats and complex numbers printed as
+//!   Python prints them, booleans, `None`), unary minus, `range(...)` and
+//!   `float("inf")`-style calls, `re.compile(...)` of patterns known to
+//!   compile, lambdas (`<lambda>`) and generators (`<genexpr>`), builtins
+//!   and classes or functions of the module (their `__name__`, unless
+//!   something may rename them), and module or class constants bound
+//!   unconditionally before use that an escape analysis of the whole module
+//!   shows nothing can change (`CASES = [...]`, concatenations and `*`
+//!   splats of such lists; a `del` in a class body falls through to the
+//!   module's name; see aye-python-semantic's `namespace`). Dict
+//!   argvalues keep one entry per key, as Python compares keys. Containers,
+//!   and instances of well-known classes without a `__name__`
+//!   (`Decimal(...)`, `Path(...)`, `np.array(...)`), make pytest fall back
+//!   to `argname + index`, which is known statically too, but only for
+//!   values aye knows are built: displays whose parts are known values,
+//!   bound names or attributes of imported modules (`[*1]`, `{[1]: 2}` and
+//!   `{**1}` raise), and calls whose arguments are of the types and values
+//!   the callable accepts (`range(0, 3, 0)`, `Decimal("x")`, `Path(1)`,
+//!   `frozenset([[1]])`, `dict([1])` raise; pandas' constructors are never
+//!   read). A call to one of these with literal arguments aye can't confirm
+//!   anywhere in the module's import-time code (`X = range(0, 3, 0)`)
+//!   refines the file. Module attributes (`math.pi`) are not read: another
+//!   module of the session may change them. Values that depend on a module
+//!   the module or a support file in scope may change (`re.compile = …`,
+//!   `setattr(builtins, "range", …)`, `vars(re)[…]`, `sys.modules["re"].x =
+//!   …`, a module handed to code aye can't follow, a `global` rebinding of
+//!   the name) are left to pytest. Left to refinement too: values whose id
+//!   depends on the Python version (complex sums whose zero's sign changed
+//!   in 3.14, digits `str.isdigit` changed on, builtins only some versions
+//!   have), strings holding U+FFFD or lone surrogates, ints over 640
+//!   digits, and `float()` or `re.compile()` calls that may raise. Known
+//!   gaps: changes made by another test module of the session (pytest
+//!   imports them all into one process), by installed plugins or
+//!   `sitecustomize`, through a module held under another name by a module
+//!   (`helpers.m.x = …` for `import math as m`), and module-level statements
+//!   that raise for other reasons (a missing import, a failing call) are not
+//!   seen statically: the run reports pytest's collection error. A value
+//!   aye doesn't read under an explicit id (`pytest.param(make(), id="x")`)
+//!   is taken as built.
+
+use std::cmp::Ordering;
+
+use aye_adapter::ast::{Expr, ExprCall};
+use aye_events::Scope;
+use aye_python_semantic::eval::{Elem, Value, deref};
+use aye_python_semantic::resolve::Lookup;
+
+use super::ids::{IdItem, ParamSet};
+use super::mark::{Mark, mark, timeout};
+use super::pytestmark::{MarkList, maybe_mark};
+
+/// What the empty parameter set becomes (`empty_parameter_set_mark`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EmptyMark {
+    Skip,
+    Xfail,
+    FailAtCollect,
+    Invalid(String),
+}
+
+impl EmptyMark {
+    pub(crate) fn parse(value: &str) -> Self {
+        match value {
+            "" | "skip" => Self::Skip,
+            "xfail" => Self::Xfail,
+            "fail_at_collect" => Self::FailAtCollect,
+            other => Self::Invalid(other.to_string()),
+        }
+    }
+}
+
+/// The timeout a parameter set's marks set.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum SetTimeout {
+    /// No `timeout` mark.
+    Unmarked,
+    Seconds(f64),
+    /// A `timeout` mark whose value is not literal.
+    Unreadable,
+}
+
+impl SetTimeout {
+    fn of(mark: &Mark<'_, '_>) -> Self {
+        timeout(mark).map_or(Self::Unreadable, Self::Seconds)
+    }
+}
+
+/// A `parametrize` mark, read.
+#[derive(Debug, Clone)]
+pub(crate) struct Parametrize {
+    pub argnames: Vec<String>,
+    pub sets: Vec<ParamSet>,
+    pub ids: Option<Vec<Option<IdItem>>>,
+    /// Argument names passed indirectly (to fixtures).
+    pub indirect: Vec<String>,
+    /// Some `pytest.param(marks=…)` could not be read.
+    pub unknown_marks: bool,
+    /// Per parameter set, what its first `timeout` mark sets.
+    pub timeouts: Vec<SetTimeout>,
+    /// `scope=`, when given (and not `None`).
+    pub scope: Option<FixtureScope>,
+}
+
+/// A fixture's or a parametrization's scope: one of pytest's five, or
+/// none aye can read (`None`; never [`Scope::Other`]). It orders narrowest
+/// first, the opposite of [`Scope`], and the scope aye can't read last: the
+/// narrowest of several is their least.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct FixtureScope(Option<Scope>);
+
+impl FixtureScope {
+    pub(crate) const FUNCTION: Self = Self(Some(Scope::Function));
+    pub(crate) const CLASS: Self = Self(Some(Scope::Class));
+    pub(crate) const MODULE: Self = Self(Some(Scope::Module));
+    /// Not a literal aye can read.
+    pub(crate) const UNKNOWN: Self = Self(None);
+
+    /// The scope an expression names: a literal of one of pytest's five
+    /// names, else [`Self::UNKNOWN`].
+    pub(crate) fn of<'a>(lookup: Lookup<'_, 'a>, expr: &'a Expr) -> Self {
+        Self(
+            lookup
+                .string(expr)
+                .map(|name| Scope::from(name.as_str()))
+                .filter(|scope| Scope::ALL.contains(scope)),
+        )
+    }
+
+    /// Whether aye reads it.
+    pub(crate) fn is_known(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Whether pytest reorders the tests sharing a parameter of this scope
+    /// within their file (`reorder_items`): class and module.
+    pub(crate) fn reorders_its_file(&self) -> bool {
+        matches!(self.0, Some(Scope::Class | Scope::Module))
+    }
+
+    /// Whether pytest reorders the tests sharing a parameter of this scope
+    /// across the session's files, as far as aye can tell: package, session,
+    /// or a scope it can't read.
+    pub(crate) fn reorders_the_session(&self) -> bool {
+        matches!(self.0, Some(Scope::Package | Scope::Session) | None)
+    }
+}
+
+/// Narrowest first, then the scope aye can't read: [`Scope`]'s order
+/// (widest first) reversed, `None` after them all.
+impl Ord for FixtureScope {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.0.cmp(&self.0)
+    }
+}
+
+impl PartialOrd for FixtureScope {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Parametrize {
+    /// Argument names parametrized directly (not through fixtures).
+    pub(crate) fn direct(&self) -> impl Iterator<Item = &String> {
+        self.argnames.iter().filter(|n| !self.indirect.contains(n))
+    }
+}
+
+/// The arguments of a call, matched to a signature the way Python does.
+struct Args<'a> {
+    slots: Vec<Option<&'a Expr>>,
+}
+
+fn bind_args<'a>(call: &'a ExprCall, params: &[&str]) -> Result<Args<'a>, String> {
+    let mut slots = vec![None; params.len()];
+    let arguments = &call.arguments;
+    if arguments.args.len() > params.len() {
+        return Err("too many positional arguments".into());
+    }
+    for (slot, arg) in slots.iter_mut().zip(arguments.args.iter()) {
+        if arg.is_starred_expr() {
+            return Err("arguments passed with *".into());
+        }
+        *slot = Some(arg);
+    }
+    for keyword in &arguments.keywords {
+        let Some(name) = &keyword.arg else {
+            return Err("arguments passed with **".into());
+        };
+        let Some(at) = params.iter().position(|p| *p == name.id.as_str()) else {
+            return Err(format!("unexpected keyword argument {}", name.id));
+        };
+        if slots[at].is_some() {
+            return Err(format!("argument {} given twice", name.id));
+        }
+        slots[at] = Some(&keyword.value);
+    }
+    Ok(Args { slots })
+}
+
+/// Read a `parametrize` mark. `Err` holds why pytest's ids for it can only
+/// be known at runtime (or why pytest would refuse it).
+pub(crate) fn parametrize(mark: &Mark<'_, '_>, empty: &EmptyMark) -> Result<Parametrize, String> {
+    let Some((call, lookup)) = mark.call else {
+        return Err("parametrize without arguments".into());
+    };
+    let args = bind_args(call, &["argnames", "argvalues", "indirect", "ids", "scope"])?;
+    let (Some(argnames), Some(argvalues)) = (args.slots[0], args.slots[1]) else {
+        return Err("parametrize without argnames or argvalues".into());
+    };
+
+    let (argnames, force_tuple) = if let Some(text) = lookup.string(argnames) {
+        let names: Vec<String> = text
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        let force = names.len() == 1 && !text.trim_end().ends_with(',');
+        (names, force)
+    } else {
+        let elems = lookup
+            .sequence(argnames)
+            .map_err(|_| "parametrize argnames are not literal".to_string())?;
+        let mut names = Vec::new();
+        for elem in elems {
+            match elem_value(&elem) {
+                Value::Str(name) => names.push(name),
+                _ => return Err("parametrize argnames are not literal".into()),
+            }
+        }
+        (names, false)
+    };
+    if argnames.iter().any(|n| n == "request") {
+        return Err("'request' is a reserved name for parametrize".into());
+    }
+
+    let elems = lookup
+        .sequence(argvalues)
+        .map_err(|_| "parametrize argvalues are not literal".to_string())?;
+    let mut sets = Vec::with_capacity(elems.len());
+    let mut timeouts = Vec::with_capacity(elems.len());
+    let mut unknown_marks = false;
+    for elem in &elems {
+        let set = match elem {
+            Elem::Expr(expr, lk) => {
+                let (expr, lk) = deref(*lk, expr);
+                if let Some(param) = as_param(lk, expr) {
+                    let (set, unknown, timeout) = param_set(lk, param)?;
+                    unknown_marks |= unknown;
+                    timeouts.push(timeout);
+                    set
+                } else if force_tuple {
+                    timeouts.push(SetTimeout::Unmarked);
+                    ParamSet {
+                        values: vec![lk.value(expr).unwrap_or(Value::Unknown)],
+                        id: None,
+                        marks: Vec::new(),
+                    }
+                } else {
+                    timeouts.push(SetTimeout::Unmarked);
+                    let values = lk
+                        .sequence(expr)
+                        .map_err(|_| "parametrize argvalues are not literal".to_string())?;
+                    ParamSet {
+                        values: values.iter().map(elem_value).collect(),
+                        id: None,
+                        marks: Vec::new(),
+                    }
+                }
+            }
+            Elem::Value(value) => {
+                timeouts.push(SetTimeout::Unmarked);
+                let values = if force_tuple {
+                    vec![value.clone()]
+                } else {
+                    match value {
+                        Value::Str(text) => {
+                            text.chars().map(|c| Value::Str(c.to_string())).collect()
+                        }
+                        _ => return Err("parametrize argvalues are not sequences".into()),
+                    }
+                };
+                ParamSet {
+                    values,
+                    id: None,
+                    marks: Vec::new(),
+                }
+            }
+        };
+        if set.values.len() != argnames.len() {
+            return Err(format!(
+                "parametrize has {} names but a parameter set with {} values",
+                argnames.len(),
+                set.values.len()
+            ));
+        }
+        sets.push(set);
+    }
+    if sets.is_empty() {
+        let mark = match empty {
+            EmptyMark::Skip => "skip",
+            EmptyMark::Xfail => "xfail",
+            EmptyMark::FailAtCollect => {
+                return Err(
+                    "empty parameter set with empty_parameter_set_mark = fail_at_collect".into(),
+                );
+            }
+            EmptyMark::Invalid(value) => {
+                return Err(format!("unknown empty_parameter_set_mark {value:?}"));
+            }
+        };
+        sets.push(ParamSet {
+            values: vec![Value::Opaque; argnames.len()],
+            id: Some(IdItem::Text("NOTSET".into())),
+            marks: vec![mark.to_string()],
+        });
+        timeouts.push(SetTimeout::Unmarked);
+    }
+
+    let ids = match args.slots[3] {
+        None | Some(Expr::NoneLiteral(_)) => None,
+        Some(expr) => {
+            let elems = lookup
+                .sequence(expr)
+                .map_err(|_| "parametrize ids are computed at runtime".to_string())?;
+            let mut ids = Vec::with_capacity(elems.len());
+            for elem in &elems {
+                ids.push(match elem {
+                    Elem::Value(value) => Some(IdItem::Value(value.clone())),
+                    Elem::Expr(expr, lk) => {
+                        let (expr, lk) = deref(*lk, expr);
+                        if matches!(expr, Expr::NoneLiteral(_)) {
+                            None
+                        } else if is_hidden(lk, expr) {
+                            Some(IdItem::Hidden)
+                        } else {
+                            Some(IdItem::Value(lk.value(expr).unwrap_or(Value::Unknown)))
+                        }
+                    }
+                });
+            }
+            if !ids.is_empty() && ids.len() != sets.len() {
+                return Err(format!(
+                    "{} parameter sets but {} ids",
+                    sets.len(),
+                    ids.len()
+                ));
+            }
+            Some(ids)
+        }
+    };
+
+    let indirect = match args.slots[2] {
+        None => Vec::new(),
+        Some(expr) => indirect_names(lookup, expr, &argnames)?,
+    };
+
+    // `Scope.from_user`: a name other than pytest's five fails collection.
+    let scope = match args.slots[4] {
+        None | Some(Expr::NoneLiteral(_)) => None,
+        Some(expr) => match FixtureScope::of(lookup, expr) {
+            scope if scope.is_known() => Some(scope),
+            unknown => match lookup.string(expr) {
+                Some(name) => {
+                    return Err(format!(
+                        "parametrize() got an unexpected scope value '{name}'"
+                    ));
+                }
+                None => Some(unknown),
+            },
+        },
+    };
+
+    Ok(Parametrize {
+        argnames,
+        sets,
+        ids,
+        indirect,
+        unknown_marks,
+        timeouts,
+        scope,
+    })
+}
+
+/// `indirect=`, as `_resolve_args_directness` reads it: a boolean, or a
+/// sequence (a list, a tuple, a string) of names among `argnames`. Anything
+/// else fails collection, and a value aye can't read may name any of them.
+fn indirect_names<'a>(
+    lookup: Lookup<'_, 'a>,
+    expr: &'a Expr,
+    argnames: &[String],
+) -> Result<Vec<String>, String> {
+    if let Some(flag) = lookup.boolean(expr) {
+        return Ok(if flag { argnames.to_vec() } else { Vec::new() });
+    }
+    let (value, lk) = deref(lookup, expr);
+    if matches!(
+        value,
+        Expr::NoneLiteral(_)
+            | Expr::NumberLiteral(_)
+            | Expr::Dict(_)
+            | Expr::Set(_)
+            | Expr::EllipsisLiteral(_)
+    ) {
+        return Err("parametrize indirect is neither a boolean nor a sequence".into());
+    }
+    let elems = lk
+        .sequence(value)
+        .map_err(|_| "parametrize indirect is not literal".to_string())?;
+    let mut names = Vec::with_capacity(elems.len());
+    for elem in &elems {
+        match elem_value(elem) {
+            Value::Str(name) if argnames.contains(&name) => names.push(name),
+            Value::Str(name) => return Err(format!("indirect fixture '{name}' doesn't exist")),
+            Value::Unknown => return Err("parametrize indirect is not literal".into()),
+            _ => return Err("parametrize indirect names something that is not an argument".into()),
+        }
+    }
+    Ok(names)
+}
+
+fn elem_value(elem: &Elem<'_, '_>) -> Value {
+    match elem {
+        Elem::Value(value) => value.clone(),
+        Elem::Expr(expr, lk) => lk.value(expr).unwrap_or(Value::Unknown),
+    }
+}
+
+fn as_param<'a>(lookup: Lookup<'_, 'a>, expr: &'a Expr) -> Option<&'a ExprCall> {
+    let Expr::Call(call) = expr else {
+        return None;
+    };
+    (lookup.path(&call.func).as_deref() == Some("pytest.param")).then_some(call)
+}
+
+fn is_hidden<'a>(lookup: Lookup<'_, 'a>, expr: &'a Expr) -> bool {
+    lookup.path(expr).as_deref() == Some("pytest.HIDDEN_PARAM")
+}
+
+/// `pytest.param(*values, marks=(), id=None)`: the set, whether some marks
+/// could not be read, and the timeout its marks set.
+fn param_set<'a>(
+    lookup: Lookup<'_, 'a>,
+    call: &'a ExprCall,
+) -> Result<(ParamSet, bool, SetTimeout), String> {
+    let mut values = Vec::new();
+    let mut id = None;
+    let mut marks = Vec::new();
+    let mut unknown = false;
+    let mut set_timeout = SetTimeout::Unmarked;
+    for arg in &call.arguments.args {
+        if arg.is_starred_expr() {
+            return Err("pytest.param values passed with *".into());
+        }
+        values.push(lookup.value(arg).unwrap_or(Value::Unknown));
+    }
+    for keyword in &call.arguments.keywords {
+        let Some(name) = &keyword.arg else {
+            return Err("pytest.param arguments passed with **".into());
+        };
+        let (value, lk) = deref(lookup, &keyword.value);
+        match name.id.as_str() {
+            "id" => {
+                id = if matches!(value, Expr::NoneLiteral(_)) {
+                    None
+                } else if is_hidden(lk, value) {
+                    Some(IdItem::Hidden)
+                } else if let Some(text) = lk.string(value) {
+                    Some(IdItem::Text(text))
+                } else {
+                    return Err("pytest.param id is not a literal string".into());
+                };
+            }
+            "marks" => {
+                let list = param_marks(lk, value)?;
+                if list.marks.iter().any(|m| m.name == "usefixtures") {
+                    return Err("pytest.param cannot add usefixtures".into());
+                }
+                unknown |= list.unknown;
+                if let Some(mark) = list.marks.iter().find(|m| m.name == "timeout") {
+                    set_timeout = SetTimeout::of(mark);
+                }
+                marks.extend(list.marks.into_iter().map(|m| m.name));
+            }
+            other => return Err(format!("pytest.param got an unexpected argument {other}")),
+        }
+    }
+    Ok((ParamSet { values, id, marks }, unknown, set_timeout))
+}
+
+/// `pytest.param(marks=…)`: a mark, or a collection of marks. `Err` when
+/// pytest would fail while the module is imported: a set of marks (marks
+/// aren't hashable), or something that is surely no mark (`param` reads
+/// each one's `name`).
+fn param_marks<'s, 'a>(lookup: Lookup<'s, 'a>, expr: &'a Expr) -> Result<MarkList<'s, 'a>, String> {
+    let (expr, lookup) = deref(lookup, expr);
+    // One entry: a mark, something that may be one, or an error.
+    let entry = |lookup: Lookup<'s, 'a>, expr: &'a Expr| -> Result<Option<Mark<'s, 'a>>, String> {
+        match mark(lookup, expr) {
+            Ok(Some(mark)) => Ok(Some(mark)),
+            _ if matches!(expr, Expr::Call(call) if made_by_builtin(lookup, call)) => {
+                Err("pytest.param marks are not marks, which raises at import".into())
+            }
+            _ if maybe_mark(lookup, expr) => Ok(None),
+            _ => Err("pytest.param marks are not marks, which raises at import".into()),
+        }
+    };
+    // `tuple(…)`, `list(…)`, `set()`: the collection their argument makes.
+    if let Expr::Call(call) = expr
+        && call.arguments.keywords.is_empty()
+        && let Some(path) = lookup.path(&call.func)
+        && matches!(
+            path.as_str(),
+            "builtins.tuple" | "builtins.list" | "builtins.set" | "builtins.frozenset"
+        )
+    {
+        return match call.arguments.args.as_ref() {
+            [] => Ok(MarkList::default()),
+            [arg] if matches!(path.as_str(), "builtins.tuple" | "builtins.list") => {
+                param_marks(lookup, arg)
+            }
+            _ => Err("pytest.param marks are a set, which raises TypeError".into()),
+        };
+    }
+    let elts = match expr {
+        Expr::List(list) => &list.elts[..],
+        Expr::Tuple(tuple) => &tuple.elts[..],
+        Expr::Set(set) if set.elts.is_empty() => &[],
+        Expr::Set(_) => {
+            return Err("pytest.param marks are a set, which raises TypeError".into());
+        }
+        other => {
+            return Ok(match entry(lookup, other)? {
+                Some(mark) => MarkList {
+                    marks: vec![mark],
+                    unknown: false,
+                },
+                None => MarkList {
+                    marks: Vec::new(),
+                    unknown: true,
+                },
+            });
+        }
+    };
+    let mut out = MarkList::default();
+    for elt in elts {
+        if elt.is_starred_expr() {
+            out.unknown = true;
+            continue;
+        }
+        let (elt, lookup) = deref(lookup, elt);
+        match entry(lookup, elt)? {
+            Some(mark) => out.marks.push(mark),
+            None => out.unknown = true,
+        }
+    }
+    Ok(out)
+}
+
+/// Whether a call surely makes a builtin container or value (never a
+/// mark): `set(…)`, `frozenset(…)`, `dict(…)`…
+fn made_by_builtin<'a>(lookup: Lookup<'_, 'a>, call: &'a ExprCall) -> bool {
+    lookup
+        .path(&call.func)
+        .is_some_and(|path| path.starts_with("builtins."))
+}
+
+#[cfg(test)]
+mod tests {
+    use aye_adapter::TextSize;
+    use aye_python_semantic::namespace::Namespace;
+
+    use super::*;
+    use crate::PYTEST;
+
+    /// The scope `expr`, a Python expression, names.
+    fn scope(expr: &str) -> FixtureScope {
+        let source = format!("{expr}\n");
+        let parsed = ruff_python_parser::parse_module(&source).unwrap();
+        let body = &parsed.syntax().body;
+        let namespace = Namespace::build(body, PYTEST);
+        let lookup = Lookup {
+            module: &namespace,
+            class: None,
+            source: &source,
+            at: TextSize::try_from(source.len()).unwrap(),
+        };
+        FixtureScope::of(lookup, &body[0].as_expr_stmt().unwrap().value)
+    }
+
+    /// pytest's five names are read, and nothing else; they order narrowest
+    /// first and a scope aye can't read last, which is what the narrowest of
+    /// an indirect parametrization's fixtures is taken by.
+    #[test]
+    fn fixture_scopes_order_narrowest_first() {
+        let known = [
+            "'function'",
+            "'class'",
+            "'module'",
+            "'package'",
+            "'session'",
+        ]
+        .map(scope);
+        assert!(known.iter().all(FixtureScope::is_known));
+        assert!(known.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(
+            known[..3],
+            [
+                FixtureScope::FUNCTION,
+                FixtureScope::CLASS,
+                FixtureScope::MODULE
+            ]
+        );
+        for unread in ["'Session'", "'dynamic'", "make()", "SCOPE", "1"] {
+            let unread = scope(unread);
+            assert_eq!(unread, FixtureScope::UNKNOWN);
+            assert!(known.iter().all(|scope| *scope < unread));
+        }
+        let narrowest = [known[4].clone(), FixtureScope::UNKNOWN, known[1].clone()];
+        assert_eq!(narrowest.iter().min(), Some(&FixtureScope::CLASS));
+        let file: Vec<bool> = known.iter().map(FixtureScope::reorders_its_file).collect();
+        assert_eq!(file, [false, true, true, false, false]);
+        let session: Vec<bool> = known
+            .iter()
+            .map(FixtureScope::reorders_the_session)
+            .collect();
+        assert_eq!(session, [false, false, false, true, true]);
+        assert!(FixtureScope::UNKNOWN.reorders_the_session());
+    }
+}

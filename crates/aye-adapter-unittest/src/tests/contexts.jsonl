@@ -1,0 +1,2 @@
+{"named":["<root>/tests/pkg/x_test.py"],"pattern":"*_test.py","start_directory":"<root>/tests","starts":["<root>/examples"],"top_level_directory":"<root>"}
+{"pattern":"test*.py","start_directory":"<root>","top_level_directory":"<root>"}

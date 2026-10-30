@@ -3,18 +3,24 @@
 //!
 //! [`EnvVars`] lists every variable aye reads by name or sets, in its Rust
 //! or in the Python it sends to workers, with what each one does. Rust names
-//! them only through it, so a misspelt name doesn't compile. The Python side
+//! them only through it, so a misspelt name doesn't compile, but for the
+//! crates below it that expand `~` as Python does (aye-fs's `expand_path`,
+//! aye-python-stdlib's `os.path`): they spell the home directory's
+//! variables as Python does, and the catalogue lists them. The Python side
 //! (the worker, the engine and the executors, which import only the
 //! standard library) spells the names itself; the catalogue lists those
 //! too, and the binary's tests check that it does.
 //!
 //! [`ProcessEnv`] is the environment as aye read it: every variable, each
-//! name's case kept, looked up as Python's `os.environ` looks one up.
+//! name's case kept, looked up as Python's `os.environ` looks one up. The
+//! binary reads it once ([`ProcessEnv::from_process`]) and hands it down;
+//! `clippy.toml` disallows `std::env`'s readers everywhere else, but for the
+//! tests' own settings.
 //!
-//! Two reads go by no name and stay out of the catalogue: the refinement
-//! cache's key holds the whole environment workers inherit, and the paths
-//! aye and pytest expand (`--junitxml`, `--rootdir`) read whichever variable
-//! the user names.
+//! Two reads of what is handed down go by no name and stay out of the
+//! catalogue: the refinement cache's key holds the whole environment
+//! workers inherit, and the paths aye and pytest expand (`--junitxml`,
+//! `--rootdir`) read whichever variable the user names.
 //!
 //! Owns: the catalogue and [`ProcessEnv`]. Does not own: what a variable
 //! means to the code that reads it, nor when it is read.

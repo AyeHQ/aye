@@ -20,7 +20,17 @@ pub struct ProcessEnv {
 }
 
 impl ProcessEnv {
-    /// This process's environment, as it is now.
+    /// An environment holding no variable.
+    pub const fn new() -> Self {
+        Self { vars: Vec::new() }
+    }
+
+    /// This process's environment, as it is now. The binary reads it once,
+    /// at its start; everything else reads what it hands down.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the one read of the environment, the binary's"
+    )]
     pub fn from_process() -> Self {
         Self::from_vars(std::env::vars_os())
     }

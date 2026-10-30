@@ -1,6 +1,6 @@
 [package]
 name = "aye-provision"
-description = "Environments for aye: the Provisioner contract, uv as a subprocess, bring-your-own interpreters"
+description = "Interpreters for aye: what was asked for, discovery, and the Python environments a run needs"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,12 @@ authors.workspace = true
 
 [dependencies]
 aye-events = { workspace = true }
+aye-fs = { workspace = true }
+aye-static = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

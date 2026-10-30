@@ -2,9 +2,10 @@
 
 The runner (`crates/aye-runner`) and each worker talk over the worker's stdin
 and stdout, one UTF-8 JSON object per line. The message types are in
-`crates/aye-engine` (`Request`, `Reply`, `WorkerLine`, `Batch`, `Policy`).
+`crates/aye-protocol` (`Request`, `Reply`, `WorkerLine`, `Batch`, `Policy`;
+the handshake's `ModuleSource`, `ExecutorSpec` and `ServiceName`).
 The worker is `crates/aye-runner/python/aye_worker.py`. The protocol version
-is `PROTOCOL_VERSION` in `aye-engine` and `PROTOCOL` in `aye_worker.py` and
+is `PROTOCOL_VERSION` in `aye-protocol` and `PROTOCOL` in `aye_worker.py` and
 `aye_engine.py`, and the handshake checks it.
 
 ## Starting a worker
@@ -66,23 +67,36 @@ the selection; they may ignore the rest.
 | `framework_args?` | Everything after `--`, unchanged. An adapter may prefer its context's copy (the pytest adapter's front-end parses its context's `native.args`, where these come after `addopts` and `PYTEST_ADDOPTS`, filtered); the unittest adapter ignores them. Every adapter puts them in rerun commands: `aye <rerun_args> <id> -- <these>`, without `--junitxml`. |
 
 `context` is the adapter's own, from its recognizer, on `run` and `refine`
-alike. The binary and the runner add keys to every adapter's context, on
-`run` only:
+alike (`aye_protocol::AdapterContext`, which the adapter builds once from
+its typed context; an object's keys are written in order). The binary and
+the runner add keys to every adapter's context, on `run`, and the binary's
+to a lane's `refine` with `digests_only` too, so that it lists the session
+its batches run in (`aye_protocol::BatchContext`, whose keys
+`aye_protocol::context_keys` names). Each goes in only when it holds
+something, and only into an object, which `ran_ids` makes of a `null`
+context:
 
 | Key | |
 |---|---|
 | `requested_ids` | Added by the binary when the command line names ids with parameters (`path::test[x]`), relative to the root. The executor reports such an id `not-found` when the framework doesn't make it, instead of running the test's other parameters in its place, as the pytest adapter does for ids aye worked out itself. |
 | `rerun_args` | Added by the binary when there are some: aye's own options that shaped the run, as given (`["-c", "alt.ini"]` for `aye -c alt.ini`; never `--python`, the output's options or `--junitxml`), which an adapter puts before the id in a test's rerun command (`aye_engine.rerun_args(context)`). |
-| `selected_paths` | Added by the binary when some positional argument isn't a path (a dotted name, a test key): the paths the user's run starts from, absolute and spelled from the root, in the order of the arguments, each once: each path argument (an id's file), and the files of the collected cases each other argument selects, as `pytest <these>` would be given them. The adapter's own context saw only the path arguments (with none, its framework's default), and refinement never gets the key. The pytest front-end starts from these instead of `roots` (a context that differs from the one it listed with starts a new session in the worker), and the doctest executor works out the conftests pytest loads at start-up from them. |
+| `selected_paths` | Added by the binary when some positional argument isn't a path (a dotted name, a test key): the paths the user's run starts from, absolute and spelled from the root, in the order of the arguments, each once: each path argument (an id's file), and the files of the collected cases each other argument selects, as `pytest <these>` would be given them. The adapter's own context saw only the path arguments (with none, its framework's default), and collection's refinement never gets the key. The pytest front-end starts from these instead of `roots` (a context that differs from the one it listed with starts a new session in the worker), and the doctest executor works out the conftests pytest loads at start-up from them. |
 | `ran_ids` | Added by the runner to a batch it re-queued after its worker crashed: the tests that already ran, when an id that stands for several tests (a case without its parameters, pytest's stand-ins) may have run some of them. The adapters don't run them again; the unittest and doctest adapters count them, so an id listed n times skips its first n tests. |
 
-The binary reads these keys from any adapter's context, when present:
-`keyword` and `tags` (the framework's own `-k` and `-m`, applied statically to that
+`requested_ids`, `ran_ids` and `rerun_args` don't start another session in
+an executor that lists the session (`context_keys::SESSION_NEUTRAL`, the
+pytest executor's `BATCH_KEYS`); `selected_paths` does.
+
+An adapter's context also carries what its framework's configuration says
+about the run, which the binary takes from the adapter's
+`FrameworkDefaults` (`aye-adapter`), not from the context: `keyword` and
+`tags` (the framework's own `-k` and `-m`, applied statically to that
 adapter's cases when the command line gives none), `deselect` (id prefixes
 selection drops from that adapter's cases, counting them as deselected),
 `maxfail`, `xdist_workers`, `junitxml`, `junit_prefix` and the `junit_*`
 settings (the run's, when the command line gives none; from the first
-context that gives each).
+adapter that gives each). No executor reads them; they stay because the
+refinement cache's key hashes the context.
 
 ### The pytest adapter's context
 
@@ -98,7 +112,7 @@ context that gives each).
 | `deselect` | The `--deselect` prefixes of the three, as prefixes of aye's ids (none when pytest's rootdir is outside the project root). The binary drops the cases they name, except partial ones, and counts them as deselected. |
 | `env_plugins` | The plugins `PYTEST_PLUGINS` names, as `-p NAME` arguments, so the refinement cache's rule for plugins loaded by name covers them. |
 | `colliding_modules` | Names of helper modules that two test directories' import bases both hold, which pytest imports once: a refined module that imports one gets `import:NAME` as its first affinity key, as the recognizer gives static ones, so they share a batch. |
-| `native` | What the front-end starts from: the resolved settings (`rootdir`, `inifile`, `confcutdir`, `pythonpath`, `python_files`, `python_classes`, `python_functions`, `testpaths`, `norecursedirs`, `usefixtures`, `markers`, `filterwarnings`, the strictness and id flags, `import_mode`, `plugins`, `env_plugins`), `ini` (every raw value of the configuration, for `getini`), `args` (pytest's options as the front-end parses them: `addopts`, `PYTEST_ADDOPTS`, then the arguments after `--`, without what aye takes over: pytest-xdist's, `-x`/`--exitfirst`/`--maxfail`, the JUnit ones and, when the doctest adapter runs, pytest's doctest options; the arguments after `--` also lose `-o addopts=…`), `options` (those parsed with pytest's dest names and defaults, for options conftests read), `unknown_options`, and `modules_digest` (of the executor's sources, so the refinement cache never answers for other sources). `aye-engine-pytest`'s `native.rs` has the details. |
+| `native` | What the front-end starts from: the resolved settings (`rootdir`, `inifile`, `confcutdir`, `pythonpath`, `python_files`, `python_classes`, `python_functions`, `testpaths`, `norecursedirs`, `usefixtures`, `markers`, `filterwarnings`, the strictness and id flags, `import_mode`, `plugins`, `env_plugins`), `ini` (every raw value of the configuration, for `getini`), `args` (pytest's options as the front-end parses them: `addopts`, `PYTEST_ADDOPTS`, then the arguments after `--`, without what aye takes over: pytest-xdist's, `-x`/`--exitfirst`/`--maxfail`, the JUnit ones and, when the doctest adapter runs, pytest's doctest options; the arguments after `--` also lose `-o addopts=…`), `options` (those parsed with pytest's dest names and defaults, for options conftests read), `unknown_options`, and `modules_digest` (of the executor's sources, so the refinement cache never answers for other sources). `aye-adapter-pytest`'s `context.rs` has the details. |
 
 Until October 2026 the context also carried what only a real pytest session
 per batch read (`addopts`, `pytest_addopts_env` and `framework_args` as
@@ -159,11 +173,17 @@ and `t_ms` (since the batch started); the runner adds `worker`, then `run`,
 
 ## Handshake
 
-`hello` carries everything the worker runs: aye's engine first, then each
-executor's modules, each once, in order. The worker installs every module
-into `sys.modules` from memory, under the file name `<aye:name>`, so
-tracebacks show its lines. It then builds the services named in `services`,
-and one executor per entry (`module:Class`) with the root and the services.
+`hello` carries everything the worker runs: aye's engine first
+(`aye_engine::ENGINE`), then the prelude the binary gives every worker
+(`registry::PRELUDE`: aye's `pytest` module and what it stands on), then
+each executor's own modules (its adapter's `Runtime`), each once, in
+order. Each module imports, as it is installed, only the standard library
+and the modules before it, which a test checks for every worker the
+adapters can have. The worker installs every module into `sys.modules`
+from memory, under the file name `<aye:name>`, so tracebacks show its
+lines. It then builds the services named in `services`, and one executor
+per entry (`module:Class`, an `EntryPoint`) with the root and the
+services.
 
 - A worker of another protocol version answers `ready` with its own version
   and installs nothing. The runner kills it and refuses to run.
@@ -177,11 +197,12 @@ A worker serves one adapter, so the runner sends one executor: that of
 the adapter of the worker's first batch, or of the files a refinement worker
 refines. A batch of another adapter gets a new worker.
 
-| Adapter | Module | Entry |
+| Adapter | Modules | Entry |
 |---|---|---|
-| `pytest` | `aye_model`, `aye_rewrite`, `aye_native_engine`, `pytest` (aye's own), `aye_pytest_frontend`, `aye_pytest_native` | `aye_pytest_native:NativeExecutor` (lists the session) |
-| `unittest` | `aye_model`, `aye_rewrite`, `aye_native_engine`, `pytest` (aye's own), `aye_engine_unittest` | `aye_engine_unittest:UnittestExecutor` |
-| `doctest` | `aye_model`, `aye_rewrite`, `aye_native_engine`, `pytest` (aye's own), `aye_engine_doctest` | `aye_engine_doctest:DoctestExecutor` |
+| every worker | `aye_engine`, then the prelude: `aye_model`, `aye_rewrite`, `aye_native_engine`, `pytest` (aye's own) | |
+| `pytest` | `aye_pytest_frontend`, `aye_pytest_native` | `aye_pytest_native:NativeExecutor` (lists the session) |
+| `unittest` | `aye_engine_unittest` | `aye_engine_unittest:UnittestExecutor` |
+| `doctest` | `aye_engine_doctest` | `aye_engine_doctest:DoctestExecutor` |
 
 Every worker gets aye's `pytest` module before its executor's own, so what a
 test, a conftest or the doctest adapter imports as `pytest` is aye's, even
@@ -226,10 +247,10 @@ adapter, every test file) and its context, reads `refined`, and shuts the
 worker down, unless its executor lists the session (below). Its records are
 not part of the run's log.
 
-An executor that lists the session (`lists_session`: the pytest adapter's)
-keeps what `refine` listed (the imported files, its model) for the
-batches it runs later, as each pytest-xdist worker collects the whole
-session:
+An executor that lists the session (`lists_session`, its runtime's
+`SessionMode::ListsSession`: the pytest adapter's) keeps what `refine`
+listed (the imported files, its model) for the batches it runs later, as
+each pytest-xdist worker collects the whole session:
 
 - The worker that refined is kept, with the environment of a run's first
   lane (`AYE_WORKER=0`, and `gw0` with several workers), for the next
@@ -363,8 +384,8 @@ runs its tests in plan order, as pytest-xdist's do.
   executors are imported, so a test that replaces `time.perf_counter`
   changes no duration.
 - Services are looked up by name (`Services.get` returns `None` when
-  absent), so new services stay additive. The names are listed in
-  `aye_engine::services`. Today the runner asks for `context` (the test and
+  absent), so new services stay additive. `aye_protocol::ServiceName`
+  names them. Today the runner asks for `context` (the test and
   lifetimes running now) and `cleanup` (teardown registered on the running
   test), and the engine provides both. The others (capture, coverage,
   timeouts, patching, …) are not provided yet.
