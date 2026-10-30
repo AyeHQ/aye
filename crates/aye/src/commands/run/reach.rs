@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 
 use aye_events::{Case, Diagnostic, DiagnosticCode, Severity};
 use aye_fs::{normalize_absolute, root_relative};
-use aye_select::Selection;
+use aye_select::{Named, Selection, dotted_reach};
 
 use crate::positional::{Positional, Positionals};
 use crate::registry;
@@ -171,54 +171,6 @@ pub(super) fn explained_by_a_conftest(broken: &[&str], diagnostic: &Diagnostic) 
         && broken
             .iter()
             .any(|dir| diagnostic.path.as_str().starts_with(dir))
-}
-
-/// What a dotted name names of a path collection reported skipped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Named {
-    Nothing,
-    /// Something the skip holds or that holds it, but not the name's
-    /// whole: tests of a skipped module (`mod.test_x`), a module in a
-    /// skipped directory. pytest counts the skip and says it found no such
-    /// test.
-    Part,
-    /// The skipped module or package itself, or a package holding it:
-    /// pytest counts the skip, and nothing is missing.
-    Whole,
-}
-
-/// How the dotted name `word` (`pkg.mod.Class.test`, read from the root as
-/// `aye_select::Selector` reads one: `pkg/mod.py` then the names in it, or
-/// the package `pkg/mod`; `__init__` left out) reaches `path`, which
-/// collection reported skipped (a module, or a directory a conftest
-/// skipped), relative to the root. A word that isn't a dotted name (a key,
-/// an id) names nothing.
-pub(super) fn dotted_reach(word: &str, path: &str) -> Named {
-    if word.contains("::") || word.contains('/') {
-        return Named::Nothing;
-    }
-    let parts: Vec<&str> = word.split('.').filter(|part| *part != "__init__").collect();
-    if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
-        return Named::Nothing;
-    }
-    let inside = |inner: &str, outer: &str| {
-        inner
-            .strip_prefix(outer)
-            .is_some_and(|rest| rest.starts_with('/'))
-    };
-    let mut named = Named::Nothing;
-    for k in 1..=parts.len() {
-        let base = parts[..k].join("/");
-        let module = format!("{base}.py");
-        let whole = k == parts.len();
-        if whole && (path == base || path == module || inside(path, &base)) {
-            return Named::Whole;
-        }
-        if path == module || inside(&module, path) || (whole && inside(&base, path)) {
-            named = Named::Part;
-        }
-    }
-    named
 }
 
 #[cfg(test)]

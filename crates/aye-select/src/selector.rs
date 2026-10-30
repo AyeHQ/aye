@@ -331,6 +331,54 @@ fn normalize(path: &str) -> Vec<String> {
     components
 }
 
+/// What a dotted name names of a path collection reported skipped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Named {
+    Nothing,
+    /// Something the skip holds or that holds it, but not the name's
+    /// whole: tests of a skipped module (`mod.test_x`), a module in a
+    /// skipped directory. pytest counts the skip and says it found no such
+    /// test.
+    Part,
+    /// The skipped module or package itself, or a package holding it:
+    /// pytest counts the skip, and nothing is missing.
+    Whole,
+}
+
+/// How the dotted name `word` (`pkg.mod.Class.test`, read from the root as
+/// [`Selector`] reads one: `pkg/mod.py` then the names in it, or
+/// the package `pkg/mod`; `__init__` left out) reaches `path`, which
+/// collection reported skipped (a module, or a directory a conftest
+/// skipped), relative to the root. A word that isn't a dotted name (a key,
+/// an id) names nothing.
+pub fn dotted_reach(word: &str, path: &str) -> Named {
+    if word.contains("::") || word.contains('/') {
+        return Named::Nothing;
+    }
+    let parts: Vec<&str> = word.split('.').filter(|part| *part != "__init__").collect();
+    if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
+        return Named::Nothing;
+    }
+    let inside = |inner: &str, outer: &str| {
+        inner
+            .strip_prefix(outer)
+            .is_some_and(|rest| rest.starts_with('/'))
+    };
+    let mut named = Named::Nothing;
+    for k in 1..=parts.len() {
+        let base = parts[..k].join("/");
+        let module = format!("{base}.py");
+        let whole = k == parts.len();
+        if whole && (path == base || path == module || inside(path, &base)) {
+            return Named::Whole;
+        }
+        if path == module || inside(&module, path) || (whole && inside(&base, path)) {
+            named = Named::Part;
+        }
+    }
+    named
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,5 +625,36 @@ mod tests {
         );
         assert_eq!(selector.as_str(), "pkg.mod");
         assert_eq!(selector.to_string(), "pkg.mod");
+    }
+
+    /// pytest counts a skipped module or package that `--pyargs` names, and
+    /// finds it; a test in it, or a module in a skipped directory, it counts
+    /// the skip for but doesn't find.
+    #[test]
+    fn a_dotted_name_reaches_the_skips_of_what_it_names() {
+        for (word, path, named) in [
+            ("other.test_mod", "other/test_mod.py", Named::Whole),
+            ("other.test_mod.__init__", "other/test_mod.py", Named::Whole),
+            ("other", "other/test_mod.py", Named::Whole),
+            ("tests.sub", "tests/sub", Named::Whole),
+            ("tests", "tests/sub", Named::Whole),
+            ("other.test_mod.test_m", "other/test_mod.py", Named::Part),
+            (
+                "other.test_mod.Class.test_m",
+                "other/test_mod.py",
+                Named::Part,
+            ),
+            ("tests.sub.test_s", "tests/sub", Named::Part),
+            ("tests.sub.deep.test_s.test_x", "tests/sub", Named::Part),
+            ("tests.test_a", "tests/sub", Named::Nothing),
+            ("tests.test_a.TestX", "tests/test_a.py.bak", Named::Nothing),
+            ("tests.subway", "tests/sub", Named::Nothing),
+            ("other.test_mod", "other/test_mod_two.py", Named::Nothing),
+            ("cd12fbc3", "tests/sub", Named::Nothing),
+            ("tests.sub::x", "tests/sub", Named::Nothing),
+            ("tests..sub", "tests/sub", Named::Nothing),
+        ] {
+            assert_eq!(dotted_reach(word, path), named, "{word} {path}");
+        }
     }
 }

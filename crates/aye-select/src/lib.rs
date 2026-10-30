@@ -104,7 +104,7 @@ mod truth;
 
 pub use expression::{Expression, Kwarg, ParseError, Value};
 pub use selection::{Selected, Selection};
-pub use selector::Selector;
+pub use selector::{Named, Selector, dotted_reach};
 pub use truth::Truth;
 
 /// A malformed `-k` or `-m` expression: a usage error. The parse error is

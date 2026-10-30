@@ -30,11 +30,11 @@ use aye_events::{
     Severity, TestId,
 };
 use aye_fs::root_relative;
-use aye_select::Selection;
+use aye_select::{Named, Selection, dotted_reach};
 
 use super::collect::Collected;
 use super::exit::RunVerdict;
-use super::reach::{Named, Reach, broken_conftest_dirs, dotted_reach, explained_by_a_conftest};
+use super::reach::{Reach, broken_conftest_dirs, explained_by_a_conftest};
 use crate::framework_args::Passed;
 use crate::positional::{Positional, Positionals};
 use crate::settings::RunSettings;

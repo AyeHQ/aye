@@ -121,37 +121,6 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
     assert!(reach.keeps(root, &usage("testing/conftest.py")));
 }
 
-/// pytest counts a skipped module or package that `--pyargs` names, and
-/// finds it; a test in it, or a module in a skipped directory, it counts
-/// the skip for but doesn't find.
-#[test]
-fn a_dotted_name_reaches_the_skips_of_what_it_names() {
-    for (word, path, named) in [
-        ("other.test_mod", "other/test_mod.py", Named::Whole),
-        ("other.test_mod.__init__", "other/test_mod.py", Named::Whole),
-        ("other", "other/test_mod.py", Named::Whole),
-        ("tests.sub", "tests/sub", Named::Whole),
-        ("tests", "tests/sub", Named::Whole),
-        ("other.test_mod.test_m", "other/test_mod.py", Named::Part),
-        (
-            "other.test_mod.Class.test_m",
-            "other/test_mod.py",
-            Named::Part,
-        ),
-        ("tests.sub.test_s", "tests/sub", Named::Part),
-        ("tests.sub.deep.test_s.test_x", "tests/sub", Named::Part),
-        ("tests.test_a", "tests/sub", Named::Nothing),
-        ("tests.test_a.TestX", "tests/test_a.py.bak", Named::Nothing),
-        ("tests.subway", "tests/sub", Named::Nothing),
-        ("other.test_mod", "other/test_mod_two.py", Named::Nothing),
-        ("cd12fbc3", "tests/sub", Named::Nothing),
-        ("tests.sub::x", "tests/sub", Named::Nothing),
-        ("tests..sub", "tests/sub", Named::Nothing),
-    ] {
-        assert_eq!(dotted_reach(word, path), named, "{word} {path}");
-    }
-}
-
 /// A file below a conftest that failed to load has no tests because of it,
 /// which the conftest's error says: collection's `no-tests` note, which
 /// says only that the file has none, is left out (it showed beside a
