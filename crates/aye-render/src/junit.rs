@@ -28,65 +28,20 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use aye_events::{
-    Diagnostic, Event, Failure, LifetimeId, Outcome, Phase, Record, Severity, TestId, TestResult,
+    Diagnostic, Event, Failure, LifetimeId, Outcome, Phase, Record, Severity, TestResult,
 };
+use aye_stream::{Consumer, DefinitionLines, HeldSub, ModuleSkips, Repeats, SubOutcomes};
 
-use crate::{Reporter, shared};
+use crate::{failure, words};
 
-/// How the report is written: the framework's JUnit settings (pytest's
-/// `junit_*` options, which the binary reads from the adapter's context),
-/// else aye's own ([`JunitOptions::default`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JunitOptions {
-    /// The `<testsuite>`'s name (pytest's `junit_suite_name`).
-    pub suite_name: String,
-    /// Which captured output a test case carries (`junit_logging`).
-    pub logging: JunitLogging,
-    /// Whether a test that didn't fail carries its output
-    /// (`junit_log_passing_tests`).
-    pub log_passing_tests: bool,
-    /// What a test case's `time` counts (`junit_duration_report`).
-    pub duration: JunitDuration,
-    /// The schema, which says what attributes a test case has
-    /// (`junit_family`).
-    pub family: JunitFamily,
-}
+mod names;
+mod settings;
+mod xml;
 
-impl Default for JunitOptions {
-    /// aye's own report: the suite named `aye`, every test's output, the
-    /// whole test's time, and `file` and `line` on each test case.
-    fn default() -> Self {
-        Self {
-            suite_name: "aye".to_string(),
-            logging: JunitLogging::Aye,
-            log_passing_tests: true,
-            duration: JunitDuration::Total,
-            family: JunitFamily::Xunit1,
-        }
-    }
-}
+use names::names;
+use xml::{attr, body, element, properties, section};
 
-/// Which captured output a test case carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JunitLogging {
-    /// aye's own: stdout then the log in `<system-out>`, stderr in
-    /// `<system-err>`, each only when there is some.
-    Aye,
-    /// pytest's `no`: none.
-    No,
-    /// pytest's `log`: the captured log in `<system-out>`.
-    Log,
-    /// pytest's `system-out`: stdout in `<system-out>`.
-    SystemOut,
-    /// pytest's `system-err`: stderr in `<system-err>`.
-    SystemErr,
-    /// pytest's `out-err`: stdout in `<system-out>`, stderr in
-    /// `<system-err>`.
-    OutErr,
-    /// pytest's `all`: the log and stdout in `<system-out>`, stderr in
-    /// `<system-err>`.
-    All,
-}
+pub use settings::{JunitDuration, JunitFamily, JunitLogging, JunitOptions};
 
 impl From<&str> for JunitLogging {
     /// pytest's spelling; pytest writes no output for one it doesn't know.
@@ -102,16 +57,6 @@ impl From<&str> for JunitLogging {
     }
 }
 
-/// What a test case's `time` counts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JunitDuration {
-    /// Setup, body and teardown (pytest's `total`).
-    Total,
-    /// The body alone (pytest's `call`), where the adapter timed it apart;
-    /// else the whole test.
-    Body,
-}
-
 impl From<&str> for JunitDuration {
     /// pytest's spelling: `call` is the body; anything else the whole test.
     fn from(value: &str) -> Self {
@@ -121,16 +66,6 @@ impl From<&str> for JunitDuration {
             Self::Total
         }
     }
-}
-
-/// The schema of the report.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JunitFamily {
-    /// A test case has `file` and `line` (pytest's `xunit1`, `legacy`).
-    Xunit1,
-    /// A test case has only `classname`, `name` and `time` (pytest's
-    /// `xunit2`, its default).
-    Xunit2,
 }
 
 impl From<&str> for JunitFamily {
@@ -153,27 +88,20 @@ pub struct Junit {
     /// The run's properties, each pair once, in the order first recorded.
     properties: Vec<(String, String)>,
     /// The 1-based line each collected test is defined on.
-    lines: HashMap<String, u32>,
+    lines: DefinitionLines,
     /// Test cases in the order they finished.
     cases: Vec<Testcase>,
     /// Failed lifetimes, for the tests they kept from running.
     lifetimes: HashMap<LifetimeId, Failure>,
     /// Bad sub-outcomes of tests that haven't finished yet.
-    subs: HashMap<TestId, Vec<Sub>>,
+    subs: SubOutcomes,
     totals: Totals,
     /// Modules skipped while collecting.
-    module_skips: shared::ModuleSkips,
+    module_skips: ModuleSkips,
     /// The run's own duration, once known.
     duration: Option<Duration>,
     /// The sum of the tests' durations.
     tests_time: Duration,
-}
-
-/// A bad sub-outcome: its name, outcome and failure.
-struct Sub {
-    name: String,
-    outcome: Outcome,
-    failure: Option<Failure>,
 }
 
 enum Testcase {
@@ -201,12 +129,12 @@ impl Junit {
             prefix: String::new(),
             options: JunitOptions::default(),
             properties: Vec::new(),
-            lines: HashMap::new(),
+            lines: DefinitionLines::new(),
             cases: Vec::new(),
             lifetimes: HashMap::new(),
-            subs: HashMap::new(),
+            subs: SubOutcomes::new(),
             totals: Totals::default(),
-            module_skips: shared::ModuleSkips::default(),
+            module_skips: ModuleSkips::default(),
             duration: None,
             tests_time: Duration::ZERO,
         }
@@ -314,20 +242,17 @@ impl Junit {
     }
 
     fn test(&mut self, result: &TestResult) {
-        let subs = self.subs.remove(&result.id).unwrap_or_default();
+        let subs = self.subs.take(&result.id);
         // The unittest and doctest adapters fail the test with the very
         // failures of its subtests or examples: each is reported once, on
-        // its sub-outcome, which names it.
-        let repeated = |failure: &Failure| {
-            subs.iter()
-                .filter_map(|sub| sub.failure.as_ref())
-                .any(|sub| shared::same_failure(sub, failure))
+        // its sub-outcome, which names it. A bare failure of its own stays.
+        let own = aye_stream::own_failures(result, &subs, Repeats::Same)
+            .cloned()
+            .collect();
+        let result = &TestResult {
+            failures: own,
+            ..result.clone()
         };
-        let mut result = result.clone();
-        if !subs.is_empty() {
-            result.failures.retain(|failure| !repeated(failure));
-        }
-        let result = &result;
         self.totals.tests += 1;
         match result.outcome {
             Outcome::Failed => self.totals.failures += 1,
@@ -348,30 +273,15 @@ impl Junit {
         }
     }
 
-    fn sub_outcome(
-        &mut self,
-        id: &TestId,
-        name: &str,
-        outcome: Outcome,
-        failure: Option<&Failure>,
-    ) {
-        if outcome.is_bad() {
-            self.subs.entry(id.clone()).or_default().push(Sub {
-                name: name.to_owned(),
-                outcome,
-                failure: failure.cloned(),
-            });
-        }
-    }
-
-    fn testcase(&self, result: &TestResult, lifetime: Option<&Failure>, subs: &[Sub]) -> String {
+    fn testcase(
+        &self,
+        result: &TestResult,
+        lifetime: Option<&Failure>,
+        subs: &[HeldSub],
+    ) -> String {
         let id = result.id.as_str();
         let (classname, name) = names(id);
-        let line = self
-            .lines
-            .get(id)
-            .or_else(|| self.lines.get(result.id.without_params()))
-            .copied();
+        let line = self.lines.line(&result.id);
         let time = match self.options.duration {
             JunitDuration::Body => result.body_duration.unwrap_or(result.duration),
             JunitDuration::Total => result.duration,
@@ -380,7 +290,7 @@ impl Junit {
             "    <testcase classname=\"{}\" name=\"{}\"{} time=\"{:.3}\"",
             attr(&self.classname(&classname)),
             attr(&name),
-            self.location(result.id.path(), line),
+            self.location(result.id.path().as_str(), line),
             time.as_secs_f64()
         );
 
@@ -395,7 +305,7 @@ impl Junit {
             let message = sub
                 .failure
                 .as_ref()
-                .map_or(sub.outcome.as_str(), shared::message);
+                .map_or(sub.outcome.as_str(), failure::message);
             element(
                 &mut children,
                 tag,
@@ -502,20 +412,20 @@ impl Junit {
 
     /// The test case of a failed lifetime that kept no test from running.
     fn lifetime_case(&self, lifetime: &LifetimeId, failure: &Failure) -> String {
-        let phase = failure.phase.map_or("lifetime", shared::phase);
+        let phase = failure.phase.map_or("lifetime", words::phase);
         let mut xml = format!(
             "    <testcase classname=\"{}\" name=\"{}\"",
             attr(&self.classname("")),
             attr(&format!("{phase} of {lifetime}"))
         );
-        if let Some((path, line)) = shared::origin(failure) {
-            xml.push_str(&self.location(path, Some(line)));
+        if let Some((path, line)) = failure::origin(failure) {
+            xml.push_str(&self.location(path.as_str(), Some(line)));
         }
         xml.push_str(" time=\"0.000\">\n");
         element(
             &mut xml,
             "error",
-            Some(shared::message(failure)),
+            Some(failure::message(failure)),
             failure.exception.as_deref(),
             &detail(failure),
         );
@@ -528,13 +438,13 @@ impl Junit {
     fn module_skip(&mut self, diagnostic: &Diagnostic) {
         self.totals.tests += 1;
         self.totals.skipped += 1;
-        let (classname, name) = names(&diagnostic.path);
+        let (classname, name) = names(diagnostic.path.as_str());
         let line = diagnostic.span.as_ref().and_then(|span| span.line);
         let mut xml = format!(
             "    <testcase classname=\"{}\" name=\"{}\"{} time=\"0.000\">\n",
             attr(&self.classname(&classname)),
             attr(&name),
-            self.location(&diagnostic.path, line)
+            self.location(diagnostic.path.as_str(), line)
         );
         element(
             &mut xml,
@@ -553,77 +463,25 @@ impl Junit {
         }
         self.totals.tests += 1;
         self.totals.errors += 1;
-        let (classname, name) = names(&diagnostic.path);
+        let (classname, name) = names(diagnostic.path.as_str());
         let line = diagnostic.span.as_ref().and_then(|span| span.line);
         let mut xml = format!(
             "    <testcase classname=\"{}\" name=\"{}\"{} time=\"0.000\">\n",
             attr(&self.classname(&classname)),
             attr(&name),
-            self.location(&diagnostic.path, line)
+            self.location(diagnostic.path.as_str(), line)
         );
         let first = diagnostic.message.lines().next().unwrap_or_default();
         element(
             &mut xml,
             "error",
             Some(first),
-            Some(&diagnostic.code),
+            Some(diagnostic.code.as_str()),
             &diagnostic.message,
         );
         xml.push_str("    </testcase>\n");
         self.cases.push(Testcase::Done(xml));
     }
-}
-
-/// `tests/test_cart.py::TestCart::test_add[eur]` → (`tests.test_cart.TestCart`,
-/// `test_add[eur]`).
-fn names(id: &str) -> (String, String) {
-    let (path, rest) = match id.split_once("::") {
-        Some((path, rest)) => (path, Some(rest)),
-        None => (id, None),
-    };
-    let module = path.strip_suffix(".py").unwrap_or(path).replace('/', ".");
-    let Some(rest) = rest else {
-        return (String::new(), module);
-    };
-    let (names, params) = rest.split_at(rest.find('[').unwrap_or(rest.len()));
-    let mut parts: Vec<&str> = names.split("::").collect();
-    let test = parts.pop().unwrap_or_default();
-    let classname = std::iter::once(module.as_str())
-        .chain(parts)
-        .collect::<Vec<_>>()
-        .join(".");
-    (classname, format!("{test}{params}"))
-}
-
-/// A `<properties>` element holding `pairs`, when there are some.
-fn properties(out: &mut String, indent: &str, pairs: &[(String, String)]) {
-    if pairs.is_empty() {
-        return;
-    }
-    let _ = writeln!(out, "{indent}<properties>");
-    for (name, value) in pairs {
-        let _ = writeln!(
-            out,
-            "{indent}  <property name=\"{}\" value=\"{}\"/>",
-            attr(name),
-            attr(value)
-        );
-    }
-    let _ = writeln!(out, "{indent}</properties>");
-}
-
-/// One stream of captured output as pytest writes it: a header centred in
-/// 80 dashes (Python's `str.center`, which, for an even width, puts an odd
-/// margin's extra dash on the right), then the text, each on its own line.
-fn section(header: &str, content: &str) -> String {
-    let header = format!(" {header} ");
-    let margin = 80usize.saturating_sub(header.chars().count());
-    let left = margin / 2;
-    format!(
-        "{}{header}{}\n{content}\n",
-        "-".repeat(left),
-        "-".repeat(margin - left)
-    )
 }
 
 /// The `<failure>` and `<error>` elements of a bad outcome.
@@ -638,7 +496,7 @@ fn failures(children: &mut String, result: &TestResult, lifetime: Option<&Failur
                     Some(Phase::Teardown) => "teardown",
                     _ => "setup",
                 };
-                format!("{phase} of {cause} failed: {}", shared::message(failure))
+                format!("{phase} of {cause} failed: {}", failure::message(failure))
             }
             None => format!("setup of {cause} failed"),
         };
@@ -672,7 +530,7 @@ fn failures(children: &mut String, result: &TestResult, lifetime: Option<&Failur
         element(
             children,
             tag,
-            Some(shared::message(failure)),
+            Some(failure::message(failure)),
             failure.exception.as_deref(),
             &detail(failure),
         );
@@ -695,9 +553,9 @@ fn detail(failure: &Failure) -> String {
             let _ = writeln!(detail, "    {source}");
         }
     }
-    detail.push_str(shared::message(failure));
+    detail.push_str(failure::message(failure));
     if let Some(assertion) = &failure.assertion {
-        for line in shared::diff_lines(&assertion.diff) {
+        for line in failure::diff_lines(&assertion.diff) {
             detail.push('\n');
             detail.push_str(line);
         }
@@ -705,85 +563,22 @@ fn detail(failure: &Failure) -> String {
     detail
 }
 
-/// One `<failure>`, `<error>` or `<skipped>` element.
-fn element(out: &mut String, tag: &str, message: Option<&str>, kind: Option<&str>, text: &str) {
-    let _ = write!(out, "      <{tag}");
-    if let Some(message) = message {
-        let _ = write!(out, " message=\"{}\"", attr(message));
-    }
-    if let Some(kind) = kind {
-        let _ = write!(out, " type=\"{}\"", attr(kind));
-    }
-    if text.is_empty() {
-        out.push_str("/>\n");
-    } else {
-        let _ = writeln!(out, ">{}</{tag}>", body(text));
-    }
-}
-
-fn attr(value: &str) -> String {
-    escape(value, true)
-}
-
-fn body(value: &str) -> String {
-    escape(value, false)
-}
-
-/// Escapes markup, and shows characters XML 1.0 cannot carry as `#xNN`, as
-/// pytest does. Inside attributes, line breaks and tabs are kept as
-/// character references, which parsers would otherwise turn into spaces.
-fn escape(value: &str, attribute: bool) -> String {
-    let mut out = String::with_capacity(value.len());
-    for c in value.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '\r' => out.push_str("&#13;"),
-            '"' if attribute => out.push_str("&quot;"),
-            '\'' if attribute => out.push_str("&apos;"),
-            '\n' if attribute => out.push_str("&#10;"),
-            '\t' if attribute => out.push_str("&#9;"),
-            '\t' | '\n' | ' '..='~' | '\u{80}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}' => {
-                out.push(c);
-            }
-            _ => {
-                let code = u32::from(c);
-                let _ = if code <= 0xff {
-                    write!(out, "#x{code:02X}")
-                } else {
-                    write!(out, "#x{code:04X}")
-                };
-            }
-        }
-    }
-    out
-}
-
-impl Reporter for Junit {
-    fn report(&mut self, record: &Record) -> io::Result<()> {
+impl Consumer for Junit {
+    fn consume(&mut self, record: &Record) -> io::Result<()> {
         if let Some(skipped) = self.module_skips.note(record) {
             self.module_skip(skipped);
         }
+        self.lines.note(record);
         match &record.event {
-            Event::CaseCollected(case) => {
-                if let Some(line) = case.span.as_ref().and_then(|span| span.line) {
-                    self.lines.insert(case.id.0.clone(), line);
-                }
-            }
             Event::Diagnostic(diagnostic) => self.diagnostic(diagnostic),
             Event::LifetimeFinished {
                 lifetime,
                 failure: Some(failure),
                 ..
             } => self.lifetime(lifetime, failure),
-            Event::SubOutcome {
-                id,
-                name,
-                outcome,
-                failure,
-                ..
-            } => self.sub_outcome(id, name, *outcome, failure.as_ref()),
+            Event::SubOutcome { .. } => {
+                self.subs.hold(record);
+            }
             Event::TestFinished(result) => self.test(result),
             Event::RunProperty { name, value } => {
                 let pair = (name.clone(), value.clone());
@@ -816,74 +611,5 @@ impl Reporter for Junit {
                 ),
             )
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn names_follow_pytest() {
-        let split = |id| names(id);
-        assert_eq!(
-            split("tests/test_cart.py::TestCart::test_add[eur]"),
-            ("tests.test_cart.TestCart".into(), "test_add[eur]".into())
-        );
-        assert_eq!(
-            split("test_x.py::test_y[a::b-c[1]]"),
-            ("test_x".into(), "test_y[a::b-c[1]]".into())
-        );
-        assert_eq!(
-            split("pkg/mod.py::pkg.mod.func"),
-            ("pkg.mod".into(), "pkg.mod.func".into())
-        );
-        assert_eq!(
-            split("tests/test_bad.py"),
-            (String::new(), "tests.test_bad".into())
-        );
-    }
-
-    #[test]
-    fn escaping_keeps_the_document_well_formed() {
-        assert_eq!(
-            attr("a<b & \"c\" 'd'\nx\ty"),
-            "a&lt;b &amp; &quot;c&quot; &apos;d&apos;&#10;x&#9;y"
-        );
-        assert_eq!(body("a<b>\n\"q\"\r"), "a&lt;b&gt;\n\"q\"&#13;");
-        assert_eq!(
-            body("\u{1b}[31mred\u{7f}\u{0}\u{fffe}é😀"),
-            "#x1B[31mred#x7F#x00#xFFFEé😀"
-        );
-    }
-
-    #[test]
-    fn sections_are_headed_as_pytest_heads_them() {
-        // `" Captured Out ".center(80, "-")`, then its text.
-        let out = section("Captured Out", "noise\n");
-        let (header, rest) = out.split_once('\n').unwrap();
-        assert_eq!(
-            header,
-            format!("{} Captured Out {}", "-".repeat(33), "-".repeat(33))
-        );
-        assert_eq!(rest, "noise\n\n");
-        // Python's rule for an odd margin: the extra dash goes right.
-        let odd = section("Odd", "");
-        assert_eq!(
-            odd.lines().next().unwrap(),
-            format!("{} Odd {}", "-".repeat(37), "-".repeat(38))
-        );
-    }
-
-    #[test]
-    fn pytests_spellings_of_the_settings() {
-        assert_eq!(JunitLogging::from("all"), JunitLogging::All);
-        assert_eq!(JunitLogging::from("out-err"), JunitLogging::OutErr);
-        assert_eq!(JunitLogging::from("bogus"), JunitLogging::No);
-        assert_eq!(JunitDuration::from("call"), JunitDuration::Body);
-        assert_eq!(JunitDuration::from("total"), JunitDuration::Total);
-        assert_eq!(JunitFamily::from("legacy"), JunitFamily::Xunit1);
-        assert_eq!(JunitFamily::from("xunit1"), JunitFamily::Xunit1);
-        assert_eq!(JunitFamily::from("xunit2"), JunitFamily::Xunit2);
     }
 }

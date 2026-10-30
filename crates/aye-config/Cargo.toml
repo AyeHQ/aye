@@ -10,6 +10,7 @@ homepage.workspace = true
 authors.workspace = true
 
 [dependencies]
+aye-events = { workspace = true }
 aye-fs = { workspace = true }
 serde = { workspace = true }
 shlex = { workspace = true }

@@ -1,0 +1,22 @@
+[package]
+name = "aye-test"
+description = "What aye's tests share: the interpreter they run, aye run hermetically, output filters and fixtures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+# A dev-dependency only, named by path: `cargo publish` strips it from the
+# manifests it publishes.
+publish = false
+
+[dependencies]
+aye-fs = { workspace = true }
+aye-static = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

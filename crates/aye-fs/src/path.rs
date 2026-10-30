@@ -107,9 +107,7 @@ pub fn common_ancestor(cwd: &Path, paths: &[PathBuf]) -> PathBuf {
 
 /// The deepest directory containing every existing path in `paths`, as
 /// [`common_ancestor`] finds it but with each resolved on the filesystem;
-/// `None` when fewer than two exist or one does not resolve. For the
-/// project root, which looks here when two spellings of one directory share
-/// more than the filesystem's root.
+/// `None` when fewer than two exist or one does not resolve.
 pub fn resolved_common_ancestor(cwd: &Path, paths: &[PathBuf]) -> Option<PathBuf> {
     let dirs = existing_dirs(&normpath(cwd), paths);
     if dirs.len() > 1 {

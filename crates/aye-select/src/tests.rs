@@ -1,3 +1,7 @@
+use std::collections::BTreeMap;
+
+use aye_events::{Case, Certainty, TestId};
+
 use super::*;
 
 fn exact(id: &str) -> Case {
@@ -16,11 +20,48 @@ fn tagged(mut case: Case, tags: &[&str]) -> Case {
 }
 
 fn ids(selected: &Selected) -> Vec<&str> {
-    selected.cases.iter().map(|c| c.id.as_str()).collect()
+    selected.cases.iter().map(|c| c.case.id.as_str()).collect()
+}
+
+/// The kept cases.
+fn kept(selected: &Selected) -> Vec<Case> {
+    selected.cases.iter().map(|c| c.case.clone()).collect()
+}
+
+/// The kept cases that run only as some of their parameter ids, by id,
+/// with those ids.
+fn narrowed(selected: &Selected) -> BTreeMap<TestId, Vec<TestId>> {
+    selected
+        .cases
+        .iter()
+        .filter_map(|c| match &c.run_as {
+            RunAs::Whole => None,
+            RunAs::Params(ids) => Some((c.case.id.clone(), ids.clone())),
+        })
+        .collect()
+}
+
+/// The ids to hand the engine for `case`: those of its kept case, else
+/// its own.
+fn ids_for(selected: &Selected, case: &Case) -> Vec<TestId> {
+    selected
+        .cases
+        .iter()
+        .find(|c| c.case.id == case.id)
+        .map_or_else(|| vec![case.id.clone()], SelectedCase::ids)
 }
 
 fn failed(ids: &[&str]) -> Vec<TestId> {
     ids.iter().map(|id| TestId::new(*id)).collect()
+}
+
+/// The arguments `selection` applied left unmatched, as given.
+fn unmatched<'s>(selection: &'s Selection, selected: &Selected) -> Vec<&'s str> {
+    selected
+        .unmatched
+        .iter()
+        .map(|&at| selection.ids[at].as_str())
+        .collect()
 }
 
 /// A small project: two files, a class, a parametrized test collected
@@ -52,9 +93,9 @@ fn the_default_selects_everything() {
     let selection = Selection::default();
     assert!(selection.is_empty());
     let selected = selection.apply(project());
-    assert_eq!(selected.cases, project());
+    assert_eq!(kept(&selected), project());
     assert_eq!(selected.deselected, 0);
-    assert!(selected.narrowed.is_empty() && selected.unmatched.is_empty());
+    assert!(narrowed(&selected).is_empty() && selected.unmatched.is_empty());
 }
 
 #[test]
@@ -90,7 +131,9 @@ fn positional_arguments_select_their_union() {
         ids(&by_dotted),
         ["tests/auth/test_api.py::TestLogin::test_bad"]
     );
-    let key = TestId::new("tests/test_cart.py::test_add[usd]").key().0;
+    let key = TestId::new("tests/test_cart.py::test_add[usd]")
+        .key()
+        .to_string();
     let by_key = Selection::default().with_ids([&key[..8]]).apply(project());
     assert_eq!(ids(&by_key), ["tests/test_cart.py::test_add[usd]"]);
 }
@@ -104,11 +147,13 @@ fn deselected_counts_only_what_the_expressions_drop() {
     assert_eq!(ids(&one), ["tests/auth/test_api.py::test_logout"]);
     assert_eq!(one.deselected, 0);
 
-    let missing = Selection::default()
-        .with_ids(["tests/auth/test_api.py::test_nope"])
-        .apply(project());
+    let nope = Selection::default().with_ids(["tests/auth/test_api.py::test_nope"]);
+    let missing = nope.apply(project());
     assert_eq!(missing.deselected, 0);
-    assert_eq!(missing.unmatched, ["tests/auth/test_api.py::test_nope"]);
+    assert_eq!(
+        unmatched(&nope, &missing),
+        ["tests/auth/test_api.py::test_nope"]
+    );
 
     let dotted = Selection::default()
         .with_ids(["tests.auth.test_api.test_logout"])
@@ -181,7 +226,9 @@ fn cases_follow_the_arguments_order() {
         ids(&Selection::default().apply(project()))
     );
     // Keys and dotted names take their place too.
-    let key = TestId::new("tests/test_cart.py::test_add[usd]").key().0;
+    let key = TestId::new("tests/test_cart.py::test_add[usd]")
+        .key()
+        .to_string();
     assert_eq!(
         order(&[&key[..8], "tests.auth.test_api.test_logout"]),
         [
@@ -193,49 +240,48 @@ fn cases_follow_the_arguments_order() {
 
 #[test]
 fn subsumed_arguments_are_never_unmatched() {
-    let selected = Selection::default()
-        .with_ids([
-            "tests/auth/test_api.py::test_nope",
-            "tests/auth/test_api.py",
-            "tests/test_cart.py::test_add[gbp]",
-            "tests/test_cart.py::test_add",
-            "tests/missing.py",
-            "tests",
-            "nowhere/t.py",
-            "nowhere/t.py",
-            "tests/test_cart.py::test_total[x]",
-        ])
-        .apply(project());
+    let selection = Selection::default().with_ids([
+        "tests/auth/test_api.py::test_nope",
+        "tests/auth/test_api.py",
+        "tests/test_cart.py::test_add[gbp]",
+        "tests/test_cart.py::test_add",
+        "tests/missing.py",
+        "tests",
+        "nowhere/t.py",
+        "nowhere/t.py",
+        "tests/test_cart.py::test_total[x]",
+    ]);
+    let selected = selection.apply(project());
     assert_eq!(selected.cases.len(), 6);
     // A repeat is reported once.
-    assert_eq!(selected.unmatched, ["nowhere/t.py"]);
+    assert_eq!(unmatched(&selection, &selected), ["nowhere/t.py"]);
 
-    let ids_only = Selection::default()
-        .with_ids([
-            "t.py::TestA::test_b[1]",
-            "t.py::TestA::test_b[2]",
-            "t.py::TestA",
-        ])
-        .apply(Vec::new());
-    assert_eq!(ids_only.unmatched, ["t.py::TestA"]);
-    let params = Selection::default()
-        .with_ids(["t.py::test_b[1]", "t.py::test_b[2]"])
-        .apply(Vec::new());
-    assert_eq!(params.unmatched, ["t.py::test_b[1]", "t.py::test_b[2]"]);
+    let ids_only = Selection::default().with_ids([
+        "t.py::TestA::test_b[1]",
+        "t.py::TestA::test_b[2]",
+        "t.py::TestA",
+    ]);
+    assert_eq!(
+        unmatched(&ids_only, &ids_only.apply(Vec::new())),
+        ["t.py::TestA"]
+    );
+    let params = Selection::default().with_ids(["t.py::test_b[1]", "t.py::test_b[2]"]);
+    assert_eq!(
+        unmatched(&params, &params.apply(Vec::new())),
+        ["t.py::test_b[1]", "t.py::test_b[2]"]
+    );
 }
 
 #[test]
 fn unmatched_arguments_are_reported() {
-    let selected = Selection::default()
-        .with_ids([
-            "tests/auth",
-            "tests/test_cart.py::test_nope",
-            "tests/test_cart.py::test_total[x]",
-            "nowhere",
-        ])
-        .apply(project());
+    let selection = Selection::default().with_ids([
+        "tests/auth",
+        "tests/test_cart.py::test_nope",
+        "tests/test_cart.py::test_total[x]",
+        "nowhere",
+    ]);
     assert_eq!(
-        selected.unmatched,
+        unmatched(&selection, &selection.apply(project())),
         ["tests/test_cart.py::test_nope", "nowhere"]
     );
 }
@@ -260,14 +306,44 @@ fn a_param_id_keeps_a_partial_case_and_narrows_it() {
         ]
     );
     assert_eq!(
-        selected.ids_for(&total),
+        ids_for(&selected, &total),
         failed(&[
             "tests/test_cart.py::test_total[b]",
             "tests/test_cart.py::test_total[a]"
         ])
     );
     let add = exact("tests/test_cart.py::test_add[eur]");
-    assert_eq!(selected.ids_for(&add), vec![add.id]);
+    assert_eq!(ids_for(&selected, &add), vec![add.id]);
+}
+
+/// A kept case runs as itself, or as one case for each parameter id it is
+/// narrowed to: the case under that id.
+#[test]
+fn a_kept_case_runs_whole_or_as_its_parameter_ids() {
+    let selected = Selection::default()
+        .with_ids([
+            "tests/test_cart.py::test_total[b]",
+            "tests/test_cart.py::test_total[a]",
+            "tests/test_cart.py::test_add[eur]",
+        ])
+        .apply(project());
+    let run: Vec<Case> = selected
+        .cases
+        .into_iter()
+        .flat_map(SelectedCase::into_cases)
+        .collect();
+    let total = |params: &str| Case {
+        id: TestId::new(format!("tests/test_cart.py::test_total[{params}]")),
+        ..tagged(partial("tests/test_cart.py::test_total"), &["db"])
+    };
+    assert_eq!(
+        run,
+        [
+            total("b"),
+            total("a"),
+            exact("tests/test_cart.py::test_add[eur]")
+        ]
+    );
 }
 
 #[test]
@@ -276,7 +352,7 @@ fn a_whole_selector_wins_over_a_narrowing_one() {
         .with_ids(["tests/test_cart.py::test_total[a]", "tests/test_cart.py"])
         .apply(project());
     assert_eq!(selected.cases.len(), 3);
-    assert!(selected.narrowed.is_empty());
+    assert!(narrowed(&selected).is_empty());
 }
 
 #[test]
@@ -336,7 +412,7 @@ fn a_keyword_miss_on_a_partial_case_is_unknown() {
 
     let selected = keyword("big").apply(project());
     assert_eq!(ids(&selected), ["tests/test_cart.py::test_total"]);
-    assert!(selected.narrowed.is_empty());
+    assert!(narrowed(&selected).is_empty());
 }
 
 #[test]
@@ -400,7 +476,7 @@ fn everything_is_joined_with_and() {
     // TestLogin's two, dropped by the expressions; test_logout was never
     // selected.
     assert_eq!(selected.deselected, 2);
-    assert_eq!(selected.unmatched, [] as [std::string::String; 0]);
+    assert_eq!(selected.unmatched, [] as [SelectorIndex; 0]);
 }
 
 #[test]
@@ -410,8 +486,8 @@ fn deselected_by_an_expression_is_still_matched() {
         .with_keyword("nothing")
         .unwrap()
         .apply(project());
-    assert_eq!(selected.cases, [] as [aye_events::Case; 0]);
-    assert_eq!(selected.unmatched, [] as [std::string::String; 0]);
+    assert_eq!(kept(&selected), [] as [aye_events::Case; 0]);
+    assert_eq!(selected.unmatched, [] as [SelectorIndex; 0]);
 }
 
 #[test]
@@ -428,7 +504,7 @@ fn an_empty_keyword_expression_is_off() {
 fn a_blank_tag_expression_matches_nothing() {
     assert!(tags("").tags.is_none());
     let selected = tags(" ").apply(project());
-    assert_eq!(selected.cases, [] as [aye_events::Case; 0]);
+    assert_eq!(kept(&selected), [] as [aye_events::Case; 0]);
     assert_eq!(selected.deselected, 6);
 }
 
@@ -588,7 +664,7 @@ fn last_failed_counts_deselected_as_pytests_summary_does() {
 #[test]
 fn an_adapters_own_expressions_apply_to_its_cases() {
     let mut doctest = exact("tests/test_cart.py::tests.test_cart.slow");
-    doctest.adapter = "doctest".to_string();
+    doctest.adapter = "doctest".into();
     let mut cases = project();
     cases.push(doctest);
     let own = Selection::default()
@@ -636,7 +712,7 @@ fn an_adapters_own_expressions_apply_to_its_cases() {
 #[test]
 fn deselect_prefixes_drop_and_count_their_adapters_cases() {
     let mut doctest = exact("tests/test_cart.py::tests.test_cart.add");
-    doctest.adapter = "doctest".to_string();
+    doctest.adapter = "doctest".into();
     let mut cases = project();
     cases.push(doctest);
     let selected = Selection::default()
@@ -668,9 +744,9 @@ fn deselect_prefixes_drop_and_count_their_adapters_cases() {
         .with_ids(["tests/test_cart.py::test_add[eur]"])
         .with_deselect("pytest", ["tests/test_cart.py::test_add[eur]"])
         .apply(project());
-    assert_eq!(selected.cases, [] as [aye_events::Case; 0]);
+    assert_eq!(kept(&selected), [] as [aye_events::Case; 0]);
     assert_eq!(selected.deselected, 1);
-    assert_eq!(selected.unmatched, [] as [std::string::String; 0]);
+    assert_eq!(selected.unmatched, [] as [SelectorIndex; 0]);
     assert!(
         !Selection::default()
             .with_deselect("pytest", ["x"])
@@ -685,7 +761,9 @@ fn deselect_prefixes_drop_and_count_their_adapters_cases() {
 
 #[test]
 fn last_failed_with_nothing_failed_keeps_everything() {
-    let selected = Selection::default().with_last_failed([]).apply(project());
+    let selected = Selection::default()
+        .with_last_failed([] as [TestId; 0])
+        .apply(project());
     assert_eq!(selected.cases.len(), 6);
 }
 
@@ -729,7 +807,7 @@ fn last_failed_narrows_a_partial_case_to_its_failed_params() {
         ]
     );
     assert_eq!(
-        selected.narrowed,
+        narrowed(&selected),
         BTreeMap::from([(
             TestId::new("tests/test_cart.py::test_total"),
             failed(&[
@@ -754,7 +832,7 @@ fn last_failed_files_and_directories_select_what_they_contain() {
         .with_last_failed(failed(&["tests/test_cart.py"]))
         .apply(project());
     assert_eq!(selected.cases.len(), 3);
-    assert!(selected.narrowed.is_empty());
+    assert!(narrowed(&selected).is_empty());
     let selected = Selection::default()
         .with_last_failed(failed(&["tests/auth"]))
         .apply(project());
@@ -774,7 +852,7 @@ fn last_failed_meets_explicit_narrowing() {
     let selected = wanted()
         .with_last_failed(failed(&["t.py::test_total[b]", "t.py::test_total[c]"]))
         .apply(cases());
-    assert_eq!(selected.ids_for(&total), failed(&["t.py::test_total[b]"]));
+    assert_eq!(ids_for(&selected, &total), failed(&["t.py::test_total[b]"]));
 
     // None of the wanted parameters failed: nothing selected failed, so
     // everything selected runs.
@@ -782,7 +860,7 @@ fn last_failed_meets_explicit_narrowing() {
         .with_last_failed(failed(&["t.py::test_total[c]"]))
         .apply(cases());
     assert_eq!(
-        selected.ids_for(&total),
+        ids_for(&selected, &total),
         failed(&["t.py::test_total[a]", "t.py::test_total[b]"])
     );
 
@@ -792,7 +870,7 @@ fn last_failed_meets_explicit_narrowing() {
         .apply(cases());
     assert_eq!(selected.cases.len(), 1);
     assert_eq!(
-        selected.ids_for(&total),
+        ids_for(&selected, &total),
         failed(&["t.py::test_total[a]", "t.py::test_total[b]"])
     );
 }
@@ -800,7 +878,7 @@ fn last_failed_meets_explicit_narrowing() {
 #[test]
 fn a_selection_is_built_once_and_applied_to_many() {
     let selection = Selection {
-        ids: vec![Selector::parse("tests/auth")],
+        ids: [Selector::parse("tests/auth")].into_iter().collect(),
         keyword: Some(Expression::parse("ok").unwrap()),
         ..Selection::default()
     };

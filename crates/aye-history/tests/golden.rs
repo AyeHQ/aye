@@ -19,7 +19,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use aye_events::{Event, Record};
+use aye_events::{Event, Record, RunNumber};
 use aye_history::{History, RunMeta, RunStore};
 
 fn fixtures(dir: &str) -> Vec<PathBuf> {
@@ -82,19 +82,23 @@ fn history_files_round_trip_byte_for_byte() {
 fn a_store_0_0_1_left_is_read() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/store/runs");
     let store = RunStore::new(&dir);
-    let runs: Vec<String> = store.runs().into_iter().map(|meta| meta.run).collect();
+    let runs: Vec<String> = store
+        .runs()
+        .into_iter()
+        .map(|meta| meta.run.to_string())
+        .collect();
     assert_eq!(runs, ["r1"]);
     let last = store.last().unwrap();
-    assert_eq!(last.number(), Some(1));
+    assert_eq!(last.number(), RunNumber::new(1));
     assert_eq!(last.root, "/private/tmp/aye-fixtures/rootdir");
-    let records = store.log("r1").unwrap();
+    let records = store.log(&"r1".into()).unwrap();
     assert_eq!(records.len(), 11);
     assert!(matches!(
         records[0].event,
-        Event::RunStarted { run: Some(1), .. }
+        Event::RunStarted { run: Some(run), .. } if run.get() == 1
     ));
     let mut copied = Vec::new();
-    store.copy_log("r1", &mut copied).unwrap();
+    store.copy_log(&"r1".into(), &mut copied).unwrap();
     let copied = String::from_utf8(copied).unwrap();
     assert_eq!(copied.lines().count(), records.len());
     for line in copied.lines() {
