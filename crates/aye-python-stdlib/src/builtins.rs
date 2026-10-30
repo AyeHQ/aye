@@ -83,6 +83,219 @@ const NUMERIC_NOT_DIGITS: &[(u32, u32)] = &[
     (0x1ecb1, 0x1ecb4), (0x1ed01, 0x1ed2d), (0x1ed2f, 0x1ed3d), (0x1f10b, 0x1f10c),
 ];
 
+/// Python builtins that have a `__name__`, with that name: those of every
+/// Python aye supports (3.10 to 3.14). `ExceptionGroup` and
+/// `BaseExceptionGroup` (3.11) and `PythonFinalizationError` (3.13) are
+/// left out: whether they exist depends on the version.
+pub fn builtin_name(name: &str) -> Option<&'static str> {
+    const BUILTINS: &[&str] = &[
+        "ArithmeticError",
+        "AssertionError",
+        "AttributeError",
+        "BaseException",
+        "BlockingIOError",
+        "BrokenPipeError",
+        "BufferError",
+        "BytesWarning",
+        "ChildProcessError",
+        "ConnectionAbortedError",
+        "ConnectionError",
+        "ConnectionRefusedError",
+        "ConnectionResetError",
+        "DeprecationWarning",
+        "EOFError",
+        "EncodingWarning",
+        "Exception",
+        "FileExistsError",
+        "FileNotFoundError",
+        "FloatingPointError",
+        "FutureWarning",
+        "GeneratorExit",
+        "ImportError",
+        "ImportWarning",
+        "IndentationError",
+        "IndexError",
+        "InterruptedError",
+        "IsADirectoryError",
+        "KeyError",
+        "KeyboardInterrupt",
+        "LookupError",
+        "MemoryError",
+        "ModuleNotFoundError",
+        "NameError",
+        "NotADirectoryError",
+        "NotImplementedError",
+        "OSError",
+        "OverflowError",
+        "PendingDeprecationWarning",
+        "PermissionError",
+        "ProcessLookupError",
+        "RecursionError",
+        "ReferenceError",
+        "ResourceWarning",
+        "RuntimeError",
+        "RuntimeWarning",
+        "StopAsyncIteration",
+        "StopIteration",
+        "SyntaxError",
+        "SyntaxWarning",
+        "SystemError",
+        "SystemExit",
+        "TabError",
+        "TimeoutError",
+        "TypeError",
+        "UnboundLocalError",
+        "UnicodeDecodeError",
+        "UnicodeEncodeError",
+        "UnicodeError",
+        "UnicodeTranslateError",
+        "UnicodeWarning",
+        "UserWarning",
+        "ValueError",
+        "Warning",
+        "ZeroDivisionError",
+        "abs",
+        "aiter",
+        "all",
+        "anext",
+        "any",
+        "ascii",
+        "bin",
+        "bool",
+        "breakpoint",
+        "bytearray",
+        "bytes",
+        "callable",
+        "chr",
+        "classmethod",
+        "compile",
+        "complex",
+        "delattr",
+        "dict",
+        "dir",
+        "divmod",
+        "enumerate",
+        "eval",
+        "exec",
+        "filter",
+        "float",
+        "format",
+        "frozenset",
+        "getattr",
+        "globals",
+        "hasattr",
+        "hash",
+        "hex",
+        "id",
+        "input",
+        "int",
+        "isinstance",
+        "issubclass",
+        "iter",
+        "len",
+        "list",
+        "locals",
+        "map",
+        "max",
+        "memoryview",
+        "min",
+        "next",
+        "object",
+        "oct",
+        "open",
+        "ord",
+        "pow",
+        "print",
+        "property",
+        "range",
+        "repr",
+        "reversed",
+        "round",
+        "set",
+        "setattr",
+        "slice",
+        "sorted",
+        "staticmethod",
+        "str",
+        "sum",
+        "super",
+        "tuple",
+        "type",
+        "vars",
+        "zip",
+    ];
+    match name {
+        "EnvironmentError" | "IOError" => Some("OSError"),
+        _ => BUILTINS.iter().find(|b| **b == name).copied(),
+    }
+}
+
+/// `float(text)` for the spellings Python accepts, ASCII only (Python also
+/// takes other Unicode digits and spaces, which are left to it):
+/// surrounding whitespace, one sign, then `inf`, `infinity`, `nan`, or
+/// digits with single underscores between them, an optional fraction and an
+/// optional exponent.
+pub fn parse_float(text: &str) -> Option<f64> {
+    /// Digits from `*at`, with single underscores between digits: how many
+    /// digits, or `None` for a misplaced underscore.
+    fn digits(bytes: &[u8], at: &mut usize) -> Option<usize> {
+        let mut count = 0;
+        while let Some(&byte) = bytes.get(*at) {
+            if byte.is_ascii_digit() {
+                count += 1;
+            } else if byte == b'_' {
+                if count == 0 || !bytes.get(*at + 1).is_some_and(u8::is_ascii_digit) {
+                    return None;
+                }
+            } else {
+                break;
+            }
+            *at += 1;
+        }
+        Some(count)
+    }
+
+    let trimmed = text.trim_matches(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c'));
+    if !trimmed.is_ascii() {
+        return None;
+    }
+    let (sign, rest) = match trimmed.as_bytes().first() {
+        Some(b'-') => (-1.0, &trimmed[1..]),
+        Some(b'+') => (1.0, &trimmed[1..]),
+        _ => (1.0, trimmed),
+    };
+    match rest.to_ascii_lowercase().as_str() {
+        "inf" | "infinity" => return Some(sign * f64::INFINITY),
+        "nan" => return Some(f64::NAN),
+        _ => {}
+    }
+    let bytes = rest.as_bytes();
+    let mut at = 0;
+    let whole = digits(bytes, &mut at)?;
+    let mut fraction = 0;
+    if bytes.get(at) == Some(&b'.') {
+        at += 1;
+        fraction = digits(bytes, &mut at)?;
+    }
+    if whole == 0 && fraction == 0 {
+        return None;
+    }
+    if matches!(bytes.get(at), Some(b'e' | b'E')) {
+        at += 1;
+        if matches!(bytes.get(at), Some(b'+' | b'-')) {
+            at += 1;
+        }
+        if digits(bytes, &mut at)? == 0 {
+            return None;
+        }
+    }
+    if at != bytes.len() {
+        return None;
+    }
+    let cleaned: String = rest.chars().filter(|c| *c != '_').collect();
+    cleaned.parse::<f64>().ok().map(|f| sign * f)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,5 +347,41 @@ mod tests {
                 assert_eq!(digit, digits.contains(&code), "U+{code:04X}");
             }
         }
+    }
+
+    #[test]
+    fn floats_parse_as_python_parses_them() {
+        for (text, expected) in [
+            ("1.5", Some(1.5)),
+            ("  -2e3\n", Some(-2000.0)),
+            ("1_000.000_1", Some(1000.0001)),
+            (".5", Some(0.5)),
+            ("5.", Some(5.0)),
+            ("+1E+05", Some(100_000.0)),
+            ("007", Some(7.0)),
+            ("Infinity", Some(f64::INFINITY)),
+            ("-iNf", Some(f64::NEG_INFINITY)),
+            ("", None),
+            (".", None),
+            ("e5", None),
+            ("1e", None),
+            ("1e+", None),
+            ("_1", None),
+            ("1_", None),
+            ("1__0", None),
+            ("1_.5", None),
+            ("1._5", None),
+            ("1_e5", None),
+            ("1e_5", None),
+            ("+-5", None),
+            ("--5", None),
+            ("0x10", None),
+            ("1 5", None),
+            ("infinit", None),
+            ("nan(1)", None),
+        ] {
+            assert_eq!(parse_float(text), expected, "{text:?}");
+        }
+        assert!(parse_float("-nan").is_some_and(f64::is_nan));
     }
 }

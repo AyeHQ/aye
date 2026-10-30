@@ -14,6 +14,7 @@ aye-fs = { workspace = true }
 
 [dev-dependencies]
 aye-test = { path = "../aye-test" }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

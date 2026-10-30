@@ -339,6 +339,7 @@ version = "0.0.1"
 dependencies = [
  "aye-fs",
  "aye-test",
+ "serde_json",
  "tempfile",
 ]
 
