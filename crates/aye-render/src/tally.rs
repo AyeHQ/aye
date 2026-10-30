@@ -4,7 +4,9 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use aye_events::{Counts, Diagnostic, Event, Record, Severity};
+use aye_events::{
+    Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, Event, Record, Severity, SummaryKind,
+};
 
 use crate::shared;
 
@@ -47,7 +49,7 @@ impl Tally {
                 if diagnostic.severity == Severity::Error
                     && self
                         .errors
-                        .count(diagnostic, record.envelope.batch.is_some()) =>
+                        .count(diagnostic, DiagnosticOrigin::of(&record.envelope)) =>
             {
                 Some(Noted::Error(diagnostic))
             }
@@ -77,7 +79,7 @@ impl Tally {
 pub fn module_skip(record: &Record) -> Option<&Diagnostic> {
     match &record.event {
         Event::Diagnostic(diagnostic)
-            if diagnostic.code == "skipped"
+            if diagnostic.code == DiagnosticCode::Skipped
                 && diagnostic.severity == Severity::Info
                 && record.envelope.batch.is_none() =>
         {
@@ -225,43 +227,116 @@ pub fn summary_words(counts: &Counts, extra: &Extra) -> Vec<String> {
         .collect()
 }
 
-/// Error diagnostics, by what the text summary line calls them, each once
-/// however many batches repeat it (a framework rejecting its arguments).
+/// Error diagnostics, by what the text summary line calls them
+/// ([`aye_events::ErrorClass::summary`]), each once however many batches
+/// repeat it (a framework rejecting its arguments).
 #[derive(Debug, Default)]
 pub(crate) struct ErrorKinds {
     pub collection: u32,
     pub usage: u32,
     pub internal: u32,
     /// Counted, by code, path and message.
-    seen: HashSet<(String, String, String)>,
+    seen: HashSet<(DiagnosticCode, String, String)>,
 }
 
 impl ErrorKinds {
-    /// Counts an error diagnostic the first time it comes: whether it was.
-    /// `from_batch`: whether a batch reported it, rather than the runner
-    /// before anything ran.
-    pub(crate) fn count(&mut self, diagnostic: &Diagnostic, from_batch: bool) -> bool {
+    /// Counts an error diagnostic the first time it comes from `origin`:
+    /// whether it was. A batch stopped early is seen, but not counted: the
+    /// summary's verdict and the stop notice say so.
+    pub(crate) fn count(&mut self, diagnostic: &Diagnostic, origin: DiagnosticOrigin) -> bool {
         let key = (
             diagnostic.code.clone(),
-            diagnostic.path.clone(),
+            diagnostic.path.to_string(),
             diagnostic.message.clone(),
         );
         if !self.seen.insert(key) {
             return false;
         }
-        match diagnostic.code.as_str() {
-            // A batch the framework stopped early: the summary's verdict and
-            // the stop notice say so.
-            "batch-stopped" => {}
-            "usage-error" | "unclaimed" => self.usage += 1,
-            // What the command line names doesn't exist: pytest's usage
-            // error. A requested id the framework can't find in a batch is
-            // a collection error.
-            "not-found" if !from_batch => self.usage += 1,
-            "internal-error" | "adapter-error" | "protocol-error" | "batch-failed"
-            | "no-executor" => self.internal += 1,
-            _ => self.collection += 1,
+        match diagnostic.code.class(origin).summary() {
+            Some(SummaryKind::Collection) => self.collection += 1,
+            Some(SummaryKind::Usage) => self.usage += 1,
+            Some(SummaryKind::Internal) => self.internal += 1,
+            None => {}
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use aye_events::{BatchIndex, DiagnosticPath};
+
+    use super::*;
+
+    /// Every diagnostic code aye 0.0.1 knows, and one it doesn't, with what
+    /// the summary counts an error with it as, before any batch and from
+    /// one: a `collection`, `usage` or `internal` error, or `none`.
+    const SUMMARY: [(&str, &str, &str); 26] = [
+        ("syntax-error", "collection", "collection"),
+        ("unreadable", "collection", "collection"),
+        ("not-found", "usage", "collection"),
+        ("unclaimed", "usage", "usage"),
+        ("duplicate-id", "collection", "collection"),
+        ("no-tests", "collection", "collection"),
+        ("not-refined", "collection", "collection"),
+        ("refine-failed", "collection", "collection"),
+        ("class-has-init", "collection", "collection"),
+        ("duplicate-definition", "collection", "collection"),
+        ("collection-error", "collection", "collection"),
+        ("usage-error", "usage", "usage"),
+        ("unknown-option", "collection", "collection"),
+        ("plugin-not-loaded", "collection", "collection"),
+        ("internal-error", "internal", "internal"),
+        ("skipped", "collection", "collection"),
+        ("ignored", "collection", "collection"),
+        ("batch-stopped", "none", "none"),
+        ("session-failed", "collection", "collection"),
+        ("protocol-error", "internal", "internal"),
+        ("batch-failed", "internal", "internal"),
+        ("no-executor", "internal", "internal"),
+        ("listing-differs", "collection", "collection"),
+        ("stand-in", "collection", "collection"),
+        ("adapter-error", "internal", "internal"),
+        ("some-other-code", "collection", "collection"),
+    ];
+
+    /// What the summary counts an error with `code` from `origin` as.
+    fn counted(code: &str, origin: DiagnosticOrigin) -> &'static str {
+        let mut kinds = ErrorKinds::default();
+        let diagnostic = Diagnostic {
+            severity: Severity::Error,
+            code: code.into(),
+            path: DiagnosticPath::Nowhere,
+            span: None,
+            message: String::new(),
+        };
+        assert!(kinds.count(&diagnostic, origin), "{code}");
+        match (kinds.collection, kinds.usage, kinds.internal) {
+            (1, 0, 0) => "collection",
+            (0, 1, 0) => "usage",
+            (0, 0, 1) => "internal",
+            (0, 0, 0) => "none",
+            counts => panic!("{code}: {counts:?}"),
+        }
+    }
+
+    #[test]
+    fn every_code_is_counted_as_before() {
+        let known: Vec<&str> = SUMMARY[..25].iter().map(|(code, ..)| *code).collect();
+        let all: Vec<&str> = DiagnosticCode::ALL
+            .iter()
+            .map(DiagnosticCode::as_str)
+            .collect();
+        assert_eq!(known, all);
+        for (code, before, from_batch) in SUMMARY {
+            assert_eq!(
+                (
+                    counted(code, DiagnosticOrigin::BeforeBatches),
+                    counted(code, DiagnosticOrigin::Batch(BatchIndex::from_u32(0)))
+                ),
+                (before, from_batch),
+                "{code}"
+            );
+        }
     }
 }

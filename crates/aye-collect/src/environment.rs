@@ -13,7 +13,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use crate::refine::Fnv;
+use aye_events::Fnv128;
+use aye_static::EnvVars;
 
 /// What refinement depends on outside the project's files. Every part goes
 /// into the refinement cache's key; see [`crate::Collector::with_environment`].
@@ -56,9 +57,9 @@ impl Environment {
     /// A digest of everything this environment stands for, or `None` when
     /// the interpreter can't be identified.
     pub(crate) fn digest(&self, cwd: &Path) -> Option<u128> {
-        let mut hash = Fnv::new();
+        let mut hash = Fnv128::new();
         interpreter(
-            &aye_config::absolute(cwd, self.interpreter.as_ref()?),
+            &aye_fs::absolute(cwd, self.interpreter.as_ref()?),
             &mut hash,
         )?;
         let mut variables = self
@@ -85,7 +86,7 @@ impl Environment {
 
 /// Hash what identifies the interpreter at `python` and its installed
 /// packages. `None` when it doesn't exist or its packages can't be found.
-fn interpreter(python: &Path, hash: &mut Fnv) -> Option<()> {
+fn interpreter(python: &Path, hash: &mut Fnv128) -> Option<()> {
     let real = fs::canonicalize(python).ok()?;
     let meta = fs::metadata(&real).ok()?;
     hash.part(b"interpreter");
@@ -228,7 +229,7 @@ impl Environment {
     /// packages (`include-system-site-packages = false`, venv's default)
     /// counts only its own.
     pub fn installs(&self, cwd: &Path, names: &[&str]) -> Option<bool> {
-        let python = aye_config::absolute(cwd, self.interpreter.as_ref()?);
+        let python = aye_fs::absolute(cwd, self.interpreter.as_ref()?);
         let real = fs::canonicalize(&python).ok()?;
         let layout = Layout::of(&python, &real);
         if layout.importable().is_empty() {
@@ -250,7 +251,7 @@ impl Environment {
         let Some(python) = &self.interpreter else {
             return HashSet::new();
         };
-        let python = aye_config::absolute(cwd, python);
+        let python = aye_fs::absolute(cwd, python);
         let Ok(real) = fs::canonicalize(&python) else {
             return HashSet::new();
         };
@@ -298,12 +299,12 @@ impl Environment {
         let pythonpath = match &self.variables {
             Some(variables) => variables
                 .iter()
-                .find(|(name, _)| name == "PYTHONPATH")
+                .find(|(name, _)| name == EnvVars::PYTHONPATH)
                 .map(|(_, value)| value.clone()),
-            None => std::env::var_os("PYTHONPATH"),
+            None => std::env::var_os(EnvVars::PYTHONPATH),
         };
         for dir in pythonpath.iter().flat_map(std::env::split_paths) {
-            modules_in(&aye_config::absolute(cwd, &dir), &mut names);
+            modules_in(&aye_fs::absolute(cwd, &dir), &mut names);
         }
         names
     }
@@ -370,7 +371,9 @@ fn site_packages(prefix: &Path) -> Vec<PathBuf> {
 /// The user's own `site-packages`, which interpreters outside a venv also
 /// import from.
 fn user_site_packages() -> Vec<PathBuf> {
-    let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) else {
+    let Some(home) =
+        std::env::var_os(EnvVars::HOME).or_else(|| std::env::var_os(EnvVars::USERPROFILE))
+    else {
         return Vec::new();
     };
     let home = PathBuf::from(home);

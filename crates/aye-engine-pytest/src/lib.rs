@@ -42,8 +42,9 @@
 //!   `UnitTestCase.collect` (unittest methods sorted by name, parametrize not
 //!   applied). Venvs are detected as pytest does (`pyvenv.cfg` or
 //!   `conda-meta/history`). The crate also depends on `aye-config`, for its
-//!   loaders. [`Pytest::prepare`] always returns a recognizer: pytest is the
-//!   default for Python tests.
+//!   loaders, on `aye-fs` for paths, and on `aye-static` for the variables
+//!   it reads. [`Pytest::prepare`] always returns a recognizer: pytest is
+//!   the default for Python tests.
 //! - **Canonical ids are relative to the aye project root**; pytest's own
 //!   node ids are relative to its rootdir. The two differ only in the file
 //!   part, which the front-end translates using the rootdir in
@@ -466,7 +467,9 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_engine::{AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile};
-use aye_events::{Certainty, Diagnostic, Severity};
+use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
+use aye_fs::normalize_absolute;
+use aye_static::EnvVars;
 
 pub use config::{PytestConfig, split_xdist};
 pub use native::{NAME, Pytest};
@@ -611,21 +614,6 @@ enum Ignored {
     Yes,
 }
 
-/// `os.path.abspath` without touching the file system.
-fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
-        }
-    }
-    out
-}
-
 /// pytest's `_in_venv`.
 fn is_virtualenv(dir: &Path) -> bool {
     dir.join("pyvenv.cfg").is_file() || dir.join("conda-meta").join("history").is_file()
@@ -697,7 +685,7 @@ fn initial_dirs(cwd: &Path, args: &[PathBuf]) -> Vec<PathBuf> {
     };
     let mut anchors = Vec::new();
     for arg in args {
-        let arg = normalize(arg);
+        let arg = normalize_absolute(arg);
         if arg.is_dir() {
             anchors.extend(test_dirs(&arg));
             anchors.push(arg);
@@ -730,9 +718,9 @@ fn module_name(root: &Path, file: &Path) -> Option<String> {
 
 impl PytestRecognizer {
     pub fn new(project: &Project<'_>) -> Result<Self, AdapterError> {
-        let addopts = std::env::var("PYTEST_ADDOPTS").ok();
-        let plugins = std::env::var("PYTEST_PLUGINS").ok();
-        let pythonpath = std::env::var("PYTHONPATH").ok();
+        let addopts = std::env::var(EnvVars::PYTEST_ADDOPTS).ok();
+        let plugins = std::env::var(EnvVars::PYTEST_PLUGINS).ok();
+        let pythonpath = std::env::var(EnvVars::PYTHONPATH).ok();
         Self::with_environment(
             project,
             PytestEnv {
@@ -770,7 +758,7 @@ impl PytestRecognizer {
             .map(|value| {
                 std::env::split_paths(value)
                     .filter(|p| !p.as_os_str().is_empty())
-                    .map(|p| normalize(&project.cwd.join(p)))
+                    .map(|p| normalize_absolute(&project.cwd.join(p)))
                     .collect()
             })
             .unwrap_or_default();
@@ -989,7 +977,7 @@ impl PytestRecognizer {
         let mut dirs: Vec<PathBuf> = Vec::new();
         let mut files: Vec<PathBuf> = Vec::new();
         for arg in &self.collection_args {
-            let arg = normalize(arg);
+            let arg = normalize_absolute(arg);
             if arg.is_dir() {
                 dirs.push(arg);
             } else if arg.is_file() {
@@ -1206,8 +1194,8 @@ impl PytestRecognizer {
              {}\n\
              For more information, visit:\n  \
              https://docs.pytest.org/en/stable/deprecations.html#pytest-plugins-in-non-top-level-conftest-files",
-            normalize(&dir.join("conftest.py")).display(),
-            normalize(&self.config.confcutdir).display(),
+            normalize_absolute(&dir.join("conftest.py")).display(),
+            normalize_absolute(&self.config.confcutdir).display(),
         );
         Some((dir.to_path_buf(), message))
     }
@@ -1397,13 +1385,13 @@ impl PytestRecognizer {
     /// `consider_namespace_packages` the name depends on `sys.path` at
     /// runtime; the file's stem stands in, which groups every file that
     /// could clash (and some that can't).
-    fn import_key(&self, file: &Path) -> String {
+    fn import_key(&self, file: &Path) -> AffinityKey {
         let stem = file
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
         if self.config.consider_namespace_packages {
-            return format!("import:{stem}");
+            return AffinityKey::import(&stem);
         }
         let packaged = package_path(file)
             .and_then(|package| module_name(package.parent().unwrap_or(&package), file));
@@ -1435,14 +1423,19 @@ impl PytestRecognizer {
             }
             (None, _) => stem,
         };
-        format!("import:{name}")
+        AffinityKey::import(&name)
     }
 
     /// Whether pytest ignores `path` (`collect_ignore`, `--ignore` and
     /// their glob forms).
     fn ignored(&self, path: &Path) -> Ignored {
-        let path = normalize(path);
-        if self.config.ignore.iter().any(|p| normalize(p) == path) {
+        let path = normalize_absolute(path);
+        if self
+            .config
+            .ignore
+            .iter()
+            .any(|p| normalize_absolute(p) == path)
+        {
             return Ignored::Yes;
         }
         let text = path.to_string_lossy();
@@ -1468,7 +1461,7 @@ impl PytestRecognizer {
         if let Some(summary) = nearest(|s| s.collect_ignore.as_ref()) {
             let list = summary.collect_ignore.as_ref().expect("picked");
             for (entry, conditional) in &list.entries {
-                if normalize(&summary.dir.join(entry)) == path {
+                if normalize_absolute(&summary.dir.join(entry)) == path {
                     if !conditional {
                         return Ignored::Yes;
                     }
@@ -1482,7 +1475,7 @@ impl PytestRecognizer {
         if let Some(summary) = nearest(|s| s.collect_ignore_glob.as_ref()) {
             let list = summary.collect_ignore_glob.as_ref().expect("picked");
             for (entry, conditional) in &list.entries {
-                let glob = normalize(&summary.dir.join(entry));
+                let glob = normalize_absolute(&summary.dir.join(entry));
                 if fnmatch::fnmatch(&text, &glob.to_string_lossy()) {
                     if !conditional {
                         return Ignored::Yes;
@@ -1528,7 +1521,7 @@ impl PytestRecognizer {
                     _ => None,
                 })
                 .collect(),
-            Err(_) => file.rel.split('/').map(str::to_string).collect(),
+            Err(_) => file.rel.as_str().split('/').map(str::to_string).collect(),
         }
     }
 }
@@ -1656,14 +1649,14 @@ impl Recognizer for PytestRecognizer {
                     .iter()
                     .map(|entry| {
                         self.pyarg(entry)
-                            .unwrap_or_else(|| normalize(&rootdir.join(entry)))
+                            .unwrap_or_else(|| normalize_absolute(&rootdir.join(entry)))
                     })
                     .collect();
             }
             let mut roots: Vec<PathBuf> = Vec::new();
             for pattern in testpaths {
                 for found in fnmatch::glob(rootdir, pattern) {
-                    let path = normalize(&rootdir.join(found));
+                    let path = normalize_absolute(&rootdir.join(found));
                     if !roots.contains(&path) {
                         roots.push(path);
                     }
@@ -1727,9 +1720,13 @@ impl Recognizer for PytestRecognizer {
 
     fn recognize(&self, file: &SourceFile<'_>, support: &[SourceFile<'_>]) -> Recognition {
         // Recorded by `claim`, when pytest collects doctests.
-        let explicit =
-            self.doctests.is_some() && self.explicit.lock().expect("lock").contains(file.rel);
-        let doctest = self.doctest_file(file.rel, explicit);
+        let explicit = self.doctests.is_some()
+            && self
+                .explicit
+                .lock()
+                .expect("lock")
+                .contains(file.rel.as_str());
+        let doctest = self.doctest_file(file.rel.as_str(), explicit);
         if self.settings.python_blocked && doctest.is_none() {
             // `-p no:python`: nothing collects Python files.
             return Recognition::default();
@@ -1755,8 +1752,12 @@ impl Recognizer for PytestRecognizer {
                 );
                 recognition.diagnostics.push(Diagnostic {
                     severity: Severity::Error,
-                    code: "collection-error".into(),
-                    path: if rel.is_empty() { ".".into() } else { rel },
+                    code: DiagnosticCode::CollectionError,
+                    path: if rel.is_empty() {
+                        DiagnosticPath::Root
+                    } else {
+                        DiagnosticPath::as_written(rel)
+                    },
                     span: None,
                     message,
                 });
@@ -1766,7 +1767,8 @@ impl Recognizer for PytestRecognizer {
         match doctest {
             Some(DoctestFile::Text) => return doctest_text(file),
             Some(DoctestFile::Module)
-                if self.settings.python_blocked || !self.python_module(file.rel, explicit) =>
+                if self.settings.python_blocked
+                    || !self.python_module(file.rel.as_str(), explicit) =>
             {
                 // Only pytest's doctest plugin collects it, importing it: an
                 // import error is a collection error.
@@ -1826,7 +1828,7 @@ impl Recognizer for PytestRecognizer {
             scope.hooks_unknown |= summary.hooks_unknown();
             scope.patched.extend(summary.patched.iter().cloned());
             scope.reflective |= summary.reflective;
-            scope.imports_module |= module::names_module(&summary.modules, file.rel);
+            scope.imports_module |= module::names_module(&summary.modules, file.rel.as_str());
         }
         // Fixtures the test module imports from project files register
         // with its own.
@@ -1834,7 +1836,7 @@ impl Recognizer for PytestRecognizer {
         let mut namespace = scope::Namespace::build(&file.module.body);
         // What support files do to modules holds here too.
         namespace.assume_patched(scope.patched.iter().cloned(), scope.reflective);
-        if !module::reached(&namespace, &scope, file.rel).is_empty() {
+        if !module::reached(&namespace, &scope, file.rel.as_str()).is_empty() {
             // Its names may change in ways the module's code doesn't show:
             // none is a constant.
             namespace.assume_reached();
@@ -1966,7 +1968,7 @@ impl Recognizer for PytestRecognizer {
             }
             // Test modules that import it run in one session, as pytest
             // runs them.
-            key = format!("import:{name}");
+            key = AffinityKey::import(&name);
         }
         for case in &mut recognition.cases {
             case.affinity.insert(0, key.clone());

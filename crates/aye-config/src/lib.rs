@@ -6,7 +6,8 @@
 //! Owns: loading and origins. Does not own: the meaning of any framework's
 //! options; `python_files` means something to the pytest engine, not here.
 //!
-//! Depends on: nothing from aye yet (loaders are pure).
+//! Depends on: aye-fs, for the lexical path algebra the root is found
+//! with.
 
 //!
 //! Decided (implementation, October 2026):
@@ -14,20 +15,13 @@
 //!   of the paths given (or the current directory) upward, holding a
 //!   `pyproject.toml`; failing that, one holding `.git`; failing that, the
 //!   starting directory. Test ids are relative to it. Frameworks keep their
-//!   own notion of a root (pytest's rootdir) and translate.
-//! - **Paths are made absolute lexically**, as Python's `os.path.abspath`
-//!   does and pytest relies on: joined to the current directory, with `.`
-//!   and `..` folded away ([`absolute`]), never resolved through symlinks, so
-//!   a symlinked test directory keeps its name. The filesystem is consulted
-//!   only to reconcile two spellings of one directory (macOS's `/tmp` is
-//!   `/private/tmp`, which is what the current directory reads as): when the
-//!   given directories share nothing lexically but do once resolved, their
-//!   common ancestor is the resolved one, and [`relative_to`] falls back to
-//!   resolved paths the same way. Where the two spellings share more than
-//!   the filesystem's root (both under Linux's `/tmp`), the common ancestor
-//!   stays lexical, as pytest's `get_common_ancestor` keeps it, but when no
-//!   project holds it the root is searched for from the resolved one
-//!   ([`project_root`]), so one command finds one root on every platform.
+//!   own notion of a root (pytest's rootdir) and translate. Paths are made
+//!   absolute lexically, as `aye_fs` decides. Where two spellings of one
+//!   directory share more than the filesystem's root (both under Linux's
+//!   `/tmp`), their common ancestor stays lexical, as pytest's
+//!   `get_common_ancestor` keeps it, but when no project holds it the root
+//!   is searched for from the resolved one ([`project_root`]), so one
+//!   command finds one root on every platform.
 //! - **`[tool.aye]` rejects unknown keys and values**, so a typo is an error
 //!   rather than a setting that silently does nothing: `output` must be
 //!   `text` or `json`, in any case as on the command line (it is kept in
@@ -46,7 +40,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -144,143 +138,25 @@ pub fn find_upward(start: &Path, names: &[&str]) -> Option<PathBuf> {
     })
 }
 
-/// `path` without `.` and `..` components, folded lexically as Python's
-/// `os.path.normpath` does: `..` at the top of an absolute path stays at the
-/// top, and leading `..` of a relative path are kept.
-pub fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => match out.components().next_back() {
-                Some(Component::Normal(_)) => {
-                    out.pop();
-                }
-                Some(Component::RootDir | Component::Prefix(_)) => {}
-                _ => out.push(".."),
-            },
-            other => out.push(other.as_os_str()),
-        }
-    }
-    if out.as_os_str().is_empty() {
-        out.push(".");
-    }
-    out
-}
-
-/// `path` made absolute against `cwd` and normalized, as Python's
-/// `os.path.abspath` does: no filesystem access, symlinks untouched.
-pub fn absolute(cwd: &Path, path: &Path) -> PathBuf {
-    normalize(&cwd.join(path))
-}
-
-/// `path` relative to `root` (both absolute): lexically when `path` is
-/// spelled under `root`, otherwise through both resolved on the filesystem
-/// (the deepest existing ancestor of `path`, then the rest as written), so
-/// `/tmp/x/t.py` is under `/private/tmp/x`. `None` when it is not under
-/// `root` either way.
-pub fn relative_to(root: &Path, path: &Path) -> Option<PathBuf> {
-    let (root, path) = (normalize(root), normalize(path));
-    if let Ok(rest) = path.strip_prefix(&root) {
-        return Some(rest.to_path_buf());
-    }
-    let root = fs::canonicalize(&root).ok()?;
-    resolve_existing(&path)?
-        .strip_prefix(&root)
-        .ok()
-        .map(Path::to_path_buf)
-}
-
-/// `path` with its deepest existing ancestor resolved on the filesystem and
-/// the rest appended as written; `None` when nothing of it exists.
-fn resolve_existing(path: &Path) -> Option<PathBuf> {
-    let mut rest = Vec::new();
-    for ancestor in path.ancestors() {
-        if let Ok(resolved) = fs::canonicalize(ancestor) {
-            return Some(rest.iter().rev().fold(resolved, |acc, part| acc.join(part)));
-        }
-        rest.push(ancestor.file_name()?);
-    }
-    None
-}
-
-/// The deepest directory containing every existing path in `paths` (files
-/// count as their parent directory), or `cwd` when none exist. Paths are
-/// relative to `cwd` or absolute, and are normalized lexically first (see
-/// the crate docs); so is the result.
-pub fn common_ancestor(cwd: &Path, paths: &[PathBuf]) -> PathBuf {
-    let cwd = normalize(cwd);
-    let dirs = existing_dirs(&cwd, paths);
-    let Some(lexical) = deepest_common(&dirs) else {
-        return cwd;
-    };
-    if lexical.parent().is_none() && dirs.len() > 1 {
-        // Nothing in common but the filesystem's root: perhaps one directory
-        // spelled two ways.
-        if let Some(common) = resolved_common(&dirs)
-            && common.parent().is_some()
-        {
-            return common;
-        }
-    }
-    lexical
-}
-
-/// The existing paths of `paths` made absolute against `cwd` (already
-/// normalized), files as their parent directory.
-fn existing_dirs(cwd: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
-    paths
-        .iter()
-        .map(|p| absolute(cwd, p))
-        .filter(|p| p.exists())
-        .map(|p| {
-            if p.is_file() {
-                p.parent().map_or(p.clone(), Path::to_path_buf)
-            } else {
-                p
-            }
-        })
-        .collect()
-}
-
-/// The deepest common ancestor of `dirs` resolved on the filesystem;
-/// `None` when one of them does not resolve.
-fn resolved_common(dirs: &[PathBuf]) -> Option<PathBuf> {
-    let resolved: Option<Vec<PathBuf>> = dirs.iter().map(|d| fs::canonicalize(d).ok()).collect();
-    deepest_common(&resolved?)
-}
-
-/// The deepest common ancestor of absolute paths, by whole components.
-fn deepest_common(dirs: &[PathBuf]) -> Option<PathBuf> {
-    let (first, rest) = dirs.split_first()?;
-    Some(rest.iter().fold(first.clone(), |acc, dir| {
-        acc.ancestors()
-            .find(|a| dir.starts_with(a))
-            .map_or_else(|| PathBuf::from("/"), Path::to_path_buf)
-    }))
-}
-
 /// aye's project root: see the crate docs. `start` is normalized lexically
 /// first, so `<root>/tests/..` gives `<root>`.
 pub fn find_root(start: &Path) -> PathBuf {
-    let start = normalize(start);
+    let start = aye_fs::normpath(start);
     marked(&start).unwrap_or(start)
 }
 
 /// aye's project root for `paths` given in `cwd`: [`find_root`] from their
-/// [`common_ancestor`]. When nothing above that ancestor marks a project,
-/// but the paths, resolved, share a directory inside it (one directory
-/// spelled two ways under a shared `/tmp`, as on Linux), the search starts
-/// from that directory instead, so the root doesn't depend on how much two
+/// common ancestor. When nothing above that ancestor marks a project, but
+/// the paths, resolved, share a directory inside it (one directory spelled
+/// two ways under a shared `/tmp`, as on Linux), the search starts from
+/// that directory instead, so the root doesn't depend on how much two
 /// spellings happen to share.
 pub fn project_root(cwd: &Path, paths: &[PathBuf]) -> PathBuf {
-    let ancestor = normalize(&common_ancestor(cwd, paths));
+    let ancestor = aye_fs::normpath(&aye_fs::common_ancestor(cwd, paths));
     if let Some(root) = marked(&ancestor) {
         return root;
     }
-    let dirs = existing_dirs(&normalize(cwd), paths);
-    if dirs.len() > 1
-        && let Some(resolved) = resolved_common(&dirs)
+    if let Some(resolved) = aye_fs::resolved_common_ancestor(cwd, paths)
         && let Ok(real) = fs::canonicalize(&ancestor)
         && resolved != real
         && resolved.starts_with(&real)
@@ -645,42 +521,6 @@ mod tests {
         assert_eq!(find_root(&root.join("a/b")), root.join("a"));
     }
 
-    #[test]
-    fn common_ancestor_of_paths() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        write(root, "a/b/t1.py", "");
-        write(root, "a/c/t2.py", "");
-        let paths = [PathBuf::from("a/b/t1.py"), PathBuf::from("a/c")];
-        assert_eq!(common_ancestor(root, &paths), root.join("a"));
-        assert_eq!(common_ancestor(root, &[PathBuf::from("missing")]), root);
-    }
-
-    #[test]
-    fn normalize_folds_dots_lexically() {
-        let cases = [
-            ("/a/b/../c", "/a/c"),
-            ("/a/./b/", "/a/b"),
-            ("/a/b/../../..", "/"),
-            ("/..", "/"),
-            ("a/../..", ".."),
-            ("../a/./b", "../a/b"),
-            ("a/..", "."),
-            ("", "."),
-        ];
-        for (path, expected) in cases {
-            assert_eq!(normalize(Path::new(path)), Path::new(expected), "{path}");
-        }
-        assert_eq!(
-            absolute(Path::new("/r/sub"), Path::new("../other")),
-            Path::new("/r/other")
-        );
-        assert_eq!(
-            absolute(Path::new("/r/sub"), Path::new("/x/./y/..")),
-            Path::new("/x")
-        );
-    }
-
     /// Finding 23: `..` in a path argument made the root `<root>/sub/..`.
     #[test]
     fn the_root_of_dotted_paths_is_normalized() {
@@ -692,26 +532,26 @@ mod tests {
         let sub = root.join("sub");
         let find = |paths: &[&str]| {
             let paths: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
-            find_root(&common_ancestor(&sub, &paths))
+            find_root(&aye_fs::common_ancestor(&sub, &paths))
         };
         assert_eq!(find(&[".."]), root);
         assert_eq!(find(&["../other"]), root);
         assert_eq!(find(&["../other/test_o.py"]), root);
         assert_eq!(find(&["../other", "test_s.py"]), root);
         assert_eq!(find(&["../sub/../other/test_o.py"]), root);
-        assert_eq!(common_ancestor(&sub, &[PathBuf::from("..")]), root);
+        assert_eq!(aye_fs::common_ancestor(&sub, &[PathBuf::from("..")]), root);
         assert_eq!(
-            common_ancestor(&sub, &[PathBuf::from("../other/./test_o.py")]),
+            aye_fs::common_ancestor(&sub, &[PathBuf::from("../other/./test_o.py")]),
             root.join("other")
         );
         assert_eq!(find_root(&sub.join("..")), root);
         assert_eq!(find_root(&root.join("other/../sub/..")), root);
-        assert_eq!(common_ancestor(&sub.join("../sub"), &[]), sub);
+        assert_eq!(aye_fs::common_ancestor(&sub.join("../sub"), &[]), sub);
     }
 
     #[cfg(unix)]
     #[test]
-    fn one_directory_spelled_two_ways_is_one_ancestor() {
+    fn one_directory_spelled_two_ways_has_one_root() {
         let dir = tempfile::tempdir().unwrap();
         let real = fs::canonicalize(dir.path()).unwrap();
         write(&real, "proj/pyproject.toml", "");
@@ -726,51 +566,16 @@ mod tests {
             alias.join("tests/test_a.py"),
             PathBuf::from("tests/test_b.py"),
         ];
-        // The two spellings are resolved only when they share nothing but
-        // the filesystem's root (macOS's /private/var against /var); where
-        // both temporary directories share more (/tmp on Linux), that
-        // ancestor is kept, as pytest's own `get_common_ancestor` does.
-        let lexical =
-            super::deepest_common(&[alias.join("tests"), real.join("proj/tests")]).unwrap();
-        if lexical.parent().is_none() {
-            assert_eq!(common_ancestor(&cwd, &paths), real.join("proj/tests"));
-            assert_eq!(find_root(&common_ancestor(&cwd, &paths)), real.join("proj"));
-        } else {
-            assert_eq!(common_ancestor(&cwd, &paths), lexical);
-        }
-        // Either way, the root is the project's.
+        // Whether the common ancestor is the resolved one (macOS's
+        // /private/var against /var) or a lexical one above both (Linux's
+        // /tmp), the root is the project's.
         assert_eq!(project_root(&cwd, &paths), real.join("proj"));
-        // One spelling alone is kept as given, symlinks unresolved.
-        assert_eq!(
-            common_ancestor(&cwd, &[alias.join("tests")]),
-            alias.join("tests")
-        );
         // A symlinked directory inside the project keeps its own name.
         std::os::unix::fs::symlink(real.join("proj/tests"), real.join("proj/linked")).unwrap();
-        assert_eq!(
-            common_ancestor(&cwd, &[PathBuf::from("linked"), PathBuf::from("tests")]),
-            real.join("proj")
-        );
         assert_eq!(
             project_root(&cwd, &[PathBuf::from("linked"), PathBuf::from("tests")]),
             real.join("proj")
         );
-
-        let root = real.join("proj");
-        assert_eq!(
-            relative_to(&root, &alias.join("tests/test_a.py")),
-            Some(PathBuf::from("tests/test_a.py"))
-        );
-        assert_eq!(
-            relative_to(&root, &alias.join("tests/missing.py")),
-            Some(PathBuf::from("tests/missing.py"))
-        );
-        assert_eq!(
-            relative_to(&root, &root.join("linked/test_a.py")),
-            Some(PathBuf::from("linked/test_a.py"))
-        );
-        assert_eq!(relative_to(&root, &real), None);
-        assert_eq!(relative_to(&root, &root), Some(PathBuf::new()));
     }
 
     #[test]

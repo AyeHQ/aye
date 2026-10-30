@@ -110,7 +110,7 @@ fn normcase(text: &str) -> String {
 }
 
 /// `fnmatch.fnmatch(name, pattern)`.
-pub fn fnmatch(name: &str, pattern: &str) -> bool {
+pub(crate) fn fnmatch(name: &str, pattern: &str) -> bool {
     let name: Vec<char> = normcase(name).chars().collect();
     let pattern: Vec<char> = normcase(pattern).chars().collect();
     matches(&tokens(&pattern), &name)
@@ -119,7 +119,7 @@ pub fn fnmatch(name: &str, pattern: &str) -> bool {
 /// pytest's `fnmatch_ex`: a pattern without a separator matches the file
 /// name; one with a separator matches the whole path, anywhere below the
 /// root when the path is absolute and the pattern isn't.
-pub fn fnmatch_ex(pattern: &str, path: &Path) -> bool {
+pub(crate) fn fnmatch_ex(pattern: &str, path: &Path) -> bool {
     let sep = std::path::MAIN_SEPARATOR;
     let mut pattern = pattern.to_string();
     if cfg!(windows) && !pattern.contains(sep) && pattern.contains('/') {

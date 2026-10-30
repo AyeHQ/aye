@@ -5,7 +5,7 @@
 //! durations are advisory and separate from result caching, which has stricter
 //! invalidation.
 //!
-//! Depends on: aye-events.
+//! Depends on: aye-events, and aye-fs for the state directory.
 //!
 //! Native features (October 2026): the fingerprint that decides whether a
 //! cached result holds carries its own version, so changing its inputs
@@ -22,15 +22,8 @@
 //!   runs saving at once race, and the last one wins. There is no fsync: a
 //!   file damaged by a power loss reads as empty.
 //! - **The directory is marked as a cache** when aye creates it, whichever
-//!   writer comes first (history, or the refinement cache below it, both
-//!   through [`prepare_dir`]): a `.gitignore` holding `*` and a
-//!   `CACHEDIR.TAG` in the outermost directory created, unless that one is
-//!   inside a marked directory already. A directory that already exists is
-//!   left as it is, as pytest does, so pointing history at a directory of
-//!   one's own never hides it from git. The one exception is the unmarked
-//!   state directory aye 0.0.1 left when its refinement cache came first: an
-//!   unmarked directory holding a `cache/refine` directory and nothing but
-//!   aye's own files gets its markers.
+//!   writer comes first: history and the run store create theirs, as the
+//!   refinement cache does, through `aye_fs::prepare_dir`, which says how.
 //! - **Keyed by test id alone** for now. The environment joins the key when
 //!   the matrix lands, under a new `version`.
 //! - **Durations** are a moving average (alpha 0.3, the first run taken as
@@ -62,9 +55,9 @@
 //!   left without a `lifetime_finished` change nothing.
 //! - **`flips` is reserved** for flake rates and stays 0 until they land.
 //! - **Recent outcomes** (October 2026): each test keeps `recent`, a letter
-//!   per run that recorded it, oldest first, the last [`RECENT`] (`p`
-//!   passed, `f` failed, `e` error, `s` skipped, `x` expected failure, `u`
-//!   unexpected pass: [`letter`]), and `bad_since`, the number of the run
+//!   per run that recorded it, oldest first, the last 20 (`p` passed, `f`
+//!   failed, `e` error, `s` skipped, `x` expected failure, `u` unexpected
+//!   pass: an [`OutcomeTrail`]), and `bad_since`, the number of the run
 //!   (`r81`, from its `run_started`) in which its current streak of bad
 //!   outcomes began: kept while it stays bad, the run's own number when it
 //!   turns bad (none when the run has none: it isn't stored), cleared when
@@ -96,15 +89,18 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::Duration;
 
-use aye_events::{Event, Outcome, Previous, Record, TestId, TestResult};
+use aye_events::{
+    Event, Outcome, OutcomeTrail, Previous, Record, RunId, RunNumber, TestId, TestResult,
+};
+use aye_fs::{HISTORY_TEMPORARY, StateBucket, atomic_write, prepare_dir};
 use serde::{Deserialize, Serialize};
 
 pub mod runs;
 
-pub use runs::{Change, RunMeta, RunStore, RunWriter};
+pub use runs::{Change, RunMeta, RunStore, RunWriter, StoredRunId};
 
 /// The history file, inside the directory history is given.
-pub const FILE: &str = "history.json";
+pub const FILE: &str = StateBucket::History.name();
 
 /// The format of the history file. A file of any other version loads as
 /// empty history.
@@ -112,21 +108,6 @@ pub const VERSION: u32 = 1;
 
 /// The weight of the newest duration in the moving average.
 const ALPHA: f64 = 0.3;
-
-/// How many outcomes a test's `recent` keeps.
-pub const RECENT: usize = 20;
-
-/// Written into a directory history creates.
-const MARKERS: [(&str, &str); 2] = [
-    (".gitignore", "# Created by aye automatically.\n*\n"),
-    (
-        "CACHEDIR.TAG",
-        "Signature: 8a477f597d28d172789f06886806bc55\n\
-         # This file is a cache directory tag created by aye.\n\
-         # For information about cache directory tags, see:\n\
-         #\thttps://bford.info/cachedir/spec.html\n",
-    ),
-];
 
 /// What history knows about one test.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -143,19 +124,19 @@ pub struct TestStats {
     pub last_outcome: Outcome,
     /// The run that last finished this test, when it had an id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_run: Option<String>,
+    pub last_run: Option<RunId>,
     /// Reserved for flake rates; 0 until they land.
     #[serde(default)]
     pub flips: u32,
-    /// The test's outcomes in the runs that recorded it, a [`letter`] per
-    /// run, oldest first, the last [`RECENT`].
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub recent: String,
+    /// The test's outcomes in the runs that recorded it, a letter per run,
+    /// oldest first, the last [`OutcomeTrail::MAX`].
+    #[serde(default, skip_serializing_if = "OutcomeTrail::is_empty")]
+    pub recent: OutcomeTrail,
     /// The number of the run in which the test's current streak of bad
     /// outcomes began; `None` when its last outcome isn't bad, or when that
     /// run had no number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bad_since: Option<u64>,
+    pub bad_since: Option<RunNumber>,
 }
 
 impl TestStats {
@@ -168,7 +149,7 @@ impl TestStats {
             last_outcome: outcome,
             last_run: None,
             flips: 0,
-            recent: String::new(),
+            recent: OutcomeTrail::default(),
             bad_since: None,
         }
     }
@@ -208,9 +189,9 @@ pub struct History {
 /// The run being recorded.
 #[derive(Debug, Clone, Default)]
 struct Run {
-    id: Option<String>,
+    id: Option<RunId>,
     /// Its number in the run store, from its `run_started`.
-    number: Option<u64>,
+    number: Option<RunNumber>,
     collect_only: bool,
     /// Whether a `run_started` opened it: only then does a `test_finished`
     /// without a `test_started` mean the test never started.
@@ -224,8 +205,8 @@ struct Run {
 /// What history knew of a test's outcomes before the run being recorded.
 #[derive(Debug, Clone, Default)]
 struct Before {
-    recent: String,
-    bad_since: Option<u64>,
+    recent: OutcomeTrail,
+    bad_since: Option<RunNumber>,
     /// Whether its last outcome was bad.
     bad: bool,
 }
@@ -246,26 +227,6 @@ impl Before {
             since: self.bad_since.filter(|_| self.bad),
         })
     }
-}
-
-/// An outcome's letter in a test's `recent`: `p` passed, `f` failed, `e`
-/// error, `s` skipped, `x` expected failure, `u` unexpected pass.
-pub const fn letter(outcome: Outcome) -> char {
-    match outcome {
-        Outcome::Passed => 'p',
-        Outcome::Failed => 'f',
-        Outcome::Error => 'e',
-        Outcome::Skipped => 's',
-        Outcome::ExpectedFailure => 'x',
-        Outcome::UnexpectedPass => 'u',
-    }
-}
-
-/// `recent` as history keeps it: letters only, the last [`RECENT`].
-fn tidy(recent: &mut String) {
-    recent.retain(|c| "pfesxu".contains(c));
-    let extra = recent.len().saturating_sub(RECENT);
-    recent.drain(..extra);
 }
 
 #[derive(Deserialize)]
@@ -295,12 +256,9 @@ impl History {
     }
 
     fn parse(bytes: &[u8]) -> Option<Self> {
-        let mut stored: Stored = serde_json::from_slice(bytes).ok()?;
+        let stored: Stored = serde_json::from_slice(bytes).ok()?;
         if stored.version != VERSION || !stored.tests.values().all(TestStats::is_valid) {
             return None;
-        }
-        for stats in stored.tests.values_mut() {
-            tidy(&mut stats.recent);
         }
         Some(Self {
             tests: stored.tests,
@@ -310,31 +268,22 @@ impl History {
     }
 
     /// Writes `<dir>/history.json` atomically, creating `dir` (see
-    /// [`prepare_dir`]) if needed.
+    /// `aye_fs::prepare_dir`) if needed.
     pub fn save(&self, dir: &Path) -> io::Result<()> {
         prepare_dir(dir)?;
-        let mut builder = tempfile::Builder::new();
-        builder.prefix(".history.").suffix(".tmp");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            builder.permissions(fs::Permissions::from_mode(0o666));
-        }
-        let mut file = builder.tempfile_in(dir)?;
-        let mut out = io::BufWriter::new(file.as_file_mut());
-        serde_json::to_writer(
-            &mut out,
-            &StoredRef {
-                version: VERSION,
-                tests: &self.tests,
-                last_failed: &self.last_failed,
-            },
-        )?;
-        out.write_all(b"\n")?;
-        out.flush()?;
-        drop(out);
-        file.persist(dir.join(FILE)).map_err(|e| e.error)?;
-        Ok(())
+        atomic_write(dir, FILE, HISTORY_TEMPORARY, |file| {
+            let mut out = io::BufWriter::new(file);
+            serde_json::to_writer(
+                &mut out,
+                &StoredRef {
+                    version: VERSION,
+                    tests: &self.tests,
+                    last_failed: &self.last_failed,
+                },
+            )?;
+            out.write_all(b"\n")?;
+            out.flush()
+        })
     }
 
     /// Folds one record of a run's log into the history. Kinds history has
@@ -370,7 +319,7 @@ impl History {
         }
     }
 
-    fn finish(&mut self, result: &TestResult, run: Option<String>) {
+    fn finish(&mut self, result: &TestResult, run: Option<RunId>) {
         let started = !self.run.opened || self.run.started.contains(&result.id);
         // A bad outcome counts whether the test ran or not: the run failed
         // on it, and `--lf` should run it again.
@@ -391,8 +340,7 @@ impl History {
         stats.last_outcome = result.outcome;
         stats.last_run = run;
         stats.recent.clone_from(&before.recent);
-        stats.recent.push(letter(result.outcome));
-        tidy(&mut stats.recent);
+        stats.recent.push(result.outcome);
         stats.bad_since = match (result.outcome.is_bad(), before.bad) {
             (false, _) => None,
             (true, true) => before.bad_since,
@@ -452,12 +400,12 @@ impl History {
             return Some(own);
         }
         let name = id.as_str();
-        if !name.contains("::") || id.without_params() != name {
+        if id.is_file() || id.without_params() != name {
             return None;
         }
         // Ids that start with `name[` sort between `name[` and `name\`.
-        let from = TestId(format!("{name}["));
-        let to = TestId(format!("{name}\\"));
+        let from = TestId::new(format!("{name}["));
+        let to = TestId::new(format!("{name}\\"));
         let mut found = false;
         let mut total = 0.0;
         for (_, stats) in self
@@ -472,7 +420,7 @@ impl History {
     }
 
     /// Moving-average durations summed per group, `group` naming the group
-    /// of each test: `durations_by_group(|id| id.path().to_owned())` weighs
+    /// of each test: `durations_by_group(|id| id.path().to_project_path())` weighs
     /// files.
     pub fn durations_by_group<K, F>(&self, mut group: F) -> HashMap<K, Duration>
     where
@@ -506,83 +454,16 @@ impl History {
     }
 }
 
-/// Creates `dir` and whatever is missing above it, and marks the outermost
-/// directory it creates as a cache: a `.gitignore` holding `*` and a
-/// `CACHEDIR.TAG`, unless that directory is inside a marked one already. A
-/// directory that exists is left alone (see the crate docs for the one
-/// exception). Whatever else aye keeps beside history should create its
-/// directory through this, so the markers are written whichever writer
-/// creates the directory first.
-pub fn prepare_dir(dir: &Path) -> io::Result<()> {
-    if dir.is_dir() {
-        if is_unmarked_state(dir) {
-            mark(dir)?;
-        }
-        return Ok(());
-    }
-    let outermost = dir
-        .ancestors()
-        .take_while(|ancestor| !ancestor.as_os_str().is_empty() && !ancestor.exists())
-        .last()
-        .unwrap_or(dir)
-        .to_path_buf();
-    fs::create_dir_all(dir)?;
-    let inside_a_cache = outermost
-        .parent()
-        .is_some_and(|parent| parent.join(MARKERS[1].0).is_file());
-    if inside_a_cache {
-        return Ok(());
-    }
-    mark(&outermost)
-}
-
-/// Writes the markers into `dir`, keeping any that exist.
-fn mark(dir: &Path) -> io::Result<()> {
-    for (name, content) in MARKERS {
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(dir.join(name))
-        {
-            Ok(mut file) => file.write_all(content.as_bytes())?,
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(())
-}
-
-/// A state directory aye created without markers: no marker at all, a
-/// `cache/refine` directory (the refinement cache's), and nothing but the
-/// history file, its temporaries, the cache and the run store.
-fn is_unmarked_state(dir: &Path) -> bool {
-    if MARKERS.iter().any(|(name, _)| dir.join(name).exists())
-        || !dir.join("cache").join("refine").is_dir()
-    {
-        return false;
-    }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return false;
-    };
-    entries.into_iter().all(|entry| {
-        entry.is_ok_and(|entry| {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            name == FILE
-                || name == "cache"
-                || name == runs::DIR
-                || (name.starts_with(".history.") && name.ends_with(".tmp"))
-        })
-    })
-}
-
 /// Milliseconds as a duration, saturating.
 fn duration(ms: f64) -> Duration {
     Duration::try_from_secs_f64(ms / 1000.0).unwrap_or(Duration::MAX)
 }
 
 /// Milliseconds on disk keep microseconds, as on the wire.
-#[allow(clippy::trivially_copy_pass_by_ref)] // signature fixed by serde
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "signature fixed by serde"
+)]
 fn micros<S: serde::Serializer>(ms: &f64, s: S) -> Result<S::Ok, S::Error> {
     let rounded = (ms * 1000.0).round() / 1000.0;
     s.serialize_f64(if rounded.is_finite() { rounded } else { *ms })

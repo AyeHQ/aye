@@ -6,8 +6,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use aye_config::{Origin, Sourced, common_ancestor, ini_section, read_toml, split_args};
+use aye_config::{Origin, Sourced, ini_section, read_toml, split_args};
 use aye_engine::{AdapterError, Project, Setting};
+use aye_fs::common_ancestor;
+use aye_static::{EnvVars, ProcessEnv};
 
 /// Config file names, in the order pytest 9 tries them in each directory.
 const CONFIG_NAMES: [&str; 7] = [
@@ -21,7 +23,7 @@ const CONFIG_NAMES: [&str; 7] = [
 ];
 
 /// pytest's default `norecursedirs`.
-pub const DEFAULT_NORECURSEDIRS: [&str; 9] = [
+pub(crate) const DEFAULT_NORECURSEDIRS: [&str; 9] = [
     "*.egg",
     ".*",
     "_darcs",
@@ -371,7 +373,7 @@ fn determine_setup(
         return Ok((rootdir, inifile, config));
     };
     // `absolutepath(os.path.expandvars(rootdir_cmd_arg))`.
-    let rootdir = crate::normalize(&project.cwd.join(expandvars(arg)));
+    let rootdir = aye_fs::normalize_absolute(&project.cwd.join(expandvars(arg)));
     if !rootdir.is_dir() {
         return Err(AdapterError::Config(format!(
             "Directory '{}' not found. Check your '--rootdir' option.",
@@ -628,7 +630,7 @@ fn take_exitfirst(arg: &str) -> (bool, Option<String>) {
 
 /// What `-x` or `--maxfail N` asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MaxFail {
+pub(crate) enum MaxFail {
     /// `--maxfail 0`: no limit.
     Unlimited,
     /// Stop after this many failures.
@@ -637,7 +639,7 @@ pub enum MaxFail {
 
 impl MaxFail {
     /// The limit, if any.
-    pub fn limit(self) -> Option<u32> {
+    pub(crate) fn limit(self) -> Option<u32> {
         match self {
             Self::Unlimited => None,
             Self::After(n) => Some(n),
@@ -649,7 +651,7 @@ impl MaxFail {
 /// of them asks for, as argparse lets the last one win (`None` when none
 /// appears). A `--maxfail` value pytest would reject is left in place, for
 /// the front-end to report, as pytest does.
-pub fn split_maxfail(args: &[String]) -> (Vec<String>, Option<MaxFail>) {
+pub(crate) fn split_maxfail(args: &[String]) -> (Vec<String>, Option<MaxFail>) {
     fn limit(value: &str) -> Option<MaxFail> {
         let n: i64 = value.trim().parse().ok()?;
         // pytest stops once the failures reach the limit, checked after
@@ -709,7 +711,7 @@ pub fn split_maxfail(args: &[String]) -> (Vec<String>, Option<MaxFail>) {
 
 /// Where an option came from, in origins: `PYTEST_ADDOPTS`, or the
 /// arguments after `--`.
-const ENV: &str = "PYTEST_ADDOPTS";
+const ENV: &str = EnvVars::PYTEST_ADDOPTS;
 const CLI: &str = "after --";
 
 /// pytest's JUnit options: the report's path, and the prefix of its class
@@ -727,7 +729,7 @@ fn is_value(arg: &str) -> bool {
 /// What the JUnit options in an argument list ask for: the last value of
 /// each, `Some("")` for an empty one (which turns the report off).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Junit {
+pub(crate) struct Junit {
     pub xml: Option<String>,
     pub prefix: Option<String>,
 }
@@ -736,7 +738,7 @@ pub struct Junit {
 /// `--junitprefix`/`--junit-prefix STR`, each also with `=`), and the last
 /// value of each, as argparse lets the last one win. An option missing its
 /// value is left in place, for the front-end to reject, as pytest does.
-pub fn split_junit(args: &[String]) -> (Vec<String>, Junit) {
+pub(crate) fn split_junit(args: &[String]) -> (Vec<String>, Junit) {
     let mut kept = Vec::new();
     let mut found = Junit::default();
     let mut iter = args.iter().peekable();
@@ -766,29 +768,27 @@ pub fn split_junit(args: &[String]) -> (Vec<String>, Junit) {
     (kept, found)
 }
 
-/// An environment variable, as `os.environ` has it (on Windows, whatever
-/// the case of its name).
-fn env_var(name: &str) -> Option<String> {
-    let valid = !name.is_empty() && !name.contains(['=', '\0']);
-    valid.then(|| std::env::var(name).ok()).flatten()
-}
-
-/// Python's `os.path.expandvars`: `ntpath`'s on Windows, else `posixpath`'s.
+/// Python's `os.path.expandvars`: `ntpath`'s on Windows, else `posixpath`'s,
+/// over the environment as `os.environ` has it.
 fn expandvars(text: &str) -> String {
+    let env = ProcessEnv::from_process();
+    let var = |name: &str| env.get(name).map(str::to_string);
     if cfg!(windows) {
-        nt_expandvars(text, env_var)
+        nt_expandvars(text, var)
     } else {
-        posix_expandvars(text, env_var)
+        posix_expandvars(text, var)
     }
 }
 
 /// Python's `os.path.expanduser`: `ntpath`'s on Windows, else
-/// `posixpath`'s.
+/// `posixpath`'s, over the environment as `os.environ` has it.
 fn expanduser(text: &str) -> String {
+    let env = ProcessEnv::from_process();
+    let var = |name: &str| env.get(name).map(str::to_string);
     if cfg!(windows) {
-        nt_expanduser(text, env_var)
+        nt_expanduser(text, var)
     } else {
-        posix_expanduser(text, env_var("HOME"))
+        posix_expanduser(text, var(EnvVars::HOME))
     }
 }
 
@@ -894,13 +894,13 @@ fn nt_expanduser(text: &str, var: impl Fn(&str) -> Option<String>) -> String {
         return text.to_string();
     };
     let (user, tail) = rest.split_at(rest.find(['\\', '/']).unwrap_or(rest.len()));
-    let mut home = match (var("USERPROFILE"), var("HOMEPATH")) {
+    let mut home = match (var(EnvVars::USERPROFILE), var(EnvVars::HOMEPATH)) {
         (Some(profile), _) => profile,
-        (None, Some(path)) => nt_join(&var("HOMEDRIVE").unwrap_or_default(), &path),
+        (None, Some(path)) => nt_join(&var(EnvVars::HOMEDRIVE).unwrap_or_default(), &path),
         (None, None) => return text.to_string(),
     };
     if !user.is_empty() {
-        let current = var("USERNAME");
+        let current = var(EnvVars::USERNAME);
         if current.as_deref() != Some(user) {
             let (parent, name) = nt_split(&home);
             if current.as_deref() != Some(name) {
@@ -954,7 +954,7 @@ fn report_path(cwd: &Path, value: &str) -> Result<Option<PathBuf>, AdapterError>
         )));
     }
     let expanded = expanduser(&expandvars(value));
-    Ok(Some(crate::normalize(&cwd.join(expanded))))
+    Ok(Some(aye_fs::normalize_absolute(&cwd.join(expanded))))
 }
 
 /// pytest's doctest options that take no value, and those that take one.
@@ -972,7 +972,7 @@ const DOCTEST_VALUED: [&str; 2] = ["--doctest-glob", "--doctest-report"];
 /// runs doctests and reads them itself. A valued option missing its value
 /// is left in place, for the front-end to reject, as pytest does. pytest's parser takes no abbreviations, so
 /// only the full names count.
-pub fn split_doctest(args: &[String]) -> (Vec<String>, Vec<String>) {
+pub(crate) fn split_doctest(args: &[String]) -> (Vec<String>, Vec<String>) {
     let mut kept = Vec::new();
     let mut lifted = Vec::new();
     let mut iter = args.iter().peekable();
@@ -1085,7 +1085,7 @@ impl PytestConfig {
     /// Discover the configuration the way pytest would for `project`, with
     /// `PYTEST_ADDOPTS` from the environment.
     pub fn discover(project: &Project<'_>) -> Result<Self, AdapterError> {
-        let env = std::env::var("PYTEST_ADDOPTS").ok();
+        let env = std::env::var(EnvVars::PYTEST_ADDOPTS).ok();
         Self::discover_with(project, env.as_deref())
     }
 
@@ -1417,9 +1417,9 @@ impl PytestConfig {
         }
         if let Some(env) = &self.env_addopts {
             push(
-                "PYTEST_ADDOPTS",
+                EnvVars::PYTEST_ADDOPTS,
                 env.clone(),
-                &Origin::Env("PYTEST_ADDOPTS".into()),
+                &Origin::Env(EnvVars::PYTEST_ADDOPTS.into()),
             );
         }
         push(

@@ -1,0 +1,1 @@
+{"version":1,"run":"r1","root":"/private/tmp/aye-fixtures/rootdir","started_ms":1793266964015,"finished_ms":1793266964243,"exit_code":0,"counts":{"passed":1,"failed":0,"error":0,"skipped":0,"expected_failure":0,"unexpected_pass":0,"deselected":0},"ms":227,"files":{"sub/tests/test_rooted.py":"58db7606e3d23d727238cd3af0add781"}}

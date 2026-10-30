@@ -173,7 +173,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use aye_events::{BatchId, Case, Diagnostic, Record, Span, TestId};
+use aye_events::{
+    AdapterName, BatchIndex, Case, Diagnostic, FrameworkStatus, LineNumber, ProjectPath,
+    ProjectPathRef, Record, Span, TestId,
+};
 use serde::{Deserialize, Serialize};
 
 pub use ruff_python_ast as ast;
@@ -274,7 +277,7 @@ pub enum AdapterError {
 /// One framework, mapped onto aye's engine.
 pub trait Adapter: Send + Sync {
     /// Short, stable name: `pytest`.
-    fn name(&self) -> &'static str;
+    fn name(&self) -> AdapterName;
 
     /// Read the framework's own configuration and return a recognizer for
     /// this project, or `None` when the framework isn't used here.
@@ -288,7 +291,7 @@ pub trait Adapter: Send + Sync {
     fn prepare_among(
         &self,
         project: &Project<'_>,
-        adapters: &[&str],
+        adapters: &[AdapterName],
     ) -> Result<Option<Box<dyn Recognizer>>, AdapterError> {
         let _ = adapters;
         self.prepare(project)
@@ -300,9 +303,9 @@ pub trait Adapter: Send + Sync {
 
 /// An adapter's runtime face: modules the worker installs, and the executor
 /// class it instantiates.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Executor {
-    pub adapter: &'static str,
+    pub adapter: AdapterName,
     /// Installed in order, after [`ENGINE_MODULE`].
     pub modules: &'static [EmbeddedModule],
     /// `module:Class` of the `aye_engine.Executor` subclass.
@@ -344,7 +347,7 @@ impl Claim {
 #[derive(Clone, Copy)]
 pub struct SourceFile<'a> {
     /// Relative to the project root, `/` separators.
-    pub rel: &'a str,
+    pub rel: ProjectPathRef<'a>,
     pub abs: &'a Path,
     pub source: &'a str,
     pub module: &'a ast::ModModule,
@@ -352,17 +355,20 @@ pub struct SourceFile<'a> {
 }
 
 impl SourceFile<'_> {
-    /// 1-based line of an offset.
-    pub fn line(&self, offset: TextSize) -> u32 {
-        u32::try_from(self.lines.line_index(offset).get()).unwrap_or(u32::MAX)
+    /// The line of an offset; [`LineNumber::MAX`] past it.
+    pub fn line(&self, offset: TextSize) -> LineNumber {
+        u32::try_from(self.lines.line_index(offset).get())
+            .ok()
+            .and_then(LineNumber::new)
+            .unwrap_or(LineNumber::MAX)
     }
 
     pub fn span(&self, range: TextRange) -> Span {
         Span {
-            path: self.rel.to_string(),
+            path: self.rel.to_project_path(),
             start: range.start().to_u32(),
             end: range.end().to_u32(),
-            line: Some(self.line(range.start())),
+            line: Some(self.line(range.start()).get()),
         }
     }
 
@@ -429,9 +435,8 @@ pub trait Refiner {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefineRequest {
-    pub adapter: String,
-    /// Relative to the project root.
-    pub files: Vec<String>,
+    pub adapter: AdapterName,
+    pub files: Vec<ProjectPath>,
     #[serde(default)]
     pub context: serde_json::Value,
     /// List the files for the batches to come, and answer with their
@@ -450,11 +455,25 @@ pub struct Refined {
     #[serde(default)]
     pub diagnostics: Vec<Diagnostic>,
     /// For an executor that [lists the session](Executor::lists_session):
-    /// by requested file, a digest of its tests' ids in order (the worker's
-    /// own is the SHA-1 of the ids joined by newlines), so that two workers'
-    /// listings can be compared without the cases.
+    /// by requested file, a digest of its tests' ids in order, so that two
+    /// workers' listings can be compared without the cases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub digests: Option<BTreeMap<String, String>>,
+    pub digests: Option<BTreeMap<ProjectPath, ListingDigest>>,
+}
+
+/// A digest of the tests a worker lists in a file, their ids in order: the
+/// executor's own, or the worker's, the SHA-1 of the ids joined by
+/// newlines. Two workers that list a file alike give it the same digest,
+/// and the runner only compares them; it is kept as written, and
+/// serializes as its text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ListingDigest(Box<str>);
+
+impl ListingDigest {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -512,8 +531,8 @@ impl Default for Policy {
 /// engine's; everything around it is the runner's.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Batch {
-    pub id: BatchId,
-    pub adapter: String,
+    pub id: BatchIndex,
+    pub adapter: AdapterName,
     pub ids: Vec<TestId>,
     pub policy: Policy,
     #[serde(default)]
@@ -549,7 +568,7 @@ impl From<EmbeddedModule> for ModuleSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutorSpec {
-    pub adapter: String,
+    pub adapter: AdapterName,
     /// `module:Class`.
     pub entry: String,
     /// [`Executor::lists_session`]: the worker gives every refinement's
@@ -597,9 +616,9 @@ pub enum Reply {
     /// The batch is over; every test in it has a `test_finished` event,
     /// except those after a `maxfail` stop.
     BatchDone {
-        batch: BatchId,
+        batch: BatchIndex,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        status: Option<i32>,
+        status: Option<FrameworkStatus>,
     },
     /// The worker failed outside any test while handling a request.
     Failed {

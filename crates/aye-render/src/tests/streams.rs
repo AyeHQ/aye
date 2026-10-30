@@ -3,9 +3,9 @@
 use std::time::Duration;
 
 use aye_events::{
-    Assertion, Captured, Case, Certainty, Counts, Diagnostic, Envelope, Event, ExitCode, Failure,
-    Frame, Location, Outcome, Phase, Record, Reproduce, SCHEMA_VERSION, Severity, Span, TestId,
-    TestResult,
+    Assertion, Captured, Case, Certainty, Columns, Counts, Diagnostic, Envelope, Event, ExitCode,
+    Failure, FailureSignature, Frame, Local, Location, Outcome, Phase, Record, Reproduce,
+    RunNumber, SCHEMA_VERSION, Scope, Severity, Span, TestId, TestResult, WorkerIndex,
 };
 
 const fn ms(n: u64) -> Duration {
@@ -41,7 +41,7 @@ fn run_started(collect_only: bool) -> Event {
 fn case(id: &str, line: Option<u32>, certainty: Certainty) -> Event {
     let mut case = Case::new(id, "pytest");
     case.span = line.map(|line| Span {
-        path: case.id.path().to_owned(),
+        path: case.id.path().to_project_path(),
         start: 0,
         end: 0,
         line: Some(line),
@@ -184,7 +184,7 @@ fn assertion_failure() -> Failure {
             "test_total",
             "assert cart.name() == 'eggs'",
         )],
-        signature: "sig-spam".into(),
+        signature: FailureSignature::new("sig-spam"),
         detail: Some("tests/test_cart.py:12: in test_total\nAssertionError".into()),
         ..Default::default()
     }
@@ -215,7 +215,7 @@ fn setup_failure() -> Failure {
                 "raise exceptions[0]",
             ),
         ],
-        signature: "sig-refused".into(),
+        signature: FailureSignature::new("sig-refused"),
         detail: None,
         ..Default::default()
     }
@@ -232,7 +232,7 @@ fn key_error(id_number: u32) -> Failure {
             line: 41,
         }),
         frames: vec![frame("src/app/users.py", 41, "find", "return USERS[name]")],
-        signature: "sig-key".into(),
+        signature: FailureSignature::new("sig-key"),
         detail: None,
         ..Default::default()
     }
@@ -263,7 +263,7 @@ pub(crate) fn mixed() -> Vec<Record> {
             exception: Some("AssertionError".into()),
             message: "assert False".into(),
             frames: vec![frame("tests/test_io.py", 20, "test_write", "assert False")],
-            signature: "sig-false".into(),
+            signature: FailureSignature::new("sig-false"),
             ..Failure::default()
         },
         Failure {
@@ -276,7 +276,7 @@ pub(crate) fn mixed() -> Vec<Record> {
                 "tmp",
                 "raise RuntimeError('cleanup failed')",
             )],
-            signature: "sig-cleanup".into(),
+            signature: FailureSignature::new("sig-cleanup"),
             ..Failure::default()
         },
     ];
@@ -352,7 +352,7 @@ pub(crate) fn identical(n: u32) -> Vec<Record> {
                 "test_call",
                 "client.get('/')",
             )],
-            signature: "sig-timeout".into(),
+            signature: FailureSignature::new("sig-timeout"),
             ..Failure::default()
         }];
         events.push(test(result));
@@ -402,11 +402,11 @@ pub(crate) fn lifetime() -> Vec<Record> {
         collected(4, 0),
         Event::LifetimeStarted {
             lifetime: "module:tests/test_db.py".into(),
-            kind: "module".into(),
+            kind: Scope::Module,
         },
         Event::LifetimeStarted {
             lifetime: class.into(),
-            kind: "class".into(),
+            kind: Scope::Class,
         },
         blocked("test_a"),
         blocked("test_b"),
@@ -427,7 +427,7 @@ pub(crate) fn lifetime() -> Vec<Record> {
                     "setUpClass",
                     "cls.conn = connect()",
                 )],
-                signature: "sig-nodb".into(),
+                signature: FailureSignature::new("sig-nodb"),
                 detail: Some(
                     "Traceback (most recent call last):\nRuntimeError: no database".into(),
                 ),
@@ -452,7 +452,7 @@ pub(crate) fn lifetime() -> Vec<Record> {
                     "tearDownModule",
                     "shutil.rmtree(TMP)",
                 )],
-                signature: "sig-busy".into(),
+                signature: FailureSignature::new("sig-busy"),
                 ..Failure::default()
             }),
             duration: ms(2),
@@ -475,7 +475,7 @@ fn diagnostic(severity: Severity, code: &str, path: &str, line: u32, message: &s
         code: code.into(),
         path: path.into(),
         span: Some(Span {
-            path: path.into(),
+            path: aye_events::ProjectPath::as_written(path),
             start: 0,
             end: 0,
             line: Some(line),
@@ -530,7 +530,7 @@ pub(crate) fn diagnostics() -> Vec<Record> {
             ms(90),
         ),
     ]);
-    records[8].envelope.worker = Some(1);
+    records[8].envelope.worker = Some(WorkerIndex::from_u32(1));
     records
 }
 
@@ -579,12 +579,15 @@ impl Raised<'_> {
             line: self.line,
             function: Some(self.function.into()),
             source: Some(self.source.into()),
-            cols: self.cols,
+            cols: self.cols.map(Columns::from),
             before: self.before.iter().map(|line| (*line).to_owned()).collect(),
             locals: self
                 .locals
                 .iter()
-                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .map(|(name, value)| Local {
+                    name: (*name).to_owned(),
+                    value: (*value).to_owned(),
+                })
                 .collect(),
             ..Default::default()
         }
@@ -601,7 +604,7 @@ fn raised(phase: Phase, exception: &str, message: &str, at: &Raised<'_>) -> Fail
             line: at.line,
         }),
         frames: vec![at.frame()],
-        signature: format!("sig-{}-{}", at.path, at.line),
+        signature: FailureSignature::new(format!("sig-{}-{}", at.path, at.line)),
         ..Failure::default()
     }
 }
@@ -752,7 +755,7 @@ fn patch_binding() -> TestResult {
     );
     result.history = Some(Previous {
         outcomes: "pppppppfff".into(),
-        since: Some(78),
+        since: RunNumber::new(78),
     });
     result
 }
@@ -1047,10 +1050,10 @@ fn library(id: &str) -> TestResult {
         library_frame(&format!("{site}/requests/adapters.py"), 700, "send"),
     ];
     failure.location = Some(Location {
-        path: format!("{site}/requests/adapters.py"),
+        path: format!("{site}/requests/adapters.py").into(),
         line: 700,
     });
-    failure.signature = "sig-requests".into();
+    failure.signature = FailureSignature::new("sig-requests");
     let mut result = bad(id, Outcome::Error, 2004, vec![failure]);
     result.output.log =
         "WARNING urllib3: Retrying (Retry(total=0)) after connection broken\n".into();
@@ -1104,7 +1107,7 @@ pub(crate) fn full() -> Vec<Record> {
             root: "/home/me/tests_pytest".into(),
             collect_only: false,
             workers: 1,
-            run: Some(81),
+            run: RunNumber::new(81),
         },
         Event::CollectionStarted,
         diagnostic(
@@ -1140,7 +1143,7 @@ pub(crate) fn full() -> Vec<Record> {
             record.event,
             Event::WorkerStarted { .. } | Event::TestFinished(_) | Event::WorkerFinished { .. }
         ) {
-            record.envelope.worker = Some(0);
+            record.envelope.worker = Some(WorkerIndex::FIRST);
         }
     }
     records

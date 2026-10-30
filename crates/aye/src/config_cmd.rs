@@ -6,7 +6,7 @@ use anyhow::Result;
 
 use crate::session::Session;
 
-pub fn print(session: &Session) -> Result<()> {
+pub(crate) fn print(session: &Session) -> Result<()> {
     let mut out = io::stdout().lock();
     let root = session.root();
     writeln!(out, "root     {}", root.display())?;

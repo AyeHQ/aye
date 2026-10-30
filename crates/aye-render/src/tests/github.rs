@@ -1,4 +1,6 @@
-use aye_events::{Event, Failure, Outcome, Record, TestId, TestResult};
+use aye_events::{
+    DiagnosticCode, Event, Failure, FailureSignature, Outcome, Record, TestId, TestResult,
+};
 
 use super::{feed, lines, streams};
 use crate::{GithubAnnotations, Reporter};
@@ -87,7 +89,7 @@ fn without_a_location_the_test_definition_is_used() {
     }];
     let mut case = aye_events::Case::new("tests/test_x.py::test_y", "pytest");
     case.span = Some(aye_events::Span {
-        path: "tests/test_x.py".into(),
+        path: aye_events::ProjectPath::new("tests/test_x.py").unwrap(),
         start: 0,
         end: 0,
         line: Some(14),
@@ -109,7 +111,7 @@ fn annotations_are_capped() {
         let mut result = TestResult::new(TestId::new(format!("t.py::test_{i}")), Outcome::Failed);
         result.failures = vec![Failure {
             message: format!("failure {i}"),
-            signature: format!("sig-{i}"),
+            signature: FailureSignature::new(format!("sig-{i}")),
             ..Failure::default()
         }];
         records.push(Record::new(Event::TestFinished(Box::new(result))));
@@ -131,8 +133,8 @@ fn annotations_are_capped() {
 fn a_diagnostic_about_no_file_is_annotated_on_none() {
     let record = Record::new(Event::Diagnostic(aye_events::Diagnostic {
         severity: aye_events::Severity::Error,
-        code: "usage-error".into(),
-        path: String::new(),
+        code: DiagnosticCode::UsageError,
+        path: aye_events::DiagnosticPath::Nowhere,
         span: None,
         message: "unrecognized arguments: --bogus".into(),
     }));
