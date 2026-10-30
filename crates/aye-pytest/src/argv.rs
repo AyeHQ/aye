@@ -52,14 +52,6 @@ const REPLACING: &[(&[&str], &str, &str)] = &[
     ),
 ];
 
-/// pytest's short options that take no value, which argparse lets a cluster
-/// combine (`-vh` is `-v -h`).
-const SHORT_FLAGS: &str = "vqlsxhV";
-
-/// pytest's short options that take a value, which ends a cluster (`-vkx`
-/// is `-v -k x`).
-const SHORT_VALUED: &str = "kmporWc";
-
 /// The first argument after `--` that would replace the framework's test
 /// run (see [`REPLACING`]), as a usage error; `None` when there is none.
 /// Long options are matched whole, since pytest doesn't take abbreviations;
@@ -69,7 +61,8 @@ pub fn replaced_run(passthrough: &[String]) -> Option<String> {
     for arg in passthrough.iter().take_while(|arg| *arg != "--") {
         let mut names = vec![arg.as_str()];
         if let Some(cluster) = arg.strip_prefix('-').filter(|rest| !rest.starts_with('-')) {
-            for flag in cluster.chars().take_while(|c| SHORT_FLAGS.contains(*c)) {
+            let flags = ShortOptions::PYTEST.flags;
+            for flag in cluster.chars().take_while(|c| flags.contains(*c)) {
                 match flag {
                     'h' => names.push("-h"),
                     'V' => names.push("-V"),
@@ -86,32 +79,62 @@ pub fn replaced_run(passthrough: &[String]) -> Option<String> {
     None
 }
 
-/// What the arguments after `--` say about one of pytest's short options
-/// that take a value (`-k`, `-m`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Passed {
-    /// They don't give it.
+/// pytest's short options, which argparse lets a cluster combine (`-vh` is
+/// `-v -h`) up to one that takes a value: the rest of the cluster is that
+/// value, or else the next argument (`-vkx` is `-v -k x`, and `-rx` is
+/// `-r x`, not `-x`). Two sets are read, each where it always was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShortOptions {
+    /// Those that take no value.
+    pub flags: &'static str,
+    /// Those that take one.
+    pub valued: &'static str,
+}
+
+impl ShortOptions {
+    /// pytest's own, as the binary reads the arguments after `--` for `-k`
+    /// and `-m` and for the options that replace the test run.
+    pub const PYTEST: Self = Self {
+        flags: "vqlsxhV",
+        valued: "kmporWc",
+    };
+
+    /// pytest's with pytest-xdist's (`-d` and `-f`; `-n`), as the pytest
+    /// adapter lifts `-x` out of a cluster, and as the binary and the
+    /// doctest adapter read `-x`.
+    pub const WITH_XDIST: Self = Self {
+        flags: "xvqslhVdf",
+        valued: "kmcpoWrn",
+    };
+}
+
+/// What an argument list says about one of pytest's options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgValue<T> {
+    /// It doesn't give it.
     Unset,
-    /// Its last value. They come last in the framework's arguments, after
-    /// the command line's own `-k` and `-m`, so it is the one that counts.
-    Set(String),
+    /// Its last value, the one that counts, as argparse keeps the last. The
+    /// arguments after `--` come last in the framework's arguments, after
+    /// the command line's own `-k`, `-m` and `-x`, so theirs counts.
+    Set(T),
     /// Can't tell: an `@file`, a short option aye doesn't know, a missing
     /// value.
-    Unknown,
+    Unreadable,
 }
 
 /// Read the arguments after `--` for the short option `option`, as
 /// argparse does: alone with its value next (`-k x`), attached (`-kx`), or
 /// ending a cluster of flags (`-vk x`, `-vkx`). A lone `--` ends the options.
-pub fn passed(passthrough: &[String], option: char) -> Passed {
-    let mut found = Passed::Unset;
+pub fn passed(passthrough: &[String], option: char) -> ArgValue<String> {
+    let ShortOptions { flags, valued } = ShortOptions::PYTEST;
+    let mut found = ArgValue::Unset;
     let mut args = passthrough.iter().peekable();
     while let Some(arg) = args.next() {
         if arg == "--" {
             break;
         }
         if arg.starts_with('@') {
-            return Passed::Unknown;
+            return ArgValue::Unreadable;
         }
         let Some(cluster) = arg
             .strip_prefix('-')
@@ -120,16 +143,16 @@ pub fn passed(passthrough: &[String], option: char) -> Passed {
             continue;
         };
         for (at, flag) in cluster.char_indices() {
-            if SHORT_FLAGS.contains(flag) {
+            if flags.contains(flag) {
                 continue;
             }
             let attached = &cluster[at + flag.len_utf8()..];
-            if !SHORT_VALUED.contains(flag) {
+            if !valued.contains(flag) {
                 // A plugin's option, or a negative number: whether it takes
                 // a value or not, what follows it sets `option` only if it
                 // holds it.
                 if attached.contains(option) {
-                    return Passed::Unknown;
+                    return ArgValue::Unreadable;
                 }
                 break;
             }
@@ -141,12 +164,79 @@ pub fn passed(passthrough: &[String], option: char) -> Passed {
                 None
             };
             if flag == option {
-                found = value.map_or(Passed::Unknown, Passed::Set);
+                found = value.map_or(ArgValue::Unreadable, ArgValue::Set);
             }
             break;
         }
     }
     found
+}
+
+/// What the arguments after `--` say about `maxfail`: the last of `-x`,
+/// `--exitfirst` and `--maxfail N` (alone, as `--maxfail=N`, or `-x` in a
+/// cluster such as `-vx`), as argparse keeps the last; `None` when none is
+/// given, [`ArgValue::Unreadable`] when they can't be read (an `@file`).
+/// Read as the pytest adapter
+/// reads them when it lifts them out for the runner: a cluster holding an
+/// option pytest doesn't know is left alone, a `--maxfail` value pytest
+/// would reject sets nothing, and a negative one stops at the first
+/// failure, as pytest does. A lone `--` ends the options.
+pub fn passed_maxfail(passthrough: &[String]) -> ArgValue<MaxFail> {
+    let ShortOptions { flags, valued } = ShortOptions::WITH_XDIST;
+    let mut found = None;
+    let mut args = passthrough.iter().peekable();
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            break;
+        }
+        if arg.starts_with('@') {
+            return ArgValue::Unreadable;
+        }
+        if arg == "--exitfirst" {
+            found = Some(MaxFail::After(1));
+            continue;
+        }
+        if arg == "--maxfail" {
+            if let Some(value) = args.peek().and_then(|value| MaxFail::parse(value)) {
+                args.next();
+                found = Some(value);
+            }
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--maxfail=") {
+            found = MaxFail::parse(value).or(found);
+            continue;
+        }
+        let Some(cluster) = arg
+            .strip_prefix('-')
+            .filter(|rest| !rest.is_empty() && !rest.starts_with('-'))
+        else {
+            continue;
+        };
+        // `-x` counts when every option before the first that takes a
+        // value is one pytest knows.
+        let mut exitfirst = false;
+        for flag in cluster.chars() {
+            if flag == 'x' {
+                exitfirst = true;
+            } else if valued.contains(flag) {
+                break;
+            } else if !flags.contains(flag) {
+                exitfirst = false;
+                break;
+            }
+        }
+        if exitfirst {
+            found = Some(MaxFail::After(1));
+        }
+        // A cluster ending in an option that takes a value takes the next
+        // argument as it.
+        let takes = cluster.chars().position(|c| valued.contains(c));
+        if takes.is_some_and(|at| at + 1 == cluster.chars().count()) {
+            args.next();
+        }
+    }
+    found.map_or(ArgValue::Unset, ArgValue::Set)
 }
 
 /// Whether argparse takes `arg` as an option's value rather than as an
@@ -231,13 +321,6 @@ pub fn split_xdist(args: &[String]) -> (Vec<String>, Option<String>) {
     (kept, workers)
 }
 
-/// pytest's short options that take no value, which argparse lets a
-/// cluster combine (`-vx`); pytest-xdist adds `-d` and `-f`.
-const XDIST_SHORT_FLAGS: &str = "xvqslhVdf";
-/// pytest's short options that take a value: the rest of a cluster, or the
-/// next argument, is it (`-rx` is `-r x`, not `-x`).
-const XDIST_SHORT_VALUED: &str = "kmcpoWrn";
-
 /// A cluster of short options (`-vxs`) with `-x` taken out: whether it held
 /// `-x`, and what is left of it (`None` when nothing is). An argument
 /// that isn't such a cluster, or holds an option pytest doesn't know, is
@@ -249,14 +332,15 @@ fn take_exitfirst(arg: &str) -> (bool, Option<String>) {
     if cluster.is_empty() || cluster.starts_with('-') {
         return (false, Some(arg.to_string()));
     }
+    let ShortOptions { flags, valued } = ShortOptions::WITH_XDIST;
     let mut kept = String::from("-");
     let mut found = false;
     for (at, c) in cluster.char_indices() {
         if c == 'x' {
             found = true;
-        } else if XDIST_SHORT_FLAGS.contains(c) {
+        } else if flags.contains(c) {
             kept.push(c);
-        } else if XDIST_SHORT_VALUED.contains(c) {
+        } else if valued.contains(c) {
             kept.push_str(&cluster[at..]);
             break;
         } else {
@@ -271,7 +355,7 @@ fn take_exitfirst(arg: &str) -> (bool, Option<String>) {
 
 /// What `-x` or `--maxfail N` asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MaxFail {
+pub enum MaxFail {
     /// `--maxfail 0`: no limit.
     Unlimited,
     /// Stop after this many failures.
@@ -279,8 +363,20 @@ pub(crate) enum MaxFail {
 }
 
 impl MaxFail {
+    /// A `--maxfail` value, as pytest takes it; `None` for one it rejects.
+    pub fn parse(value: &str) -> Option<Self> {
+        let n: i64 = value.trim().parse().ok()?;
+        // pytest stops once the failures reach the limit, checked after
+        // each failure: a negative limit stops at the first, like 1.
+        Some(match n {
+            0 => Self::Unlimited,
+            n if n < 0 => Self::After(1),
+            n => Self::After(u32::try_from(n).unwrap_or(u32::MAX)),
+        })
+    }
+
     /// The limit, if any.
-    pub(crate) fn limit(self) -> Option<u32> {
+    pub fn limit(self) -> Option<u32> {
         match self {
             Self::Unlimited => None,
             Self::After(n) => Some(n),
@@ -293,16 +389,6 @@ impl MaxFail {
 /// appears). A `--maxfail` value pytest would reject is left in place, for
 /// the front-end to report, as pytest does.
 pub(crate) fn split_maxfail(args: &[String]) -> (Vec<String>, Option<MaxFail>) {
-    fn limit(value: &str) -> Option<MaxFail> {
-        let n: i64 = value.trim().parse().ok()?;
-        // pytest stops once the failures reach the limit, checked after
-        // each failure: a negative limit stops at the first, like 1.
-        Some(match n {
-            0 => MaxFail::Unlimited,
-            n if n < 0 => MaxFail::After(1),
-            n => MaxFail::After(u32::try_from(n).unwrap_or(u32::MAX)),
-        })
-    }
     let mut kept = Vec::new();
     let mut maxfail = None;
     let mut iter = args.iter().peekable();
@@ -312,7 +398,7 @@ pub(crate) fn split_maxfail(args: &[String]) -> (Vec<String>, Option<MaxFail>) {
             continue;
         }
         if arg == "--maxfail" {
-            if let Some(found) = iter.peek().and_then(|v| limit(v)) {
+            if let Some(found) = iter.peek().and_then(|v| MaxFail::parse(v)) {
                 iter.next();
                 maxfail = Some(found);
                 continue;
@@ -321,7 +407,7 @@ pub(crate) fn split_maxfail(args: &[String]) -> (Vec<String>, Option<MaxFail>) {
             continue;
         }
         if let Some(value) = arg.strip_prefix("--maxfail=") {
-            if let Some(found) = limit(value) {
+            if let Some(found) = MaxFail::parse(value) {
                 maxfail = Some(found);
                 continue;
             }
@@ -339,7 +425,7 @@ pub(crate) fn split_maxfail(args: &[String]) -> (Vec<String>, Option<MaxFail>) {
                 && r.len() >= 2
                 && r.chars()
                     .skip(1)
-                    .position(|c| XDIST_SHORT_VALUED.contains(c))
+                    .position(|c| ShortOptions::WITH_XDIST.valued.contains(c))
                     .is_some_and(|at| at + 2 == r.len())
         });
         kept.extend(rest);
@@ -357,7 +443,10 @@ const JUNIT_PREFIX: [&str; 2] = ["--junitprefix", "--junit-prefix"];
 
 /// Whether argparse takes `arg` as an option's value rather than as an
 /// option: it doesn't start with `-`, or it looks like a negative number
-/// (pytest has no option that does), or it holds a space.
+/// (pytest has no option that does), or it holds a space; as the pytest
+/// adapter has always read the values of the options it lifts, a number
+/// being any float Rust reads (`-1e3`, `-inf`), where [`is_value`] takes
+/// argparse's plain negative numbers only.
 fn is_value_or_float(arg: &str) -> bool {
     !arg.starts_with('-') || arg == "-" || arg.contains(' ') || arg.parse::<f64>().is_ok()
 }
@@ -533,6 +622,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn framework_args_are_read_for_maxfail_as_the_adapter_lifts_them() {
+        let read = |args: &[&str]| {
+            let args: Vec<String> = args.iter().map(|a| (*a).to_string()).collect();
+            passed_maxfail(&args)
+        };
+        let after = |n| ArgValue::Set(MaxFail::After(n));
+        let unset = ArgValue::Unset;
+        for (args, want) in [
+            (&[][..], unset),
+            (&["-v", "--tb=short", "tests"], unset),
+            (&["-x"], after(1)),
+            (&["--exitfirst"], after(1)),
+            (&["--maxfail", "3"], after(3)),
+            (&["--maxfail=3"], after(3)),
+            (&["--maxfail", "0"], ArgValue::Set(MaxFail::Unlimited)),
+            (&["--maxfail=-2"], after(1)),
+            // The last one wins, as in argparse.
+            (&["-x", "--maxfail", "3"], after(3)),
+            (&["--maxfail", "3", "-x"], after(1)),
+            (
+                &["--maxfail", "3", "--maxfail=0"],
+                ArgValue::Set(MaxFail::Unlimited),
+            ),
+            // A value pytest rejects sets nothing (pytest reports it).
+            (&["--maxfail", "many"], unset),
+            (&["-x", "--maxfail=many"], after(1)),
+            // In a cluster, as argparse reads it.
+            (&["-vx"], after(1)),
+            (&["-xvs"], after(1)),
+            (&["-xk", "fast"], after(1)),
+            // `-k`'s value, not `-x`.
+            (&["-kx"], unset),
+            (&["-k", "-x"], unset),
+            (&["-rx"], unset),
+            (&["-vk", "-x"], unset),
+            // A cluster holding an option pytest doesn't know is left alone.
+            (&["-xZ"], unset),
+            (&["-n", "4", "-x"], after(1)),
+            (&["@args.txt", "-x"], ArgValue::Unreadable),
+            // After a lone `--`, everything is a path.
+            (&["--", "-x"], unset),
+            // Long options don't abbreviate in pytest.
+            (&["--exit", "--maxf", "2"], unset),
+        ] {
+            assert_eq!(read(args), want, "{args:?}");
+        }
+    }
+
+    #[test]
     fn xdist_flags_are_lifted_out() {
         let args = |items: &[&str]| items.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
         assert_eq!(
@@ -600,10 +738,10 @@ mod tests {
             let args: Vec<String> = args.iter().map(|a| (*a).to_string()).collect();
             passed(&args, option)
         };
-        let set = |value: &str| Passed::Set(value.into());
+        let set = |value: &str| ArgValue::Set(value.into());
         for (args, want) in [
-            (&[][..], Passed::Unset),
-            (&["-v", "--tb=short", "tests"], Passed::Unset),
+            (&[][..], ArgValue::Unset),
+            (&["-v", "--tb=short", "tests"], ArgValue::Unset),
             (&["-k", "fast"], set("fast")),
             (&["-kfast"], set("fast")),
             (&["-vk", "fast"], set("fast")),
@@ -611,25 +749,25 @@ mod tests {
             (&["-k", "-1"], set("-1")),
             (&["-k", "a", "-k", "b"], set("b")),
             // `-m`'s value isn't `-k`, and `-r`'s neither.
-            (&["-mk"], Passed::Unset),
-            (&["-rk", "-p", "k"], Passed::Unset),
+            (&["-mk"], ArgValue::Unset),
+            (&["-rk", "-p", "k"], ArgValue::Unset),
             (&["-p", "-k", "x"], set("x")),
             // A missing value, or one argparse wouldn't take.
-            (&["-k"], Passed::Unknown),
-            (&["-k", "--tb=short"], Passed::Unknown),
+            (&["-k"], ArgValue::Unreadable),
+            (&["-k", "--tb=short"], ArgValue::Unreadable),
             // A plugin's options: unknown only where `k` could be theirs.
             (&["-n", "4", "-k", "x"], set("x")),
-            (&["-n4"], Passed::Unset),
-            (&["-Zk", "x"], Passed::Unknown),
-            (&["@args.txt"], Passed::Unknown),
+            (&["-n4"], ArgValue::Unset),
+            (&["-Zk", "x"], ArgValue::Unreadable),
+            (&["@args.txt"], ArgValue::Unreadable),
             // Long options don't abbreviate in pytest.
-            (&["--keyword", "x"], Passed::Unset),
+            (&["--keyword", "x"], ArgValue::Unset),
             // After a lone `--`, everything is a path.
-            (&["--", "-k", "x"], Passed::Unset),
+            (&["--", "-k", "x"], ArgValue::Unset),
         ] {
             assert_eq!(read(args, 'k'), want, "{args:?}");
         }
         assert_eq!(read(&["-vmdb", "-k", "x"], 'm'), set("db"));
-        assert_eq!(read(&["-k", "m"], 'm'), Passed::Unset);
+        assert_eq!(read(&["-k", "m"], 'm'), ArgValue::Unset);
     }
 }

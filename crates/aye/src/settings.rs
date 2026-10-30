@@ -11,6 +11,14 @@
 //!   a filesystem root is a usage error before anything walks (a home
 //!   directory under git is a project root, and pytest would collect every
 //!   project in it); a path given (`aye .`) runs.
+//! - **The arguments after `--`** are the framework's: aye's pytest
+//!   front-end parses them after `addopts` and `PYTEST_ADDOPTS`, as pytest
+//!   would, so those that replace a test run (pytest's `-h`, `-V`, `--co`,
+//!   `--fixtures`, `--fixtures-per-test`, `--markers`, also inside a cluster
+//!   such as `-vh`) are usage errors naming the aye equivalent, before
+//!   anything runs. So are `--setup-plan` and `--setup-only`: they run no
+//!   test, and every test would be reported, and remembered for `--lf`, as
+//!   skipped. `--setup-show` runs the tests and is allowed.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,11 +30,11 @@ use aye_events::AdapterName;
 use aye_fs::normalize_absolute;
 use aye_protocol::Policy;
 use aye_provision::Interpreter;
+use aye_pytest::argv::is_value;
 use aye_select::Selection;
 
 use crate::cli::{RunArgs, RunCompatArgs, Verbosity};
 use crate::environment::EnvironmentOptions;
-use crate::framework_args;
 use crate::positional::{Positionals, is_path_like, path_part};
 use crate::printer::Printer;
 use crate::registry::{self, ActiveAdapters, Listing};
@@ -42,6 +50,21 @@ mod workers;
 pub(crate) use junit::JunitTarget;
 pub(crate) use output::OutputSettings;
 pub(crate) use show::ShowSettings;
+
+/// What clap can't check of aye's own `-k` and `-m`: a value starting with
+/// `-` is accepted only where pytest's argparse accepts it, when it looks
+/// like a negative number or contains a space; otherwise it was meant as a
+/// flag.
+fn check_expressions(keyword: Option<&str>, tags: Option<&str>) -> Result<(), String> {
+    for (flag, value) in [("-k", keyword), ("-m", tags)] {
+        if let Some(value) = value
+            && !is_value(value)
+        {
+            return Err(format!("argument {flag}: expected one argument"));
+        }
+    }
+    Ok(())
+}
 
 /// A run's inputs, resolved: everything wrong with the command line or the
 /// configuration fails here, before anything is reported. Selectors that
@@ -129,8 +152,7 @@ impl RunSettings {
         } = args;
         // What clap can't check: aye's own `-k` and `-m` values, and
         // arguments after `--` that would replace the test run.
-        framework_args::check_expressions(keyword.as_deref(), tags.as_deref())
-            .map_err(anyhow::Error::msg)?;
+        check_expressions(keyword.as_deref(), tags.as_deref()).map_err(anyhow::Error::msg)?;
         if let Some(problem) = aye_pytest::argv::replaced_run(&passthrough) {
             return Err(anyhow::Error::msg(problem));
         }

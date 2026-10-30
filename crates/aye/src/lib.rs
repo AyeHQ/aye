@@ -36,7 +36,6 @@ mod cli;
 mod commands;
 mod environment;
 mod error;
-mod framework_args;
 mod positional;
 mod printer;
 mod registry;

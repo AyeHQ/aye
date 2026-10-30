@@ -30,7 +30,7 @@ use aye_events::{
     ProjectPathRef, Severity, TestId,
 };
 use aye_fs::root_relative;
-use aye_pytest::argv::Passed;
+use aye_pytest::argv::ArgValue;
 use aye_select::{
     DottedReading, LastFailed, Order, Reached, SelectedCase, Selection, Selector, SelectorIndex,
 };
@@ -327,10 +327,10 @@ pub(crate) enum Pick {
 }
 
 /// See [`Pick`].
-pub(crate) fn pick(given: Option<&str>, framework: Passed) -> Pick {
+pub(crate) fn pick(given: Option<&str>, framework: ArgValue<String>) -> Pick {
     match framework {
-        Passed::Set(expr) => Pick::Given(expr),
-        Passed::Unknown => Pick::Unknown,
-        Passed::Unset => given.map_or(Pick::Own, |expr| Pick::Given(expr.to_string())),
+        ArgValue::Set(expr) => Pick::Given(expr),
+        ArgValue::Unreadable => Pick::Unknown,
+        ArgValue::Unset => given.map_or(Pick::Own, |expr| Pick::Given(expr.to_string())),
     }
 }

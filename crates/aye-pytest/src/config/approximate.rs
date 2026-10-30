@@ -13,6 +13,8 @@ use aye_config::{Sourced, ValueSource};
 use aye_python_stdlib::os_path;
 use aye_static::EnvVars;
 
+use crate::argv::{MaxFail, ShortOptions};
+
 /// The files pytest looks for in each directory, in its order
 /// (`locate_config`).
 const CONFIG_NAMES: [&str; 7] = [
@@ -261,12 +263,6 @@ struct Options {
     plugins: Vec<String>,
 }
 
-/// pytest's short options that take no value, which a cluster may combine
-/// (`-vx`); and those that take one, the rest of the cluster or the next
-/// argument (`-Werror`, `-W error`).
-const SHORT_FLAGS: &str = "xvqslhVdf";
-const SHORT_VALUED: &str = "kmcpoWrn";
-
 /// The value of option `long` (or short option `short`) at `args[*at]`,
 /// in its `--long=value`, `--long value`, `-svalue` and `-s value` forms;
 /// advances `at` past a separate value.
@@ -294,12 +290,7 @@ fn value_of(args: &[String], at: &mut usize, long: &str, short: Option<&str>) ->
 /// A `--maxfail` value as pytest takes it: 0 is no limit, a negative one
 /// stops at the first failure.
 fn maxfail_value(value: &str) -> Option<u32> {
-    let n: i64 = value.trim().parse().ok()?;
-    Some(match n {
-        0 => 0,
-        n if n < 0 => 1,
-        n => u32::try_from(n).unwrap_or(u32::MAX),
-    })
+    MaxFail::parse(value).map(|limit| limit.limit().unwrap_or(0))
 }
 
 impl Options {
@@ -311,11 +302,12 @@ impl Options {
         if cluster.is_empty() || cluster.starts_with('-') {
             return None;
         }
+        let ShortOptions { flags, valued } = ShortOptions::WITH_XDIST;
         let mut exitfirst = false;
         for (index, c) in cluster.char_indices() {
             if c == 'x' {
                 exitfirst = true;
-            } else if SHORT_VALUED.contains(c) {
+            } else if valued.contains(c) {
                 let rest = &cluster[index + c.len_utf8()..];
                 let value = if rest.is_empty() {
                     *at += 1;
@@ -324,7 +316,7 @@ impl Options {
                     rest.strip_prefix('=').unwrap_or(rest).to_string()
                 };
                 return Some((exitfirst, Some((c, value))));
-            } else if !SHORT_FLAGS.contains(c) {
+            } else if !flags.contains(c) {
                 return None;
             }
         }

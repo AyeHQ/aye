@@ -10,6 +10,7 @@ use aye_select::Selection;
 use aye_static::ProcessEnv;
 use clap::Parser as _;
 
+use super::maxfail::Maxfail;
 use super::*;
 use crate::cli::ShowArgs;
 
@@ -690,4 +691,146 @@ fn details_come_at_the_second_level_unless_the_flags_say() {
     assert_eq!(verbosity(&["-q"], true, OutputFormat::Json), -1);
     assert_eq!(verbosity(&["-v", "-q"], true, OutputFormat::Text), 0);
     assert_eq!(verbosity(&["-vv"], false, OutputFormat::Text), 2);
+}
+
+fn parse(argv: &[&str]) -> RunArgs {
+    RunArgs::try_parse_from(std::iter::once("aye").chain(argv.iter().copied())).unwrap()
+}
+
+/// What `check_expressions` and `replaced_run` say of a run's arguments.
+fn check(args: &RunArgs) -> Result<(), String> {
+    check_expressions(args.keyword.as_deref(), args.tags.as_deref())?;
+    aye_pytest::argv::replaced_run(&args.passthrough).map_or(Ok(()), Err)
+}
+
+fn maxfail(args: &RunArgs) -> Maxfail {
+    Maxfail::given(args.exitfirst, args.maxfail)
+}
+
+#[test]
+fn the_last_of_exitfirst_and_maxfail_wins() {
+    assert_eq!(
+        maxfail(&parse(&["-x", "--maxfail", "3"])),
+        Maxfail::After(3)
+    );
+    assert_eq!(
+        maxfail(&parse(&["--maxfail", "3", "-x"])),
+        Maxfail::After(1)
+    );
+    assert_eq!(
+        maxfail(&parse(&["--maxfail=3", "--exitfirst"])),
+        Maxfail::After(1)
+    );
+    assert_eq!(
+        maxfail(&parse(&["--maxfail", "2", "--maxfail", "5"])),
+        Maxfail::After(5)
+    );
+    assert_eq!(maxfail(&parse(&["-x", "-x"])), Maxfail::After(1));
+    assert_eq!(maxfail(&parse(&["--maxfail", "0"])), Maxfail::Unlimited);
+    assert_eq!(
+        maxfail(&parse(&["-x", "--maxfail", "0"])),
+        Maxfail::Unlimited
+    );
+    assert_eq!(maxfail(&parse(&[])), Maxfail::Unset);
+}
+
+#[test]
+fn expressions_may_start_with_a_dash_where_pytest_allows_it() {
+    let args = parse(&["-k", "-1", "-m", "-2.5", "tests"]);
+    assert_eq!(args.keyword.as_deref(), Some("-1"));
+    assert_eq!(args.tags.as_deref(), Some("-2.5"));
+    assert_eq!(args.tests, ["tests"]);
+    assert!(check(&args).is_ok());
+    assert!(check(&parse(&["-k", "-1 and x"])).is_ok());
+    assert!(check(&parse(&["-k", "-.5"])).is_ok());
+    assert_eq!(
+        check(&parse(&["-k", "-x"])),
+        Err("argument -k: expected one argument".into())
+    );
+    assert!(check(&parse(&["-m", "--lf"])).is_err());
+    assert!(check(&parse(&["-k", "-1."])).is_err());
+    // The last one given wins, as in pytest.
+    assert_eq!(parse(&["-k", "a", "-k", "b"]).keyword.as_deref(), Some("b"));
+    // Counted and repeated arguments still add up.
+    let args = parse(&["-v", "-v", "-q", "a", "b", "-v", "--", "-x"]);
+    assert_eq!((args.verbose, args.quiet), (3, 1));
+    assert_eq!(args.tests, ["a", "b"]);
+    assert_eq!(args.passthrough, ["-x"]);
+}
+
+#[test]
+fn framework_args_that_replace_the_run_are_usage_errors() {
+    let check = |framework: &[&str]| {
+        let mut argv = vec!["tests", "--"];
+        argv.extend(framework);
+        check(&parse(&argv))
+    };
+    assert_eq!(
+        check(&["--co"]),
+        Err(
+            "`-- --co` would make pytest collect the tests without running them; use `aye --co`"
+                .into()
+        )
+    );
+    for args in [
+        &["--collect-only"][..],
+        &["--collectonly"],
+        &["-h"],
+        &["--help"],
+        &["-V"],
+        &["--version"],
+        &["--fixtures"],
+        &["--funcargs"],
+        &["--fixtures-per-test"],
+        &["--markers"],
+        // They run no test, and every test would finish as skipped.
+        &["--setup-plan"],
+        &["--setupplan"],
+        &["--setup-only"],
+        &["--setuponly"],
+        &["-v", "--setup-only", "--setup-show"],
+        // In a cluster of short flags, as argparse reads it.
+        &["-vh"],
+        &["-qV"],
+        &["--tb=short", "--markers"],
+    ] {
+        assert!(check(args).is_err(), "{args:?}");
+    }
+    let help = check(&["-vh"]).unwrap_err();
+    assert!(
+        help.starts_with("`-- -vh` would make pytest show its help"),
+        "{help}"
+    );
+    assert!(
+        check(&["--fixtures"])
+            .unwrap_err()
+            .contains("no equivalent")
+    );
+    assert_eq!(
+        check(&["--setup-plan"]),
+        Err(
+            "`-- --setup-plan` would make pytest plan the fixtures instead of running the \
+             tests; aye has no equivalent yet: run `python -m pytest --setup-plan`"
+                .into()
+        )
+    );
+    for args in [
+        &[][..],
+        // It runs the tests.
+        &["--setup-show"],
+        &["--setupshow"],
+        &["-v", "--tb=short"],
+        // A value, not a flag: `-r h` and `-k h` show nothing.
+        &["-rh"],
+        &["-kh"],
+        &["-p", "no:help"],
+        // Not abbreviations: pytest has none.
+        &["--fix"],
+        &["--helpful-plugin-flag"],
+        // After a lone `--`, arguments are paths.
+        &["--", "--help"],
+        &["--", "--setup-plan"],
+    ] {
+        assert_eq!(check(args), Ok(()), "{args:?}");
+    }
 }

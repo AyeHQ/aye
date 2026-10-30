@@ -8,7 +8,6 @@ use aye_render::{ColorChoice, DetailLevel, Ladder, Level};
 
 use super::output;
 use crate::cli::{ShowArgs, Verbosity};
-use crate::framework_args;
 use crate::positional::{is_path_like, path_part};
 
 /// Where `aye show` is, and how it shows what it is asked to: the format,
@@ -33,7 +32,7 @@ impl ShowSettings {
     /// `[tool.aye]`. Its expressions are read later, once the run they
     /// filter is found.
     pub(crate) fn resolve(args: &ShowArgs) -> Result<Self, String> {
-        framework_args::check_expressions(args.keyword.as_deref(), args.tags.as_deref())?;
+        super::check_expressions(args.keyword.as_deref(), args.tags.as_deref())?;
         let cwd = std::env::current_dir()
             .map_err(|err| format!("cannot read the current directory: {err}"))?;
         let given: Vec<PathBuf> = args
