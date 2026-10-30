@@ -1,10 +1,12 @@
 //! Configuration as a mechanism. Finds the project root, reads
 //! `[tool.aye]`, and provides generic loaders (toml tables, ini sections, the
 //! upward search) that engines use to read their own framework's settings. Every
-//! resolved value remembers its origin for `aye config`.
+//! resolved value remembers where it came from ([`ValueSource`]) for `aye
+//! config`.
 //!
-//! Owns: loading and origins. Does not own: the meaning of any framework's
-//! options; `python_files` means something to the pytest engine, not here.
+//! Owns: loading and value sources, and the worker count a run asks for
+//! ([`WorkerCount`]). Does not own: the meaning of any framework's options;
+//! `python_files` means something to the pytest engine, not here.
 //!
 //! Depends on: aye-fs, for the lexical path algebra the root is found
 //! with.
@@ -16,12 +18,12 @@
 //!   `pyproject.toml`; failing that, one holding `.git`; failing that, the
 //!   starting directory. Test ids are relative to it. Frameworks keep their
 //!   own notion of a root (pytest's rootdir) and translate. Paths are made
-//!   absolute lexically, as `aye_fs` decides. Where two spellings of one
-//!   directory share more than the filesystem's root (both under Linux's
-//!   `/tmp`), their common ancestor stays lexical, as pytest's
-//!   `get_common_ancestor` keeps it, but when no project holds it the root
-//!   is searched for from the resolved one ([`project_root`]), so one
-//!   command finds one root on every platform.
+//!   absolute lexically, as `aye_fs` decides. Where the paths spell one
+//!   directory two ways that share more than the filesystem's root (both
+//!   under Linux's `/tmp`), their common ancestor stays lexical, as pytest's
+//!   `get_common_ancestor` keeps it, but when no project holds it the root is
+//!   searched for from the resolved one ([`project_root`]), so one command
+//!   finds one root on every platform.
 //! - **`[tool.aye]` rejects unknown keys and values**, so a typo is an error
 //!   rather than a setting that silently does nothing: `output` must be
 //!   `text` or `json`, in any case as on the command line (it is kept in
@@ -40,7 +42,10 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::Arc;
 
 use serde::Deserialize;
 
@@ -59,64 +64,125 @@ pub enum ConfigError {
     Aye { path: PathBuf, message: String },
 }
 
-/// Where a resolved value came from.
+/// Where a resolved value came from, for `aye config`. One source is shown
+/// one way wherever it is (a row of `[tool.aye]`, of `[pytest]`, an
+/// adapter's error), so that each spelling is decided here.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Origin {
-    /// Built-in default.
+pub enum ValueSource {
+    /// Built in: nothing set it. Shown `default`.
     Default,
-    /// A command-line flag, e.g. `--workers`.
-    Flag(String),
-    /// An environment variable.
-    Env(String),
-    /// A file, and where in it (`[tool.aye]`, `[pytest]`).
-    File { path: PathBuf, location: String },
+    /// aye's command line: a flag (`--python`), or `--` for the arguments
+    /// after it, shown as it is.
+    Cli(&'static str),
+    /// An environment variable, by name; shown `$PYTEST_ADDOPTS`.
+    Env(&'static str),
+    /// A file, and where in it: a table or section (`[tool.aye]`,
+    /// `[pytest]`), or `None` for the file as a whole (pytest's inifile).
+    /// Shown `pyproject.toml [tool.aye]`.
+    File {
+        path: Arc<Path>,
+        table: Option<Box<str>>,
+    },
+    /// An option of a framework's, and where the framework read it (its
+    /// own words for its sources); shown `-o python_classes
+    /// (PYTEST_ADDOPTS)`, `--strict (after --)`.
+    FrameworkOption { option: Box<str>, via: &'static str },
+    /// A rule of aye's, in words, shown as they are.
+    Rule(&'static str),
 }
 
-impl Origin {
-    pub fn file(path: impl Into<PathBuf>, location: impl Into<String>) -> Self {
+impl ValueSource {
+    /// The `table` of the file at `path` (`[tool.aye]`).
+    pub fn file(path: impl AsRef<Path>, table: impl Into<Box<str>>) -> Self {
         Self::File {
-            path: path.into(),
-            location: location.into(),
+            path: Arc::from(path.as_ref()),
+            table: Some(table.into()),
         }
     }
 
-    /// The origin with its file shown relative to `root` when inside it.
-    pub fn display_relative(&self, root: &Path) -> String {
-        match self {
-            Self::File { path, location } => {
-                let shown = path.strip_prefix(root).unwrap_or(path);
-                format!("{} {location}", shown.display())
+    /// The file at `path` as a whole.
+    pub fn whole_file(path: impl AsRef<Path>) -> Self {
+        Self::File {
+            path: Arc::from(path.as_ref()),
+            table: None,
+        }
+    }
+
+    /// The source as a row of `aye config` shows it (`pyproject.toml
+    /// [tool.aye]`): a file relative to `root` when it is inside it.
+    pub fn display_row<'a>(&'a self, root: &'a Path) -> impl fmt::Display + 'a {
+        Row { source: self, root }
+    }
+}
+
+/// [`ValueSource::display_row`].
+struct Row<'a> {
+    source: &'a ValueSource,
+    root: &'a Path,
+}
+
+impl fmt::Display for Row<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.source {
+            ValueSource::File { path, table } => {
+                let shown = path.strip_prefix(self.root).unwrap_or(path).display();
+                match table {
+                    Some(table) => write!(f, "{shown} {table}"),
+                    // A file as a whole is shown trimmed, as it always was.
+                    None => f.write_str(shown.to_string().trim()),
+                }
             }
-            other => other.to_string(),
+            other => other.fmt(f),
         }
     }
 }
 
-impl fmt::Display for Origin {
+/// The source in full: a file by its absolute path.
+impl fmt::Display for ValueSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Default => f.write_str("default"),
-            Self::Flag(flag) => write!(f, "{flag}"),
-            Self::Env(var) => write!(f, "${var}"),
-            Self::File { path, location } => write!(f, "{} {location}", path.display()),
+            Self::Cli(flag) => f.write_str(flag),
+            Self::Env(name) => write!(f, "${name}"),
+            Self::File { path, table } => match table {
+                Some(table) => write!(f, "{} {table}", path.display()),
+                None => write!(f, "{}", path.display()),
+            },
+            Self::FrameworkOption { option, via } => write!(f, "{option} ({via})"),
+            Self::Rule(words) => f.write_str(words),
         }
     }
 }
 
-/// A value and its origin.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A value and where it came from. Two are equal, and hash alike, when
+/// their values are: where a value came from changes nothing it does.
+#[derive(Debug, Clone)]
 pub struct Sourced<T> {
     pub value: T,
-    pub origin: Origin,
+    pub source: ValueSource,
 }
 
 impl<T> Sourced<T> {
-    pub const fn new(value: T, origin: Origin) -> Self {
-        Self { value, origin }
+    pub const fn new(value: T, source: ValueSource) -> Self {
+        Self { value, source }
     }
 
-    pub fn default_value(value: T) -> Self {
-        Self::new(value, Origin::Default)
+    pub const fn default_value(value: T) -> Self {
+        Self::new(value, ValueSource::Default)
+    }
+}
+
+impl<T: PartialEq> PartialEq for Sourced<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
+impl<T: Eq> Eq for Sourced<T> {}
+
+impl<T: Hash> Hash for Sourced<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.value.hash(state);
     }
 }
 
@@ -146,11 +212,11 @@ pub fn find_root(start: &Path) -> PathBuf {
 }
 
 /// aye's project root for `paths` given in `cwd`: [`find_root`] from their
-/// common ancestor. When nothing above that ancestor marks a project, but
-/// the paths, resolved, share a directory inside it (one directory spelled
-/// two ways under a shared `/tmp`, as on Linux), the search starts from
-/// that directory instead, so the root doesn't depend on how much two
-/// spellings happen to share.
+/// [`aye_fs::common_ancestor`]. When nothing above that ancestor marks a
+/// project, but the paths, resolved, share a directory inside it (one
+/// directory spelled two ways under a shared `/tmp`, as on Linux), the
+/// search starts from that directory instead, so the root doesn't depend on
+/// how much two spellings happen to share.
 pub fn project_root(cwd: &Path, paths: &[PathBuf]) -> PathBuf {
     let ancestor = aye_fs::normpath(&aye_fs::common_ancestor(cwd, paths));
     if let Some(root) = marked(&ancestor) {
@@ -284,6 +350,18 @@ pub struct AyeSettings {
 }
 
 impl AyeSettings {
+    /// No `[tool.aye]`: nothing set, as [`AyeSettings::default`].
+    pub const NONE: Self = Self {
+        workers: None,
+        python: None,
+        output: None,
+        timeout: None,
+        adapters: None,
+        keep_runs: None,
+        unittest: None,
+        doctest: None,
+    };
+
     /// Check the values serde's types let through, and put `output` in
     /// lower case.
     fn check(&mut self) -> Result<(), String> {
@@ -355,6 +433,41 @@ impl AyeSettings {
             "unittest" => self.unittest.as_ref(),
             "doctest" => self.doctest.as_ref(),
             _ => None,
+        }
+    }
+}
+
+/// How many workers a run asks for, as `-n` and pytest-xdist's `-n` read
+/// it: a number, or `auto` (and pytest-xdist's `logical`) for one per CPU.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerCount {
+    Auto,
+    /// A number of workers; 0 is one, as `-n 0` is.
+    Count(u32),
+}
+
+impl WorkerCount {
+    /// The number of workers: a count as given, 0 being one; for `Auto`,
+    /// the CPUs the process may use, else one.
+    pub fn resolve(self) -> u32 {
+        match self {
+            Self::Count(n) => n.max(1),
+            Self::Auto => std::thread::available_parallelism()
+                .map_or(1, |n| u32::try_from(n.get()).unwrap_or(1)),
+        }
+    }
+}
+
+impl FromStr for WorkerCount {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "auto" | "logical" => Ok(Self::Auto),
+            n => n
+                .parse()
+                .map(Self::Count)
+                .map_err(|_| format!("expected a number or `auto`, got `{n}`")),
         }
     }
 }
@@ -434,12 +547,12 @@ const RENAMED_OUTPUTS: [(&str, &str); 2] = [
     ),
 ];
 
-/// `[tool.aye]` with its origin.
+/// `[tool.aye]` with where it came from.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AyeConfig {
     pub settings: AyeSettings,
     /// Where the table was read from; `Default` when there is none.
-    pub origin: Origin,
+    pub source: ValueSource,
 }
 
 impl AyeConfig {
@@ -449,13 +562,13 @@ impl AyeConfig {
         if !path.is_file() {
             return Ok(Self {
                 settings: AyeSettings::default(),
-                origin: Origin::Default,
+                source: ValueSource::Default,
             });
         }
         let Some(table) = toml_table(&path, &["tool", "aye"])? else {
             return Ok(Self {
                 settings: AyeSettings::default(),
-                origin: Origin::Default,
+                source: ValueSource::Default,
             });
         };
         let mut settings: AyeSettings =
@@ -470,17 +583,18 @@ impl AyeConfig {
         }
         Ok(Self {
             settings,
-            origin: Origin::file(path, "[tool.aye]"),
+            source: ValueSource::file(path, "[tool.aye]"),
         })
     }
 
-    /// Every setting that is set, as `(name, value, origin)`, for `aye config`.
-    pub fn entries(&self) -> Vec<(String, String, Origin)> {
+    /// Every setting that is set, as `(name, value, source)`, for `aye
+    /// config`.
+    pub fn entries(&self) -> Vec<(String, String, ValueSource)> {
         let s = &self.settings;
         let mut out = Vec::new();
         let mut push = |name: &str, value: Option<String>| {
             if let Some(value) = value {
-                out.push((name.to_string(), value, self.origin.clone()));
+                out.push((name.to_string(), value, self.source.clone()));
             }
         };
         push(
@@ -562,13 +676,12 @@ mod tests {
         let alias = alias_dir.path().join("alias");
         std::os::unix::fs::symlink(real.join("proj"), &alias).unwrap();
         let cwd = real.join("proj");
+        // Whether the two spellings share only the filesystem's root (macOS)
+        // or more (/tmp on Linux), the root is the project's.
         let paths = [
             alias.join("tests/test_a.py"),
             PathBuf::from("tests/test_b.py"),
         ];
-        // Whether the common ancestor is the resolved one (macOS's
-        // /private/var against /var) or a lexical one above both (Linux's
-        // /tmp), the root is the project's.
         assert_eq!(project_root(&cwd, &paths), real.join("proj"));
         // A symlinked directory inside the project keeps its own name.
         std::os::unix::fs::symlink(real.join("proj/tests"), real.join("proj/linked")).unwrap();
@@ -619,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_aye_with_origin_and_strict_keys() {
+    fn tool_aye_with_its_source_and_strict_keys() {
         let dir = tempfile::tempdir().unwrap();
         write(
             dir.path(),
@@ -634,7 +747,7 @@ mod tests {
         let entries = config.entries();
         assert_eq!(entries[0].0, "workers");
         assert_eq!(
-            entries[0].2.display_relative(dir.path()),
+            entries[0].2.display_row(dir.path()).to_string(),
             "pyproject.toml [tool.aye]"
         );
 
@@ -670,7 +783,7 @@ mod tests {
                 (
                     "output".to_string(),
                     kept.to_string(),
-                    config.origin.clone()
+                    config.source.clone()
                 )
             );
         }
@@ -796,7 +909,7 @@ mod tests {
             (
                 "keep-runs".to_string(),
                 "3".to_string(),
-                config.origin.clone()
+                config.source.clone()
             )
         );
         let config = load("[tool.aye.unittest]\npattern = \"*_test.py\"").unwrap();
@@ -805,14 +918,78 @@ mod tests {
         assert!(config.settings.adapter_table("pytest").is_none());
     }
 
+    /// Every source as `aye config`'s rows show it, and in full, as 0.0.1
+    /// spelt each (`aye config`'s snapshots pin them in place).
+    #[test]
+    fn a_source_is_shown_as_aye_config_shows_it() {
+        let root = Path::new("/repo");
+        let shown =
+            |source: ValueSource| (source.display_row(root).to_string(), source.to_string());
+        let both = |text: &str| (text.to_string(), text.to_string());
+        assert_eq!(shown(ValueSource::Default), both("default"));
+        assert_eq!(shown(ValueSource::Cli("--")), both("--"));
+        assert_eq!(
+            shown(ValueSource::Env("PYTEST_ADDOPTS")),
+            both("$PYTEST_ADDOPTS")
+        );
+        assert_eq!(
+            shown(ValueSource::file("/repo/pyproject.toml", "[tool.aye]")),
+            (
+                "pyproject.toml [tool.aye]".to_string(),
+                "/repo/pyproject.toml [tool.aye]".to_string()
+            )
+        );
+        assert_eq!(
+            shown(ValueSource::file("/elsewhere/tox.ini", "[pytest]")).0,
+            "/elsewhere/tox.ini [pytest]"
+        );
+        // A section with no name keeps its space, as 0.0.1's did.
+        assert_eq!(
+            shown(ValueSource::file("/repo/pyproject.toml", "")).0,
+            "pyproject.toml "
+        );
+        assert_eq!(
+            shown(ValueSource::whole_file("/repo/pytest.ini")),
+            ("pytest.ini".to_string(), "/repo/pytest.ini".to_string())
+        );
+        assert_eq!(
+            shown(ValueSource::FrameworkOption {
+                option: "-o python_classes".into(),
+                via: "PYTEST_ADDOPTS",
+            }),
+            both("-o python_classes (PYTEST_ADDOPTS)")
+        );
+        assert_eq!(
+            shown(ValueSource::FrameworkOption {
+                option: "--strict".into(),
+                via: "after --",
+            }),
+            both("--strict (after --)")
+        );
+        assert_eq!(
+            shown(ValueSource::Rule(
+                "the doctest adapter isn't among the run's adapters"
+            )),
+            both("the doctest adapter isn't among the run's adapters")
+        );
+    }
+
+    /// Where a value came from changes nothing it does.
+    #[test]
+    fn sourced_values_are_equal_by_their_values() {
+        let from_file = Sourced::new(3, ValueSource::file("/repo/pyproject.toml", "[tool.aye]"));
+        assert_eq!(from_file, Sourced::default_value(3));
+        assert_ne!(from_file, Sourced::default_value(4));
+    }
+
     #[test]
     fn missing_tool_aye_is_the_default() {
         let dir = tempfile::tempdir().unwrap();
         let config = AyeConfig::load(dir.path()).unwrap();
-        assert_eq!(config.origin, Origin::Default);
+        assert_eq!(config.source, ValueSource::Default);
         assert_eq!(
             config.entries(),
-            [] as [(std::string::String, std::string::String, Origin); 0]
+            [] as [(std::string::String, std::string::String, ValueSource); 0]
         );
     }
 }

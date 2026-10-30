@@ -30,12 +30,8 @@ pub(crate) fn print(session: &Session) -> Result<()> {
     if entries.is_empty() {
         writeln!(out, "  (not set)")?;
     }
-    for (name, value, origin) in entries {
-        writeln!(
-            out,
-            "  {name} = {value}    # {}",
-            origin.display_relative(root)
-        )?;
+    for (name, value, source) in entries {
+        writeln!(out, "  {name} = {value}    # {}", source.display_row(root))?;
     }
     for adapter in adapters {
         writeln!(out)?;
@@ -51,7 +47,9 @@ pub(crate) fn print(session: &Session) -> Result<()> {
             writeln!(
                 out,
                 "  {} = {}    # {}",
-                setting.name, setting.value, setting.origin
+                setting.name,
+                setting.value,
+                setting.source.display_row(root)
             )?;
         }
     }

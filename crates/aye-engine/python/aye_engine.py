@@ -1627,7 +1627,7 @@ class Services:
     """What the runner provides inside the worker, looked up by name.
 
     Services are additive: an engine asks for a name and copes with ``None``.
-    The names match ``aye_engine::services`` on the Rust side.
+    The names match ``aye_protocol::services`` on the Rust side.
     """
 
     CAPTURE = "capture"
@@ -1881,7 +1881,7 @@ class Test:
 
 
 class Policy:
-    """How a batch must run (``aye_engine::Policy`` on the Rust side)."""
+    """How a batch must run (``aye_protocol::Policy`` on the Rust side)."""
 
     def __init__(self, data: dict[str, Any] | None = None) -> None:
         data = data or {}
@@ -1895,7 +1895,7 @@ class Policy:
 
 
 class Batch:
-    """A unit of work handed to the engine (``aye_engine::Batch``)."""
+    """A unit of work handed to the engine (``aye_protocol::Batch``)."""
 
     def __init__(self, data: dict[str, Any]) -> None:
         self.id: int = data["id"]
@@ -1904,7 +1904,7 @@ class Batch:
         self.policy = Policy(data.get("policy"))
         self.context: Any = data.get("context")
         # The worker's last batch for its adapter: an executor that lists
-        # the session ends it with this batch (``aye_engine::Batch``).
+        # the session ends it with this batch (``aye_protocol::Batch``).
         self.ends_session: bool = bool(data.get("ends_session", False))
 
 

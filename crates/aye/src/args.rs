@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use aye_config::WorkerCount;
 use clap::builder::{PossibleValue, PossibleValuesParser, TypedValueParser};
 use clap::{ArgAction, Parser, ValueEnum};
 
@@ -65,7 +66,7 @@ pub(crate) struct Args {
 
     /// Worker processes, or `auto` for one per CPU.
     #[arg(short = 'n', long, value_name = "N|auto")]
-    pub workers: Option<Workers>,
+    pub workers: Option<WorkerCount>,
 
     /// List the selected tests without running them.
     #[arg(long = "collect-only", visible_alias = "co")]
@@ -636,36 +637,6 @@ pub(crate) enum Color {
     Never,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Workers {
-    Auto,
-    Count(u32),
-}
-
-impl Workers {
-    pub(crate) fn resolve(self) -> u32 {
-        match self {
-            Self::Count(n) => n.max(1),
-            Self::Auto => std::thread::available_parallelism()
-                .map_or(1, |n| u32::try_from(n.get()).unwrap_or(1)),
-        }
-    }
-}
-
-impl FromStr for Workers {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "auto" | "logical" => Ok(Self::Auto),
-            n => n
-                .parse()
-                .map(Self::Count)
-                .map_err(|_| format!("expected a number or `auto`, got `{n}`")),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -716,7 +687,7 @@ mod tests {
         assert_eq!(args.tags.as_deref(), Some("db"));
         assert!(args.exitfirst && args.last_failed && args.collect_only);
         assert_eq!(args.verbose, 2);
-        assert_eq!(args.workers, Some(Workers::Auto));
+        assert_eq!(args.workers, Some(WorkerCount::Auto));
         assert_eq!(args.junit_xml, Some(PathBuf::from("out.xml")));
         assert_eq!(args.passthrough, ["--reuse-db"]);
     }

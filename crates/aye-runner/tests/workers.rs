@@ -14,13 +14,19 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use aye_engine::{EmbeddedModule, Executor, Policy, RefineRequest, Refiner, Reply, Request};
-use aye_events::{Case, Event, Outcome, Record, TestId, TestResult};
+use aye_events::{
+    AdapterName, AffinityKey, BatchIndex, Case, DiagnosticCode, Event, FrameworkStatus, Outcome,
+    ProjectPath, Record, Stamper, StopReason, TestId, TestResult, WorkerIndex,
+};
+use aye_protocol::{
+    AdapterContext, BatchContext, EntryPoint, ModuleSet, ModuleSource, Policy, RefineRequest,
+    Refiner, Reply, Request, Runtime, SessionMode,
+};
 #[cfg(unix)]
 use aye_runner::Worker;
 use aye_runner::{
-    BatchEnd, Echo, Incoming, Plan, RunSummary, Runner, RunnerOptions, SpawnError, Stamper,
-    StopReason, WorkerSpec, spawn,
+    BatchEnd, Echo, Incoming, Plan, RunSummary, Runner, RunnerOptions, SpawnError, WorkerSpec,
+    spawn,
 };
 
 /// `test_fail` fails, `test_sleep_<ms>` sleeps, `test_crash` kills the
@@ -51,7 +57,9 @@ use aye_runner::{
 /// `close` in `calls-<pid>.log`, with its worker's `AYE_WORKER`, and lists
 /// `test_a` then `test_b` in each file, the other way round in a file whose
 /// name holds `differs` on any worker but the first, which takes 30s to
-/// list a file whose name holds `slow`.
+/// list a file whose name holds `slow`. The module imports `fake_prelude`,
+/// which a worker has only when the runner installs its prelude
+/// ([`PRELUDE`]) first, refining or running.
 const FAKE_SOURCE: &str = r#"
 import gc
 import os
@@ -62,6 +70,7 @@ import threading
 import time
 
 import aye_engine as engine
+import fake_prelude
 
 
 def protocol_fd():
@@ -257,32 +266,39 @@ class ListingExecutor(FakeExecutor):
         note_call("close")
 "#;
 
-const FAKE_MODULE: EmbeddedModule = EmbeddedModule {
-    name: "fake_executor",
-    source: FAKE_SOURCE,
+/// What the fake executor's module imports beside aye's engine: the
+/// prelude every worker installs before any runtime's own modules, as the
+/// binary's is aye's `pytest` module.
+const PRELUDE: ModuleSet = ModuleSet::new(const { &[ModuleSource::embedded("fake_prelude", "")] });
+
+const FAKE_MODULES: ModuleSet =
+    ModuleSet::new(const { &[ModuleSource::embedded("fake_executor", FAKE_SOURCE)] });
+
+const FAKE: Runtime = Runtime {
+    adapter: AdapterName::new_static("fake"),
+    modules: FAKE_MODULES,
+    entry: EntryPoint::new("fake_executor", "FakeExecutor"),
+    session: SessionMode::PerBatch,
 };
 
-const FAKE: Executor = Executor {
-    adapter: "fake",
-    modules: &[FAKE_MODULE],
-    entry: "fake_executor:FakeExecutor",
-    lists_session: false,
+const OTHER: Runtime = Runtime {
+    adapter: AdapterName::new_static("other"),
+    modules: FAKE_MODULES,
+    entry: EntryPoint::new("fake_executor", "OtherExecutor"),
+    session: SessionMode::PerBatch,
 };
 
-const OTHER: Executor = Executor {
-    adapter: "other",
-    modules: &[FAKE_MODULE],
-    entry: "fake_executor:OtherExecutor",
-    lists_session: false,
+const LISTING: Runtime = Runtime {
+    adapter: AdapterName::new_static("listing"),
+    modules: FAKE_MODULES,
+    entry: EntryPoint::new("fake_executor", "ListingExecutor"),
+    session: SessionMode::ListsSession,
 };
 
-const LISTING: Executor = Executor {
-    adapter: "listing",
-    modules: &[FAKE_MODULE],
-    entry: "fake_executor:ListingExecutor",
-    lists_session: true,
-};
-
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' own settings, not the environment aye reads"
+)]
 fn python() -> Option<PathBuf> {
     if let Some(python) = env::var_os("AYE_TEST_PYTHON").filter(|p| !p.is_empty()) {
         return Some(python.into());
@@ -320,7 +336,8 @@ fn fixture_echoing(python: PathBuf, workers: u32, echo: Echo) -> Fixture {
         root: root.clone(),
         cwd: root.clone(),
         workers,
-        executors: vec![FAKE, OTHER, LISTING],
+        prelude: PRELUDE,
+        runtimes: vec![FAKE, OTHER, LISTING],
         env: vec![("FAKE_DIR".into(), root.into_os_string())],
         echo,
         collect_only: false,
@@ -334,7 +351,7 @@ fn cases(ids: &[&str]) -> Vec<Case> {
     free_cases(ids)
         .into_iter()
         .map(|mut case| {
-            case.affinity = vec![case.id.path().to_string()];
+            case.affinity = vec![AffinityKey::file(case.id.path())];
             case
         })
         .collect()
@@ -419,7 +436,8 @@ fn the_handshake_reports_the_interpreter() {
     let python = python_or_skip!();
     let dir = tempfile::tempdir().unwrap();
     let mut spec = WorkerSpec::new(&python, dir.path(), dir.path());
-    spec.executors = vec![FAKE];
+    spec.prelude = PRELUDE;
+    spec.runtimes = vec![FAKE];
     let worker = spawn(&spec).unwrap();
     assert!(worker.pid() > 0);
     assert_ne!(worker.python(), "");
@@ -437,11 +455,11 @@ fn a_worker_answers_requests_it_cannot_serve_with_failed() {
         .send(&Request::Refine(RefineRequest {
             adapter: "nope".into(),
             files: vec![],
-            context: serde_json::Value::Null,
+            context: BatchContext::default(),
             digests_only: false,
         }))
         .unwrap();
-    let Incoming::Line(aye_engine::WorkerLine::Reply(Reply::Failed { message })) = worker.recv()
+    let Incoming::Line(aye_protocol::WorkerLine::Reply(Reply::Failed { message })) = worker.recv()
     else {
         panic!("expected failed");
     };
@@ -473,7 +491,7 @@ fn a_worker_that_cannot_start_is_reported_once_per_lane() {
         root: dir.path().into(),
         cwd: dir.path().into(),
         workers: 2,
-        executors: vec![FAKE],
+        runtimes: vec![FAKE],
         ..RunnerOptions::default()
     });
     let plan = Plan {
@@ -514,13 +532,13 @@ fn a_worker_of_another_protocol_is_refused() {
             error,
             SpawnError::Protocol {
                 worker: 99,
-                runner: aye_engine::PROTOCOL_VERSION
+                runner: aye_protocol::PROTOCOL_VERSION
             }
         ),
         "{error}"
     );
     let message = error.to_string();
-    let ours = format!("protocol {}", aye_engine::PROTOCOL_VERSION);
+    let ours = format!("protocol {}", aye_protocol::PROTOCOL_VERSION);
     assert!(
         message.contains("protocol 99") && message.contains(&ours),
         "{message}"
@@ -595,10 +613,14 @@ fn records_are_stamped_and_ordered() {
     for (seq, record) in (1..).zip(&records) {
         let envelope = &record.envelope;
         assert_eq!(envelope.seq, Some(seq));
-        assert_eq!(envelope.run.as_deref(), Some("run-1"));
-        assert_eq!(envelope.worker, Some(0));
+        assert_eq!(envelope.run, Some("run-1".into()));
+        assert_eq!(envelope.worker, Some(WorkerIndex::FIRST));
         let in_batch = !record.event.kind().starts_with("worker_");
-        assert_eq!(envelope.batch, in_batch.then_some(0), "{record:?}");
+        assert_eq!(
+            envelope.batch,
+            in_batch.then_some(BatchIndex::from_u32(0)),
+            "{record:?}"
+        );
     }
     assert!(
         records
@@ -622,7 +644,7 @@ fn records_are_stamped_and_ordered() {
     assert_eq!((summary.requested, summary.finished), (3, 3));
     assert_eq!((summary.counts.passed, summary.counts.failed), (2, 1));
     assert_eq!(summary.batches.len(), 1);
-    assert_eq!(summary.batches[0].status, Some(1));
+    assert_eq!(summary.batches[0].status, Some(FrameworkStatus::new(1)));
     assert_eq!(summary.batches[0].end, BatchEnd::Done);
     assert!(!summary.internal_error && !summary.stopped_early && summary.crashes.is_empty());
     let Event::WorkerFinished { exit_status, error } = &records[13].event else {
@@ -655,8 +677,16 @@ fn batches_are_handed_out_as_workers_free_up() {
     assert_eq!(summary.batches.len(), 4);
     let slow = &summary.batches[0];
     assert_eq!(slow.cases, 1);
-    let others: Vec<_> = summary.batches[1..].iter().map(|b| b.worker).collect();
-    assert_eq!(others, [1 - slow.worker; 3], "{:?}", summary.batches);
+    let others: Vec<u32> = summary.batches[1..]
+        .iter()
+        .map(|b| b.worker.as_u32())
+        .collect();
+    assert_eq!(
+        others,
+        [1 - slow.worker.as_u32(); 3],
+        "{:?}",
+        summary.batches
+    );
 
     for result in results(&records) {
         if result.id.as_str().ends_with("test_env") {
@@ -775,11 +805,11 @@ fn maxfail_stops_every_worker() {
         summary
             .batches
             .iter()
-            .all(|b| b.id <= 1 && matches!(b.end, BatchEnd::Done | BatchEnd::Stopped)),
+            .all(|b| b.id.as_u32() <= 1 && matches!(b.end, BatchEnd::Done | BatchEnd::Stopped)),
         "{:#?}",
         summary.batches
     );
-    if let Some(slow) = summary.batches.iter().find(|b| b.id == 0) {
+    if let Some(slow) = summary.batches.iter().find(|b| b.id.as_u32() == 0) {
         assert_eq!(slow.end, BatchEnd::Stopped);
     }
     assert_eq!(
@@ -933,7 +963,11 @@ fn maxfail_interrupts_the_other_workers_which_tear_down() {
         outcomes(&records),
         [("a.py::test_await_fail", Outcome::Failed)]
     );
-    let ends: Vec<(u32, BatchEnd)> = summary.batches.iter().map(|b| (b.id, b.end)).collect();
+    let ends: Vec<(u32, BatchEnd)> = summary
+        .batches
+        .iter()
+        .map(|b| (b.id.as_u32(), b.end))
+        .collect();
     assert_eq!(ends, [(0, BatchEnd::Stopped), (1, BatchEnd::Done)]);
     assert!(!summary.internal_error);
     // Both lifetimes are closed in the log where the interrupted one tore
@@ -964,7 +998,11 @@ fn maxfail_kills_an_interrupted_worker_that_does_not_stop() {
         outcomes(&records),
         [("a.py::test_await_fail", Outcome::Failed)]
     );
-    let ends: Vec<(u32, BatchEnd)> = summary.batches.iter().map(|b| (b.id, b.end)).collect();
+    let ends: Vec<(u32, BatchEnd)> = summary
+        .batches
+        .iter()
+        .map(|b| (b.id.as_u32(), b.end))
+        .collect();
     assert_eq!(ends, [(0, BatchEnd::Stopped), (1, BatchEnd::Done)]);
 }
 
@@ -1008,7 +1046,7 @@ fn a_crash_fails_the_running_test_and_requeues_the_rest() {
     let ends: Vec<(u32, BatchEnd, u32)> = summary
         .batches
         .iter()
-        .map(|b| (b.id, b.end, b.cases))
+        .map(|b| (b.id.as_u32(), b.end, b.cases))
         .collect();
     assert_eq!(ends, [(0, BatchEnd::Crashed, 4), (1, BatchEnd::Done, 2)]);
 
@@ -1107,7 +1145,7 @@ fn an_adapter_that_raises_fails_its_batch_only() {
     let Event::Diagnostic(diagnostic) = &diagnostics[0].event else {
         unreachable!()
     };
-    assert_eq!(diagnostic.code, "batch-failed");
+    assert_eq!(diagnostic.code, DiagnosticCode::BatchFailed);
     assert_eq!(diagnostic.path, "x.py");
     assert!(
         diagnostic.message.contains("cannot load this batch"),
@@ -1138,7 +1176,7 @@ fn a_line_that_is_not_protocol_is_reported_and_the_run_goes_on() {
     let Event::Diagnostic(diagnostic) = &diagnostics[0].event else {
         unreachable!()
     };
-    assert_eq!(diagnostic.code, "protocol-error");
+    assert_eq!(diagnostic.code, DiagnosticCode::ProtocolError);
     assert!(
         diagnostic.message.contains("this is not json"),
         "{}",
@@ -1181,8 +1219,8 @@ fn refinement_round_trips() {
         .runner
         .refine(&RefineRequest {
             adapter: "fake".into(),
-            files: vec!["a.py".into(), "b.py".into()],
-            context: serde_json::Value::Null,
+            files: vec![path("a.py"), path("b.py")],
+            context: BatchContext::default(),
             digests_only: false,
         })
         .unwrap();
@@ -1194,8 +1232,8 @@ fn refinement_round_trips() {
         .runner
         .refine(&RefineRequest {
             adapter: "fake".into(),
-            files: vec!["a.py".into()],
-            context: "explode".into(),
+            files: vec![path("a.py")],
+            context: AdapterContext::from(serde_json::json!("explode")).into(),
             digests_only: false,
         })
         .unwrap_err();
@@ -1206,7 +1244,7 @@ fn refinement_round_trips() {
         .refine(&RefineRequest {
             adapter: "nope".into(),
             files: vec![],
-            context: serde_json::Value::Null,
+            context: BatchContext::default(),
             digests_only: false,
         })
         .unwrap_err();
@@ -1216,6 +1254,10 @@ fn refinement_round_trips() {
 /// Echoing goes to the process's own stdout or stderr, so this test runs
 /// itself in a child process and reads what it printed.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' own settings, not the environment aye reads"
+)]
 fn output_is_echoed_only_when_not_capturing() {
     let python = python_or_skip!();
     if env::var_os("AYE_ECHO_CHILD").is_some() {
@@ -1431,8 +1473,8 @@ fn a_thread_left_running_while_refining_does_not_hang_refinement() {
         .runner
         .refine(&RefineRequest {
             adapter: "fake".into(),
-            files: vec!["a.py".into()],
-            context: "thread".into(),
+            files: vec![path("a.py")],
+            context: AdapterContext::from(serde_json::json!("thread")).into(),
             digests_only: false,
         })
         .unwrap();
@@ -1585,7 +1627,7 @@ fn a_batch_the_framework_interrupts_stops_the_run() {
     );
     assert!(summary.interrupted && !summary.internal_error);
     assert_eq!(summary.stopped, Some(StopReason::Framework));
-    assert_eq!(summary.batches[0].status, Some(2));
+    assert_eq!(summary.batches[0].status, Some(FrameworkStatus::new(2)));
     assert_eq!(
         summary.not_run,
         [
@@ -1683,7 +1725,7 @@ fn an_exit_with_a_usage_error_status_is_an_interruption() {
     ]);
     assert!(summary.interrupted && !summary.internal_error);
     assert_eq!(summary.stopped, Some(StopReason::Framework));
-    assert_eq!(summary.batches[0].status, Some(4));
+    assert_eq!(summary.batches[0].status, Some(FrameworkStatus::new(4)));
     assert_eq!(
         summary.not_run,
         [
@@ -1693,7 +1735,9 @@ fn an_exit_with_a_usage_error_status_is_an_interruption() {
     );
     let stopped: Vec<&Record> = find(&records, "diagnostic");
     assert_eq!(stopped.len(), 1);
-    assert!(matches!(&stopped[0].event, Event::Diagnostic(d) if d.code == "batch-stopped"));
+    assert!(
+        matches!(&stopped[0].event, Event::Diagnostic(d) if d.code == DiagnosticCode::BatchStopped)
+    );
 }
 
 /// pytest's internal error mid-batch (status 3, with the adapter's
@@ -1708,7 +1752,7 @@ fn an_internal_error_that_stops_a_batch_stops_the_run_as_an_internal_error() {
     assert_eq!(summary.stopped, Some(StopReason::Framework));
     assert_eq!(
         batch_of(&summary, &records, "a.py::test_exit_session_3").status,
-        Some(3)
+        Some(FrameworkStatus::INTERNAL_ERROR)
     );
     assert!(
         outcomes(&records).contains(&(B_SLEEPS, Outcome::Passed)),
@@ -1754,7 +1798,10 @@ fn other_statuses_alone_do_not_stop_the_run() {
             "{status}"
         );
         assert_eq!(summary.internal_error, status == 3, "{status}");
-        assert_eq!(batch_of(&summary, &records, &first).status, Some(status));
+        assert_eq!(
+            batch_of(&summary, &records, &first).status,
+            Some(FrameworkStatus::new(status))
+        );
     }
 }
 
@@ -1775,7 +1822,7 @@ fn every_line_the_worker_writes_is_json_serde_reads() {
         })
         .collect();
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-    assert_eq!(diagnostics[0].code, "odd");
+    assert_eq!(diagnostics[0].code, DiagnosticCode::from("odd"));
     assert_eq!(diagnostics[0].path, "caf\u{fffd}.py");
     assert!(diagnostics[0].message.ends_with(&"0".repeat(400)));
     assert_eq!(
@@ -1901,7 +1948,7 @@ fn a_worker_runs_one_adapters_batches_only() {
         for result in results(&records) {
             let reason = result.reason.as_deref().unwrap();
             let (pid, executors) = reason.split_once(' ').unwrap();
-            let adapter = if ["a.py", "c.py", "e.py"].contains(&result.id.path()) {
+            let adapter = if ["a.py", "c.py", "e.py"].contains(&result.id.path().as_str()) {
                 "fake"
             } else {
                 "other"
@@ -1958,7 +2005,7 @@ fn one_worker_is_replaced_between_adapters() {
             "worker_finished"
         ]
     );
-    assert!(summary.batches.iter().all(|b| b.worker == 0));
+    assert!(summary.batches.iter().all(|b| b.worker.is_first()));
 }
 
 /// A test that replaces `os.getpid` or `json.dumps` and never puts it back
@@ -2060,12 +2107,12 @@ impl Fixture {
         calls
     }
 
-    fn refine_listing(&self, files: &[&str]) -> aye_engine::Refined {
+    fn refine_listing(&self, files: &[&str]) -> aye_protocol::Refined {
         self.runner
             .refine(&RefineRequest {
                 adapter: "listing".into(),
-                files: files.iter().map(|f| (*f).to_string()).collect(),
-                context: serde_json::Value::Null,
+                files: files.iter().map(|f| path(f)).collect(),
+                context: BatchContext::default(),
                 digests_only: false,
             })
             .unwrap()
@@ -2077,20 +2124,24 @@ fn listing(id: &str) -> Case {
     Case::new(id, "listing")
 }
 
-fn session(files: &[&str]) -> std::collections::BTreeMap<String, Vec<String>> {
+fn session(files: &[&str]) -> std::collections::BTreeMap<AdapterName, Vec<ProjectPath>> {
     [(
-        "listing".to_string(),
-        files.iter().map(|f| (*f).to_string()).collect(),
+        LISTING.adapter.clone(),
+        files.iter().map(|f| path(f)).collect(),
     )]
     .into_iter()
     .collect()
+}
+
+fn path(file: &str) -> ProjectPath {
+    ProjectPath::new(file).unwrap()
 }
 
 fn started_pids(records: &[Record]) -> HashMap<u32, u32> {
     records
         .iter()
         .filter_map(|r| match r.event {
-            Event::WorkerStarted { pid, .. } => Some((r.envelope.worker.unwrap(), pid)),
+            Event::WorkerStarted { pid, .. } => Some((r.envelope.worker.unwrap().as_u32(), pid)),
             _ => None,
         })
         .collect()
@@ -2200,12 +2251,12 @@ fn a_file_listed_otherwise_runs_on_the_first_lane_with_one_warning() {
             unreachable!()
         };
         if t.id.path() == "differs.py" {
-            assert_eq!(result.envelope.worker, Some(0), "{}", t.id);
+            assert_eq!(result.envelope.worker, Some(WorkerIndex::FIRST), "{}", t.id);
         }
     }
     let lanes: std::collections::HashSet<u32> = find(&records, "test_finished")
         .iter()
-        .filter_map(|r| r.envelope.worker)
+        .filter_map(|r| r.envelope.worker.map(u32::from))
         .collect();
     assert!(lanes.len() > 1, "z.py spreads across lanes: {lanes:?}");
     let warnings: Vec<&Record> = find(&records, "diagnostic");
@@ -2253,7 +2304,7 @@ fn free_cases_spread_across_lanes_and_affinity_groups_stay_whole() {
         find(&records, "test_finished")
             .iter()
             .filter(|r| matches!(&r.event, Event::TestFinished(t) if t.id.path() == path))
-            .filter_map(|r| r.envelope.batch)
+            .filter_map(|r| r.envelope.batch.map(u32::from))
             .collect()
     };
     assert!(batches_of("big.py").len() >= 4, "{:?}", summary.batches);
@@ -2261,7 +2312,7 @@ fn free_cases_spread_across_lanes_and_affinity_groups_stay_whole() {
     let lanes: std::collections::HashSet<u32> = find(&records, "test_finished")
         .iter()
         .filter(|r| matches!(&r.event, Event::TestFinished(t) if t.id.path() == "big.py"))
-        .filter_map(|r| r.envelope.worker)
+        .filter_map(|r| r.envelope.worker.map(u32::from))
         .collect();
     assert!(lanes.len() >= 2, "{lanes:?}");
 }
@@ -2484,7 +2535,8 @@ fn collecting_only_starts_no_worker_for_the_other_lanes() {
         root: root.clone(),
         cwd: root.clone(),
         workers: 3,
-        executors: vec![LISTING],
+        prelude: PRELUDE,
+        runtimes: vec![LISTING],
         env: vec![("FAKE_DIR".into(), root.into_os_string())],
         collect_only: true,
         ..RunnerOptions::default()

@@ -1,5 +1,7 @@
 use std::sync::atomic::AtomicU32;
 
+use aye_events::{BatchIndex, RunNumber};
+
 use super::*;
 
 fn selector(cwd: &Path, root: &Path, arg: &str) -> String {
@@ -226,7 +228,7 @@ fn the_run_store_keeps_every_record_of_the_stream() {
         BTreeMap::from([("teardown_error".to_owned(), 1)])
     );
     let kinds: Vec<&str> = store
-        .log(&meta.run)
+        .log(&meta.run.to_string())
         .unwrap()
         .iter()
         .map(|record| record.event.kind())
@@ -276,7 +278,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
                 root: dir.path().display().to_string(),
                 collect_only: false,
                 workers: 1,
-                run: Some(number),
+                run: RunNumber::new(number),
             },
             Event::TestStarted {
                 id: TestId::new("t.py::test_x"),
@@ -299,7 +301,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut writer = RunWriter::new(&runs, 10);
     let number = writer.claim();
-    assert_eq!(number, Some(1));
+    assert_eq!(number, RunNumber::new(1));
     let mut stream = Stream {
         reporters: Tee::new().with(Keeping(Arc::clone(&seen))),
         history: Some(Remember {
@@ -341,7 +343,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     };
     let x = Previous {
         outcomes: "pf".into(),
-        since: Some(2),
+        since: RunNumber::new(2),
     };
     let y = Previous {
         outcomes: "pp".into(),
@@ -359,7 +361,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     let log = store.log("r1").unwrap();
     assert_eq!(said(&log), expected);
     assert!(
-        matches!(log[0].event, Event::RunStarted { run: Some(1), .. }),
+        matches!(log[0].event, Event::RunStarted { run, .. } if run == RunNumber::new(1)),
         "{:?}",
         log[0]
     );
@@ -368,7 +370,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     let saved = History::load(&state);
     let kept = |name: &str| {
         let test = saved.stats(&TestId::new(name)).unwrap();
-        (test.recent.clone(), test.bad_since)
+        (test.recent.clone(), test.bad_since.map(RunNumber::get))
     };
     assert_eq!(kept("t.py::test_x"), ("pfe".into(), Some(2)));
     assert_eq!(kept("t.py::test_y"), ("ppe".into(), Some(1)));
@@ -402,65 +404,170 @@ fn diagnostic_codes_choose_the_exit_code() {
     let diagnostic = |severity, code: &str| Diagnostic {
         severity,
         code: code.into(),
-        path: String::new(),
+        path: DiagnosticPath::Nowhere,
         span: None,
         message: String::new(),
     };
+    let before = DiagnosticOrigin::BeforeBatches;
     let mut errors = Errors::default();
-    errors.see(&diagnostic(Severity::Warning, "usage-error"));
+    errors.see(&diagnostic(Severity::Warning, "usage-error"), before);
     assert!(!errors.any && !errors.usage);
-    errors.see(&diagnostic(Severity::Error, "collection-error"));
+    errors.see(&diagnostic(Severity::Error, "collection-error"), before);
     assert!(errors.any && !errors.usage && !errors.internal);
-    errors.see(&diagnostic(Severity::Error, "usage-error"));
+    errors.see(&diagnostic(Severity::Error, "usage-error"), before);
     assert!(errors.usage);
-    errors.see(&diagnostic(Severity::Error, "internal-error"));
+    errors.see(&diagnostic(Severity::Error, "internal-error"), before);
     assert!(errors.internal);
     let mut errors = Errors::default();
-    errors.see(&diagnostic(Severity::Error, "unclaimed"));
+    errors.see(&diagnostic(Severity::Error, "unclaimed"), before);
     assert!(errors.usage);
-    errors.see(&diagnostic(Severity::Error, "not-found"));
-    assert!(errors.not_found);
+    let mut errors = Errors::default();
+    errors.see(&diagnostic(Severity::Error, "not-found"), before);
+    assert!(errors.usage);
+    let mut errors = Errors::default();
+    errors.see(
+        &diagnostic(Severity::Error, "not-found"),
+        DiagnosticOrigin::Batch(BatchIndex::from_u32(0)),
+    );
+    assert!(errors.any && !errors.usage);
 }
 
-/// A recognizer that collects nothing and hands out `context`.
-struct Context(serde_json::Value);
+/// Every diagnostic code aye 0.0.1 knows, and one it doesn't, with what an
+/// error with it decides of the exit code, as 0.0.1 decides it, before any
+/// batch and from one: `usage` (4), `internal` (3), or `error`, which fails
+/// the run as the rest of it says (2, or 1). Collection's diagnostics come
+/// before any batch.
+const EXIT: [(&str, &str, &str); 26] = [
+    ("syntax-error", "error", "error"),
+    ("unreadable", "error", "error"),
+    ("not-found", "usage", "error"),
+    ("unclaimed", "usage", "usage"),
+    ("duplicate-id", "error", "error"),
+    ("no-tests", "error", "error"),
+    ("not-refined", "error", "error"),
+    ("refine-failed", "error", "error"),
+    ("class-has-init", "error", "error"),
+    ("duplicate-definition", "error", "error"),
+    ("collection-error", "error", "error"),
+    ("usage-error", "usage", "usage"),
+    ("unknown-option", "error", "error"),
+    ("plugin-not-loaded", "error", "error"),
+    ("internal-error", "internal", "internal"),
+    ("skipped", "error", "error"),
+    ("ignored", "error", "error"),
+    ("batch-stopped", "error", "error"),
+    ("session-failed", "error", "error"),
+    ("protocol-error", "error", "error"),
+    ("batch-failed", "error", "error"),
+    ("no-executor", "error", "error"),
+    ("listing-differs", "error", "error"),
+    ("stand-in", "error", "error"),
+    ("adapter-error", "error", "error"),
+    ("some-other-code", "error", "error"),
+];
 
-impl aye_engine::Recognizer for Context {
-    fn roots(&self, _: &Project<'_>) -> Vec<PathBuf> {
-        Vec::new()
-    }
-
-    fn descend(&self, _: &Path) -> bool {
-        false
-    }
-
-    fn claim(&self, _: &str, _: bool) -> aye_engine::Claim {
-        aye_engine::Claim::Ignore
-    }
-
-    fn recognize(
-        &self,
-        _: &aye_engine::SourceFile<'_>,
-        _: &[aye_engine::SourceFile<'_>],
-    ) -> aye_engine::Recognition {
-        aye_engine::Recognition::default()
-    }
-
-    fn context(&self) -> serde_json::Value {
-        self.0.clone()
+/// An error diagnostic with each code decides the exit code as in 0.0.1:
+/// collection's (before any batch, where a `not-found` names what the
+/// command line asked for) as `run` decides on them before the run, and
+/// a batch's as `run_exit_code` does after it.
+#[test]
+fn every_code_decides_the_exit_code_as_before() {
+    let known: Vec<&str> = EXIT[..25].iter().map(|(code, ..)| *code).collect();
+    let all: Vec<&str> = DiagnosticCode::ALL
+        .iter()
+        .map(DiagnosticCode::as_str)
+        .collect();
+    assert_eq!(known, all);
+    let decides = |code: &str, origin| {
+        let mut errors = Errors::default();
+        let diagnostic = Diagnostic {
+            severity: Severity::Error,
+            code: code.into(),
+            path: DiagnosticPath::Nowhere,
+            span: None,
+            message: String::new(),
+        };
+        errors.see(&diagnostic, origin);
+        assert!(errors.any, "{code}");
+        if errors.internal {
+            "internal"
+        } else if errors.usage {
+            "usage"
+        } else {
+            "error"
+        }
+    };
+    for (code, before, from_batch) in EXIT {
+        assert_eq!(
+            (
+                decides(code, DiagnosticOrigin::BeforeBatches),
+                decides(code, DiagnosticOrigin::Batch(BatchIndex::from_u32(0)))
+            ),
+            (before, from_batch),
+            "{code}"
+        );
     }
 }
 
-/// Adapters with these contexts, named `pytest`, `doctest` and `unittest`
-/// in turn.
-fn prepared(contexts: &[serde_json::Value]) -> Vec<Prepared> {
+/// What aye 0.0.1's binary read from an adapter's context, each key as it
+/// read it: its text (a worker count it couldn't read was one), a limit
+/// above 0, the strings of `deselect`, and `junit_log_passing_tests` as a
+/// bool, or as text pytest's `_strtobool` reads, but for spaces. The
+/// adapters' contexts still carry these keys; their [`FrameworkDefaults`]
+/// must say the same.
+fn hints(context: &serde_json::Value) -> FrameworkDefaults {
+    let text = |key: &str| {
+        context
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    FrameworkDefaults {
+        workers: text("xdist_workers").map(|n| n.parse().unwrap_or(WorkerCount::Count(1))),
+        maxfail: context
+            .get("maxfail")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .and_then(MaxFail::new),
+        keyword: text("keyword"),
+        tags: text("tags"),
+        deselect: context
+            .get("deselect")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(aye_events::IdPrefix::from)
+            .collect(),
+        junit: aye_adapter::JunitDefaults {
+            path: text("junitxml").map(PathBuf::from),
+            prefix: text("junit_prefix"),
+            suite_name: text("junit_suite_name"),
+            logging: text("junit_logging"),
+            log_passing_tests: match context.get("junit_log_passing_tests") {
+                Some(serde_json::Value::Bool(value)) => Some(*value),
+                Some(serde_json::Value::String(value)) => {
+                    match value.to_ascii_lowercase().as_str() {
+                        "y" | "yes" | "t" | "true" | "on" | "1" => Some(true),
+                        "n" | "no" | "f" | "false" | "off" | "0" => Some(false),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            },
+            duration_report: text("junit_duration_report"),
+            family: text("junit_family"),
+        },
+    }
+}
+
+/// Adapters whose frameworks say what these contexts' keys say ([`hints`]),
+/// named `pytest`, `doctest` and `unittest` in turn.
+fn from_contexts(contexts: &[serde_json::Value]) -> Vec<(AdapterName, FrameworkDefaults)> {
     contexts
         .iter()
         .zip(["pytest", "doctest", "unittest"])
-        .map(|(context, name)| {
-            let recognizer: Box<dyn aye_engine::Recognizer> = Box::new(Context(context.clone()));
-            (name, recognizer)
-        })
+        .map(|(context, name)| (name.into(), hints(context)))
         .collect()
 }
 
@@ -481,7 +588,7 @@ fn expressions_for(
     argv: &[&str],
     contexts: &[serde_json::Value],
 ) -> (Option<String>, Option<String>) {
-    let selection = selection(&args(argv), [], &prepared(contexts)).unwrap();
+    let selection = selection(&args(argv), [], &from_contexts(contexts)).unwrap();
     let text = |e: Option<&aye_select::Expression>| e.map(|e| e.as_str().to_string());
     (
         text(
@@ -581,7 +688,7 @@ fn only_the_command_lines_malformed_expressions_are_usage_errors() {
         &["-k", "not (", "--", "-k", "x"],
     ] {
         assert!(
-            selection(&args(argv), [], &prepared(&[])).is_err(),
+            selection(&args(argv), [], &from_contexts(&[])).is_err(),
             "{argv:?}"
         );
     }
@@ -590,14 +697,16 @@ fn only_the_command_lines_malformed_expressions_are_usage_errors() {
 #[test]
 fn the_junit_report_can_come_from_the_framework() {
     let cwd = Path::new("/work/sub");
-    let context = |path: &str| prepared(&[serde_json::json!({ "junitxml": path })]);
+    let no_env = ProcessEnv::new();
+    let context = |path: &str| from_contexts(&[serde_json::json!({ "junitxml": path })]);
     assert_eq!(
-        junit_path(cwd, None, &context("reports/out.xml")),
+        junit_path(&no_env, cwd, None, &context("reports/out.xml")),
         Some(PathBuf::from("/work/sub/reports/out.xml"))
     );
     // The command line's wins.
     assert_eq!(
         junit_path(
+            &no_env,
             cwd,
             Some(Path::new("mine.xml")),
             &context("reports/out.xml")
@@ -605,48 +714,49 @@ fn the_junit_report_can_come_from_the_framework() {
         Some(PathBuf::from("/work/sub/mine.xml"))
     );
     assert_eq!(
-        junit_path(cwd, None, &context("/abs/out.xml")),
+        junit_path(&no_env, cwd, None, &context("/abs/out.xml")),
         Some(PathBuf::from("/abs/out.xml"))
     );
     // pytest writes no report for an empty path.
-    assert_eq!(junit_path(cwd, None, &context("")), None);
+    assert_eq!(junit_path(&no_env, cwd, None, &context("")), None);
     assert_eq!(
-        junit_path(cwd, None, &prepared(&[serde_json::Value::Null])),
+        junit_path(
+            &no_env,
+            cwd,
+            None,
+            &from_contexts(&[serde_json::Value::Null])
+        ),
         None
     );
-    assert_eq!(junit_path(cwd, None, &[]), None);
-    // The command line's is read as pytest reads it; the framework's is
-    // the path the adapter worked out.
-    if let Some(home) = home() {
-        assert_eq!(
-            junit_path(cwd, Some(Path::new("~/r.xml")), &[]),
-            Some(Path::new(&home).join("r.xml"))
-        );
-    }
+    assert_eq!(junit_path(&no_env, cwd, None, &[]), None);
+    // The command line's is read as pytest reads it, over the environment
+    // aye started in; the framework's is the path the adapter worked out.
+    let home = ProcessEnv::from_vars([("HOME", "/home/me")]);
     assert_eq!(
-        junit_path(cwd, Some(Path::new("")), &context("x.xml")),
+        junit_path(&home, cwd, Some(Path::new("~/r.xml")), &[]),
+        Some(PathBuf::from("/home/me/r.xml"))
+    );
+    assert_eq!(
+        junit_path(&home, cwd, Some(Path::new("$HOME/${AYE_UNSET}.xml")), &[]),
+        Some(PathBuf::from("/home/me/${AYE_UNSET}.xml"))
+    );
+    assert_eq!(
+        junit_path(&no_env, cwd, Some(Path::new("")), &context("x.xml")),
         None
     );
     assert_eq!(
-        junit_path(cwd, None, &context("$HOME/r.xml")),
+        junit_path(&no_env, cwd, None, &context("$HOME/r.xml")),
         Some(PathBuf::from("/work/sub/$HOME/r.xml"))
     );
     // pytest's `--junitprefix` comes with it.
     assert_eq!(
-        junit_prefix(&prepared(&[
+        junit_prefix(&from_contexts(&[
             serde_json::Value::Null,
             serde_json::json!({ "junit_prefix": "ci" })
         ])),
         "ci"
     );
     assert_eq!(junit_prefix(&context("x.xml")), "");
-}
-
-/// The home directory `~` stands for, as [`aye_fs::expand_path`] finds it.
-fn home() -> Option<String> {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .ok()
 }
 
 #[cfg(unix)]
@@ -691,7 +801,7 @@ fn the_output_is_the_command_lines_else_the_configurations_else_text() {
             output: output.map(str::to_string),
             ..Default::default()
         },
-        origin: aye_config::Origin::Default,
+        source: aye_config::ValueSource::Default,
     };
     assert_eq!(output(&args(&[]), &config(None)), (Output::Text, "default"));
     assert_eq!(
@@ -821,7 +931,7 @@ fn a_framework_that_failed_a_clean_batch_fails_the_run() {
 fn the_junit_report_follows_the_frameworks_settings() {
     assert_eq!(junit_options(&[]), JunitOptions::default());
     assert_eq!(
-        junit_options(&prepared(&[serde_json::json!({ "rootdir": "/repo" })])),
+        junit_options(&from_contexts(&[serde_json::json!({ "rootdir": "/repo" })])),
         JunitOptions::default()
     );
     let pytest = serde_json::json!({
@@ -832,7 +942,7 @@ fn the_junit_report_follows_the_frameworks_settings() {
         "junit_family": "legacy",
     });
     assert_eq!(
-        junit_options(&prepared(&[serde_json::json!({}), pytest])),
+        junit_options(&from_contexts(&[serde_json::json!({}), pytest])),
         JunitOptions {
             suite_name: "mysuite".into(),
             logging: JunitLogging::OutErr,
@@ -850,7 +960,7 @@ fn the_junit_report_follows_the_frameworks_settings() {
         "junit_family": "xunit2",
     });
     assert_eq!(
-        junit_options(&prepared(&[defaults])),
+        junit_options(&from_contexts(&[defaults])),
         JunitOptions {
             suite_name: "pytest".into(),
             logging: JunitLogging::No,
@@ -869,11 +979,104 @@ fn the_junit_report_follows_the_frameworks_settings() {
     ] {
         let context = serde_json::json!({ "junit_log_passing_tests": value });
         assert_eq!(
-            junit_options(&prepared(&[context])).log_passing_tests,
+            junit_options(&from_contexts(&[context])).log_passing_tests,
             expected,
             "{value}"
         );
     }
+}
+
+/// Each adapter's [`FrameworkDefaults`] say what its context's keys say, as
+/// aye 0.0.1's binary read them ([`hints`]): with pytest's options and ini
+/// setting every one, a `-n` aye can't read, `-n logical`, `--maxfail=0`,
+/// and `junit_log_passing_tests` as text pytest reads and doesn't.
+#[test]
+fn the_adapters_defaults_are_what_their_contexts_say() {
+    let names = [
+        aye_adapter_pytest::NAME,
+        aye_adapter_doctest::NAME,
+        aye_adapter_unittest::NAME,
+    ];
+    let adapters: [Box<dyn Adapter>; 3] = [
+        Box::new(aye_adapter_pytest::Pytest::default()),
+        Box::new(aye_adapter_doctest::Doctest),
+        Box::new(aye_adapter_unittest::Unittest),
+    ];
+    let projects: [(&str, &str); 6] = [
+        ("pyproject.toml", "[project]\nname = \"x\"\n"),
+        (
+            "pytest.ini",
+            "[pytest]\naddopts = -n 3 --maxfail=2 --junitxml=out.xml --junitprefix=ci \
+             -k \"not slow\" -m db --deselect t.py::x --doctest-modules\n\
+             junit_family = xunit1\njunit_log_passing_tests = no\njunit_suite_name = s\n\
+             junit_logging = all\njunit_duration_report = call\n",
+        ),
+        (
+            "pytest.ini",
+            "[pytest]\naddopts = -n many -x --doctest-modules\n",
+        ),
+        (
+            "pytest.ini",
+            "[pytest]\naddopts = -n logical --maxfail=0 --doctest-modules\n\
+             junit_log_passing_tests = maybe\n",
+        ),
+        (
+            "pyproject.toml",
+            "[tool.pytest.ini_options]\naddopts = \"-n auto --doctest-modules\"\n\
+             junit_log_passing_tests = \" false\"\n",
+        ),
+        (
+            "pyproject.toml",
+            "[tool.pytest.ini_options]\naddopts = \"--doctest-modules\"\n\
+             junit_log_passing_tests = false\n",
+        ),
+    ];
+    let mut seen = Vec::new();
+    for (at, (name, body)) in projects.into_iter().enumerate() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join(name), body).unwrap();
+        let project = Project::new(root, root);
+        for adapter in &adapters {
+            let Some(recognizer) = adapter.prepare_among(&project, &names).unwrap() else {
+                continue;
+            };
+            let defaults = recognizer.defaults();
+            assert_eq!(
+                defaults,
+                hints(recognizer.context().as_value()),
+                "{} with {body}",
+                adapter.name()
+            );
+            seen.push((at, adapter.name(), defaults));
+        }
+    }
+    let of = |name: AdapterName, at: usize| {
+        &seen
+            .iter()
+            .find(|(seen_at, seen_name, _)| *seen_at == at && *seen_name == name)
+            .unwrap()
+            .2
+    };
+    let pytest = |at: usize| of(aye_adapter_pytest::NAME, at);
+    assert_eq!(pytest(1).workers, Some(WorkerCount::Count(3)));
+    assert_eq!(pytest(1).maxfail, MaxFail::new(2));
+    assert_eq!(pytest(1).keyword.as_deref(), Some("not slow"));
+    assert_eq!(pytest(1).junit.log_passing_tests, Some(false));
+    assert_eq!(pytest(2).workers, Some(WorkerCount::Count(1)));
+    assert_eq!(pytest(3).workers, Some(WorkerCount::Auto));
+    assert_eq!(pytest(3).maxfail, None);
+    let doctest = |at: usize| of(aye_adapter_doctest::NAME, at);
+    assert_eq!(doctest(1).deselect, [aye_events::IdPrefix::from("t.py::x")]);
+    assert_eq!(doctest(1).junit.log_passing_tests, Some(false));
+    assert_eq!(doctest(1).junit.family.as_deref(), Some("xunit1"));
+    assert_eq!(doctest(2).maxfail, MaxFail::new(1));
+    assert_eq!(doctest(3).junit.log_passing_tests, None);
+    assert_eq!(doctest(4).junit.log_passing_tests, None);
+    assert_eq!(
+        *of(aye_adapter_unittest::NAME, 0),
+        FrameworkDefaults::default()
+    );
 }
 
 /// C26: a rerun repeats aye's own options that shape the run, as given:
@@ -897,16 +1100,6 @@ fn reruns_repeat_ayes_options_that_shape_the_run() {
         ])),
         ["-c", "../cfg/alt.ini"]
     );
-    let context = with_rerun_args(
-        serde_json::json!({ "rootdir": "/repo" }),
-        &["-c".into(), "alt.ini".into()],
-    );
-    assert_eq!(
-        context,
-        serde_json::json!({ "rootdir": "/repo", "rerun_args": ["-c", "alt.ini"] })
-    );
-    let context = serde_json::json!({ "rootdir": "/repo" });
-    assert_eq!(with_rerun_args(context.clone(), &[]), context);
 }
 
 /// `--native`, the prototype's switch, does nothing now that aye's engine
@@ -922,7 +1115,7 @@ fn reruns_leave_native_out() {
 
 #[test]
 fn maxfail_after_the_double_dash_wins_over_the_command_lines() {
-    let none = prepared(&[serde_json::json!({ "maxfail": null })]);
+    let none = from_contexts(&[serde_json::json!({ "maxfail": null })]);
     // As pytest's `--maxfail 3 -x` and `-x --maxfail 3`: the arguments
     // after `--` come last.
     assert_eq!(
@@ -936,7 +1129,7 @@ fn maxfail_after_the_double_dash_wins_over_the_command_lines() {
     assert_eq!(maxfail(&args(&["-x", "--", "--maxfail=0"]), &none), None);
     assert_eq!(maxfail(&args(&["-x", "--", "-v"]), &none), Some(1));
     // Without either, the framework's own (pytest's addopts).
-    let addopts = prepared(&[serde_json::json!({ "maxfail": 2 })]);
+    let addopts = from_contexts(&[serde_json::json!({ "maxfail": 2 })]);
     assert_eq!(maxfail(&args(&[]), &addopts), Some(2));
     assert_eq!(maxfail(&args(&["--maxfail", "5"]), &addopts), Some(5));
     assert_eq!(maxfail(&args(&["--maxfail", "0"]), &addopts), None);
@@ -962,24 +1155,9 @@ fn ids_with_parameters_on_the_command_line_go_to_the_adapters() {
     assert_eq!(
         requested,
         [
-            "tests/test_p.py::test_dyn[9]",
-            "tests/test_p.py::TestK::test_m[a-b]"
+            TestId::new("tests/test_p.py::test_dyn[9]"),
+            TestId::new("tests/test_p.py::TestK::test_m[a-b]")
         ]
-    );
-    let context = with_requested(serde_json::json!({ "rootdir": "/repo" }), &requested);
-    assert_eq!(
-        context,
-        serde_json::json!({
-            "rootdir": "/repo",
-            "requested_ids": ["tests/test_p.py::test_dyn[9]", "tests/test_p.py::TestK::test_m[a-b]"],
-        })
-    );
-    // Nothing to add: the context is the adapter's.
-    let context = serde_json::json!({ "rootdir": "/repo" });
-    assert_eq!(with_requested(context.clone(), &[]), context);
-    assert_eq!(
-        with_requested(serde_json::Value::Null, &requested),
-        serde_json::Value::Null
     );
 }
 
@@ -1000,18 +1178,19 @@ fn reruns_name_the_test_from_where_aye_runs() {
         rerun_args: &[],
     };
     assert_eq!(
-        here.local_id("tests/test_a.py::test_x[1]").as_deref(),
+        here.local_id(&TestId::new("tests/test_a.py::test_x[1]"))
+            .as_deref(),
         Some("test_a.py::test_x[1]")
     );
     // No other file of that name here: the id reruns as it is.
-    assert_eq!(here.local_id("tests/test_b.py::test_x"), None);
+    assert_eq!(here.local_id(&TestId::new("tests/test_b.py::test_x")), None);
     assert_eq!(
         Here {
             cwd: root,
             root,
             rerun_args: &[],
         }
-        .local_id("tests/test_a.py::test_x"),
+        .local_id(&TestId::new("tests/test_a.py::test_x")),
         None
     );
 
@@ -1200,14 +1379,14 @@ fn unreadable_framework_args_leave_every_adapter_the_command_lines() {
 fn a_file_two_adapters_load_in_one_module_is_one_collection_error() {
     let batch = |batch: u32, event: Event| {
         let mut record = Record::new(event);
-        record.envelope.batch = Some(batch);
+        record.envelope.batch = Some(BatchIndex::from_u32(batch));
         record
     };
-    let started = |id: u32, adapter: &str| {
+    let started = |id: u32, adapter: &'static str| {
         batch(
             id,
             Event::BatchStarted {
-                adapter: adapter.to_string(),
+                adapter: adapter.into(),
                 cases: 1,
             },
         )
@@ -1217,8 +1396,8 @@ fn a_file_two_adapters_load_in_one_module_is_one_collection_error() {
             id,
             Event::Diagnostic(Diagnostic {
                 severity: Severity::Error,
-                code: codes::COLLECTION_ERROR.to_string(),
-                path: path.to_string(),
+                code: DiagnosticCode::CollectionError,
+                path: path.into(),
                 span: None,
                 message: format!("cannot import {path}"),
             }),
@@ -1276,31 +1455,31 @@ fn a_file_two_adapters_load_in_one_module_is_one_collection_error() {
 fn a_collection_error_from_refinement_counts_as_the_pytest_adapters() {
     let error = |path: &str| Diagnostic {
         severity: Severity::Error,
-        code: codes::COLLECTION_ERROR.to_string(),
-        path: path.to_string(),
+        code: DiagnosticCode::CollectionError,
+        path: path.into(),
         span: None,
         message: format!("cannot import {path}"),
     };
     let mut once = OneModuleErrors::default();
-    once.refined("pytest", &error("test_imp.py"));
+    once.refined(&aye_adapter_pytest::NAME, &error("test_imp.py"));
     // A conftest's, or anything but an error, is another matter.
-    once.refined("pytest", &error("conftest.py"));
+    once.refined(&aye_adapter_pytest::NAME, &error("conftest.py"));
     once.refined(
-        "pytest",
+        &aye_adapter_pytest::NAME,
         &Diagnostic {
             severity: Severity::Warning,
             ..error("test_warn.py")
         },
     );
     let mut started = Record::new(Event::BatchStarted {
-        adapter: "unittest".to_string(),
+        adapter: "unittest".into(),
         cases: 1,
     });
-    started.envelope.batch = Some(3);
+    started.envelope.batch = Some(BatchIndex::from_u32(3));
     once.see(&mut started);
     let severity = |path: &str, once: &mut OneModuleErrors| {
         let mut record = Record::new(Event::Diagnostic(error(path)));
-        record.envelope.batch = Some(3);
+        record.envelope.batch = Some(BatchIndex::from_u32(3));
         once.see(&mut record);
         match record.event {
             Event::Diagnostic(d) => (d.severity, d.message),
@@ -1347,15 +1526,15 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
     .iter()
     .map(|id| Case::new(*id, "pytest"))
     .collect();
-    let diagnostic = |severity, code: &str, path: &str| Diagnostic {
+    let diagnostic = |severity, code: DiagnosticCode, path: &str| Diagnostic {
         severity,
-        code: code.to_string(),
-        path: path.to_string(),
+        code,
+        path: path.into(),
         span: None,
         message: "m".to_string(),
     };
-    let skipped = |path: &str| diagnostic(Severity::Info, codes::SKIPPED, path);
-    let usage = |path: &str| diagnostic(Severity::Error, codes::USAGE_ERROR, path);
+    let skipped = |path: &str| diagnostic(Severity::Info, DiagnosticCode::Skipped, path);
+    let usage = |path: &str| diagnostic(Severity::Error, DiagnosticCode::UsageError, path);
 
     // No argument, or only paths: collection walked only what the run
     // reaches, and everything is the run's.
@@ -1384,11 +1563,11 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
     assert!(reach.keeps(root, &usage("")));
     let error = diagnostic(
         Severity::Error,
-        codes::COLLECTION_ERROR,
+        DiagnosticCode::CollectionError,
         "testing/test_g.py",
     );
     assert!(reach.keeps(root, &error));
-    let info = diagnostic(Severity::Info, "no-tests", "testing/test_g.py");
+    let info = diagnostic(Severity::Info, DiagnosticCode::NoTests, "testing/test_g.py");
     assert!(reach.keeps(root, &info));
     // When an argument named nothing, an error elsewhere may be why.
     let lost = Reach {
@@ -1405,7 +1584,7 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
 
     // Paths beside them: what a path holds is reached, in the order of the
     // arguments; a key resolves like a dotted name.
-    let key = cases[3].id.key().0;
+    let key = cases[3].id.key().to_string();
     let reach = Reach::of(
         &positionals(&["tests", &key, "tests.test_a", "testing/test_g.py::test_g"]),
         root,
@@ -1431,14 +1610,6 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
     assert!(reach.keeps(root, &usage("tests/sub/conftest.py")));
     assert!(reach.keeps(root, &usage("other/conftest.py")));
     assert!(reach.keeps(root, &usage("testing/conftest.py")));
-
-    // The adapters get them as absolute paths, when there are some.
-    let context = with_selected_paths(serde_json::json!({"roots": ["/x"]}), &reach.selected);
-    let tests = root.join("tests").to_string_lossy().into_owned();
-    assert_eq!(context["selected_paths"][0], serde_json::json!(tests));
-    assert_eq!(context["roots"], serde_json::json!(["/x"]));
-    let context = serde_json::json!({"roots": ["/x"]});
-    assert_eq!(with_selected_paths(context.clone(), &[]), context);
 }
 
 /// Recheck regression 3: one conftest that fails at start-up was two usage
@@ -1446,20 +1617,24 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
 /// worded apart. It is one error, whatever the words.
 #[test]
 fn a_conftest_two_adapters_fail_to_load_is_one_error() {
-    let diagnostic = |code: &str, path: &str, message: &str| Diagnostic {
+    let diagnostic = |code: DiagnosticCode, path: &str, message: &str| Diagnostic {
         severity: Severity::Error,
-        code: code.to_string(),
-        path: path.to_string(),
+        code,
+        path: path.into(),
         span: None,
         message: message.to_string(),
     };
     let mut once = OneConftestError::default();
     // In refinement, each adapter reports it once.
-    let mut first = diagnostic(codes::USAGE_ERROR, "tests/conftest.py", "Skipped while …");
+    let mut first = diagnostic(
+        DiagnosticCode::UsageError,
+        "tests/conftest.py",
+        "Skipped while …",
+    );
     once.see(None, &mut first);
     assert_eq!(first.severity, Severity::Error);
     let mut again = diagnostic(
-        codes::USAGE_ERROR,
+        DiagnosticCode::UsageError,
         "tests/conftest.py",
         "ImportError while …",
     );
@@ -1473,14 +1648,14 @@ fn a_conftest_two_adapters_fail_to_load_is_one_error() {
     // Another code, another file, or a file that isn't a conftest, is
     // another error.
     for (code, path) in [
-        (codes::COLLECTION_ERROR, "tests/conftest.py"),
-        (codes::USAGE_ERROR, "other/conftest.py"),
-        (codes::COLLECTION_ERROR, "tests/test_imp.py"),
-        (codes::COLLECTION_ERROR, "tests/test_imp.py"),
-        (codes::USAGE_ERROR, ""),
-        (codes::USAGE_ERROR, ""),
+        (DiagnosticCode::CollectionError, "tests/conftest.py"),
+        (DiagnosticCode::UsageError, "other/conftest.py"),
+        (DiagnosticCode::CollectionError, "tests/test_imp.py"),
+        (DiagnosticCode::CollectionError, "tests/test_imp.py"),
+        (DiagnosticCode::UsageError, ""),
+        (DiagnosticCode::UsageError, ""),
     ] {
-        let mut other = diagnostic(code, path, "x");
+        let mut other = diagnostic(code.clone(), path, "x");
         once.see(None, &mut other);
         assert_eq!(other.severity, Severity::Error, "{code} {path}");
     }
@@ -1489,7 +1664,7 @@ fn a_conftest_two_adapters_fail_to_load_is_one_error() {
     // another adapter's is an info.
     let batch = |batch: u32, event: Event| {
         let mut record = Record::new(event);
-        record.envelope.batch = Some(batch);
+        record.envelope.batch = Some(BatchIndex::from_u32(batch));
         record
     };
     let mut once = OneConftestError::default();
@@ -1497,7 +1672,7 @@ fn a_conftest_two_adapters_fail_to_load_is_one_error() {
         once.see_record(&mut batch(
             id,
             Event::BatchStarted {
-                adapter: adapter.to_string(),
+                adapter: adapter.into(),
                 cases: 1,
             },
         ));
@@ -1506,7 +1681,7 @@ fn a_conftest_two_adapters_fail_to_load_is_one_error() {
         let mut record = batch(
             id,
             Event::Diagnostic(diagnostic(
-                codes::COLLECTION_ERROR,
+                DiagnosticCode::CollectionError,
                 "sub/conftest.py",
                 message,
             )),
@@ -1566,30 +1741,45 @@ fn a_dotted_name_reaches_the_skips_of_what_it_names() {
 /// error, where pytest reports the error alone).
 #[test]
 fn a_file_below_a_broken_conftest_gets_no_no_tests_note() {
-    let diagnostic = |severity: Severity, code: &str, path: &str| Diagnostic {
+    let diagnostic = |severity: Severity, code: DiagnosticCode, path: &str| Diagnostic {
         severity,
-        code: code.to_string(),
-        path: path.to_string(),
+        code,
+        path: path.into(),
         span: None,
         message: String::new(),
     };
-    let no_tests = aye_collect::codes::NO_TESTS;
     let collected = [
-        diagnostic(Severity::Error, codes::USAGE_ERROR, "tests/conftest.py"),
         diagnostic(
             Severity::Error,
-            codes::COLLECTION_ERROR,
+            DiagnosticCode::UsageError,
+            "tests/conftest.py",
+        ),
+        diagnostic(
+            Severity::Error,
+            DiagnosticCode::CollectionError,
             "sub/deep/conftest.py",
         ),
         // Not a conftest's: no directory is explained by it.
-        diagnostic(Severity::Error, codes::COLLECTION_ERROR, "other/test_x.py"),
+        diagnostic(
+            Severity::Error,
+            DiagnosticCode::CollectionError,
+            "other/test_x.py",
+        ),
         // A conftest's info explains nothing either.
-        diagnostic(Severity::Info, codes::USAGE_ERROR, "more/conftest.py"),
+        diagnostic(
+            Severity::Info,
+            DiagnosticCode::UsageError,
+            "more/conftest.py",
+        ),
     ];
     let broken = broken_conftest_dirs(&collected);
     assert_eq!(broken, ["tests/", "sub/deep/"]);
-    let explained =
-        |path: &str| explained_by_a_conftest(&broken, &diagnostic(Severity::Info, no_tests, path));
+    let explained = |path: &str| {
+        explained_by_a_conftest(
+            &broken,
+            &diagnostic(Severity::Info, DiagnosticCode::NoTests, path),
+        )
+    };
     assert!(explained("tests/test_t.py"));
     assert!(explained("tests/pkg/test_p.py"));
     assert!(explained("sub/deep/test_d.py"));
@@ -1600,18 +1790,22 @@ fn a_file_below_a_broken_conftest_gets_no_no_tests_note() {
     // Only the `no-tests` info.
     assert!(!explained_by_a_conftest(
         &broken,
-        &diagnostic(Severity::Error, codes::COLLECTION_ERROR, "tests/test_t.py")
+        &diagnostic(
+            Severity::Error,
+            DiagnosticCode::CollectionError,
+            "tests/test_t.py"
+        )
     ));
     // A root conftest's failure explains every file.
     let root = [diagnostic(
         Severity::Error,
-        codes::USAGE_ERROR,
+        DiagnosticCode::UsageError,
         "conftest.py",
     )];
     let broken = broken_conftest_dirs(&root);
     assert!(explained_by_a_conftest(
         &broken,
-        &diagnostic(Severity::Info, no_tests, "test_top.py")
+        &diagnostic(Severity::Info, DiagnosticCode::NoTests, "test_top.py")
     ));
 }
 

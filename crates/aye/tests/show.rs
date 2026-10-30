@@ -20,6 +20,10 @@ use aye_render::Keys;
 use serde_json::Value;
 
 #[expect(clippy::print_stderr, reason = "a test says why it skips")]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' own settings, not the environment aye reads"
+)]
 fn python() -> Option<PathBuf> {
     let candidate = std::env::var_os("AYE_TEST_PYTHON").map_or_else(
         || {
@@ -209,7 +213,7 @@ fn suite() -> tempfile::TempDir {
 
 /// The full FNV-1a 64 key of a test id, 16 hex digits.
 fn full_key(id: &str) -> String {
-    aye_events::TestKey::of(id).0
+    aye_events::TestKey::of(id).to_string()
 }
 
 fn last(dir: &Path) -> String {

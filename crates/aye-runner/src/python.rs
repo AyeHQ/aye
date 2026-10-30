@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use aye_static::EnvVars;
+use aye_static::{EnvVars, ProcessEnv};
 
 /// Where the interpreter came from, for diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,15 +48,17 @@ impl fmt::Display for PythonSource {
 /// An explicit choice (the first three) is returned even when it doesn't
 /// exist, so that starting it fails with its name. A bare name (`python3.12`)
 /// is looked up on `PATH`; any other relative path is relative to `cwd`, or
-/// to `root` when it comes from the config.
+/// to `root` when it comes from the config. The variables are `vars`'s,
+/// the environment aye started in.
 pub fn find_python(
     flag: Option<&Path>,
     config: Option<&str>,
     root: &Path,
     cwd: &Path,
+    vars: &ProcessEnv,
 ) -> Option<(PathBuf, PythonSource)> {
     let system = System {
-        var: &|name| env::var_os(name),
+        var: &|name| vars.get_os(name).map(ToOwned::to_owned),
         exe: env::current_exe().ok(),
     };
     find(&system, flag, config, root, cwd)

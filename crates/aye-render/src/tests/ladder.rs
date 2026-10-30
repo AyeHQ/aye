@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use aye_events::{Event, Record};
+use aye_events::{Event, Record, RunNumber};
 
 use super::{feed, lines, streams};
 use crate::{ColorChoice, JsonLines, Keys, ShowContext, ShowMode, Text, TextOptions};
@@ -351,7 +351,7 @@ fn shown(id: &str) -> Vec<Record> {
 
 fn context() -> ShowContext {
     ShowContext {
-        run: Some(81),
+        run: RunNumber::new(81),
         ago: Some("2 min ago".into()),
         stale: BTreeMap::new(),
     }

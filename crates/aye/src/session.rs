@@ -10,68 +10,28 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
+use aye_adapter::{Adapter, FrameworkDefaults, Project};
 use aye_collect::{Collector, Environment, Options, Prepared};
-use aye_config::AyeConfig;
-use aye_engine::{Adapter, Policy, Project, Refiner};
-use aye_events::{Case, Counts, Diagnostic, Event, ExitCode, Record, SCHEMA_VERSION, Severity};
+use aye_config::{AyeConfig, WorkerCount};
+use aye_events::{
+    AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event,
+    ExitCode, ProjectPath, Record, RerunCommand, RunId, SCHEMA_VERSION, Severity, Stamper,
+    StopReason, TestId,
+};
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
-use aye_history::{History, RunWriter};
+use aye_history::{History, RunWriter, StoredRunId};
+use aye_protocol::{MaxFail, Policy, Refiner};
 use aye_render::{
     ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
     JunitOptions, Reporter, Tally, Tee, Text, TextOptions,
 };
-use aye_runner::{Echo, Plan, Runner, RunnerOptions, Stamper, new_run_id};
+use aye_runner::{Echo, Plan, Runner, RunnerOptions};
 use aye_select::Selection;
-use aye_static::EnvVars;
+use aye_static::{EnvVars, ProcessEnv};
 
-use crate::args::{Args, Color, Maxfail, Output, Passed, Workers, passed, passed_maxfail};
+use crate::args::{Args, Color, Maxfail, Output, Passed, passed, passed_maxfail};
 use crate::busy::Busy;
 use crate::registry;
-
-/// Diagnostic codes the binary acts on. Collection's are in
-/// `aye_collect::codes`; the rest come from adapters and the runner.
-mod codes {
-    /// An explicit path doesn't exist, or an id matches no test.
-    pub(super) const NOT_FOUND: &str = "not-found";
-    /// No adapter collects an explicit file (pytest's "found no collectors").
-    pub(super) const UNCLAIMED: &str = "unclaimed";
-    /// The framework rejected its arguments.
-    pub(super) const USAGE_ERROR: &str = "usage-error";
-    /// The framework's own internal error (pytest's `INTERNALERROR`).
-    pub(super) const INTERNAL_ERROR: &str = "internal-error";
-    /// The framework failed to collect a file.
-    pub(super) const COLLECTION_ERROR: &str = "collection-error";
-    /// The framework skipped a module or a directory while collecting it.
-    pub(super) const SKIPPED: &str = "skipped";
-}
-
-/// Keys of an adapter's context the binary reads or adds.
-mod keys {
-    /// Added by the binary: the ids with parameters the command line names
-    /// (`path::test[x]`), relative to the root, so the framework reports
-    /// one it can't find instead of running its test's other parameters in
-    /// its place.
-    pub(super) const REQUESTED_IDS: &str = "requested_ids";
-    /// Added by the binary: aye's own options that shape the run (`-c
-    /// FILE`), as given, which a test's rerun command repeats before its id
-    /// (`aye -c FILE <id>`), so that it reruns from where aye ran as aye ran
-    /// it.
-    pub(super) const RERUN_ARGS: &str = "rerun_args";
-    /// Set by an adapter whose framework drops the tests whose ids start
-    /// with one of these (pytest's `--deselect`, relative to the root):
-    /// selection drops that adapter's cases and counts them as deselected.
-    pub(super) const DESELECT: &str = "deselect";
-    /// Added by the binary when a positional argument isn't a path (a
-    /// dotted name, a test key): the paths the user's run starts from,
-    /// absolute, in the order of the arguments, each once: each path
-    /// argument (an id's file), and the files of the cases each other
-    /// argument selects, as `pytest <these>` would be given them. The
-    /// adapter's own context saw only the path arguments (with none, its
-    /// framework's default), so an adapter whose framework starts from the
-    /// paths it is given (pytest's start-up conftests and initial paths)
-    /// starts from these instead.
-    pub(super) const SELECTED_PATHS: &str = "selected_paths";
-}
 
 /// A run's inputs, resolved: everything wrong with the command line or the
 /// configuration fails here, before anything is reported. Selectors that
@@ -93,10 +53,16 @@ pub(crate) struct Session {
     adapters: Vec<Box<dyn Adapter>>,
     adapters_why: registry::Why,
     prepared: Vec<Prepared>,
+    /// What each prepared adapter's framework says about the run, in the
+    /// same order.
+    defaults: Vec<(AdapterName, FrameworkDefaults)>,
     selection: Selection,
     python: PathBuf,
     python_source: aye_runner::PythonSource,
     workers: u32,
+    /// The environment aye started in, read once: what the adapters, the
+    /// interpreter's discovery and the reporters read.
+    env: ProcessEnv,
 }
 
 /// A positional argument and how it was read.
@@ -117,7 +83,7 @@ impl Positional {
 }
 
 impl Session {
-    pub(crate) fn new(args: Args) -> Result<Self> {
+    pub(crate) fn new(args: Args, env: ProcessEnv) -> Result<Self> {
         let cwd = std::env::current_dir().context("cannot read the current directory")?;
         // `.` and `..` are resolved lexically, as pytest's `os.path.abspath`
         // does, before the root is searched for.
@@ -155,6 +121,7 @@ impl Session {
             config.settings.python.as_deref(),
             &root,
             &cwd,
+            &env,
         )
         .context("no Python interpreter found: pass --python, or set [tool.aye] python")?;
         let project = Project {
@@ -163,6 +130,8 @@ impl Session {
             args: &paths,
             config_file: args.config_file.as_deref(),
             framework_args: &args.passthrough,
+            env: &env,
+            tool_aye: &config.settings,
         };
         // Before anything walks the tree: pytest would walk all of it, and
         // nobody means that.
@@ -181,7 +150,7 @@ impl Session {
         // `--co --no-refine` lists without importing: pytest's cases are the
         // static recognizer's prediction.
         let static_listing = args.no_refine && args.collect_only;
-        let chosen = registry::choose(&config.settings, &project, static_listing)?;
+        let chosen = registry::choose(&project, static_listing)?;
         let adapters_why = chosen.why;
         let adapters = chosen.adapters;
         // A run imports every pytest file it runs: aye's pytest front-end
@@ -190,7 +159,7 @@ impl Session {
             && !args.collect_only
             && adapters
                 .iter()
-                .any(|adapter| adapter.name() == aye_engine_pytest::NAME)
+                .any(|adapter| adapter.name() == aye_adapter_pytest::NAME)
         {
             anyhow::bail!(
                 "--no-refine lists tests without importing them, with --co; a run of \
@@ -199,25 +168,22 @@ impl Session {
             );
         }
         let prepared = prepare(&adapters, &project)?;
+        let defaults: Vec<(AdapterName, FrameworkDefaults)> = prepared
+            .iter()
+            .map(|(name, recognizer)| (name.clone(), recognizer.defaults()))
+            .collect();
 
         let selection = selection(
             &args,
             positionals.iter().map(|p| p.selector.as_str()),
-            &prepared,
+            &defaults,
         )?;
 
-        let from_framework = prepared.iter().find_map(|(_, r)| {
-            r.context()
-                .get("xdist_workers")
-                .and_then(|w| w.as_str())
-                .map(str::to_string)
-        });
-        let workers = match (args.workers, config.settings.workers, from_framework) {
-            (Some(w), _, _) => w.resolve(),
-            (None, Some(aye_config::Workers::Count(n)), _) => n.max(1),
-            (None, Some(aye_config::Workers::Keyword(_)), _) => Workers::Auto.resolve(),
-            (None, None, Some(w)) => w.parse::<Workers>().map_or(1, Workers::resolve),
-            (None, None, None) => 1,
+        let workers = match (args.workers, config.settings.workers) {
+            (Some(w), _) => w.resolve(),
+            (None, Some(aye_config::Workers::Count(n))) => n.max(1),
+            (None, Some(aye_config::Workers::Keyword(_))) => WorkerCount::Auto.resolve(),
+            (None, None) => first(&defaults, |d| d.workers).map_or(1, WorkerCount::resolve),
         };
 
         drop(busy);
@@ -232,10 +198,12 @@ impl Session {
             adapters,
             adapters_why,
             prepared,
+            defaults,
             selection,
             python,
             python_source,
             workers,
+            env,
         })
     }
 
@@ -265,7 +233,7 @@ impl Session {
 
     /// The names of the adapters the run uses, in priority order, and why
     /// those.
-    pub(crate) fn adapters(&self) -> (Vec<&'static str>, registry::Why) {
+    pub(crate) fn adapters(&self) -> (Vec<AdapterName>, registry::Why) {
         (
             self.adapters.iter().map(|a| a.name()).collect(),
             self.adapters_why,
@@ -299,18 +267,19 @@ impl Session {
             selection = selection.with_last_failed(last_failed.iter().cloned());
         }
 
-        let run_id = new_run_id();
+        let run_id = RunId::random();
         let runner = Runner::new(RunnerOptions {
             python: self.python.clone(),
             root: self.root.clone(),
             cwd: self.cwd.clone(),
             workers: self.workers,
-            executors: self.adapters.iter().map(|a| a.executor()).collect(),
+            prelude: registry::PRELUDE,
+            runtimes: self.adapters.iter().map(|a| a.runtime()).collect(),
             // pytest-xdist's `testrun_uid`, which its workers share: one per
             // run, the run's id.
             env: vec![(
                 EnvVars::PYTEST_XDIST_TESTRUNUID.into(),
-                run_id.clone().into(),
+                run_id.as_str().into(),
             )],
             // `-s` output stays off a machine-readable stdout.
             echo: match self.output() {
@@ -371,6 +340,8 @@ impl Session {
             args: &self.paths,
             config_file: self.args.config_file.as_deref(),
             framework_args: &self.args.passthrough,
+            env: &self.env,
+            tool_aye: &self.config.settings,
         };
         // The refinement cache is keyed on what refining depends on: the
         // interpreter and its packages, the arguments after `--`, and the
@@ -435,11 +406,10 @@ impl Session {
                 refined_files: 0,
                 duration: collect_started.elapsed(),
             });
-            let stopped = aye_runner::StopReason::Interrupted.as_str();
             return out.finish(
                 ExitCode::Interrupted,
                 Counts::default(),
-                Some(stopped),
+                Some(StopReason::Interrupted),
                 &file_failed,
             );
         }
@@ -464,7 +434,9 @@ impl Session {
         let skips: Vec<&str> = collection
             .diagnostics
             .iter()
-            .filter(|d| d.code == codes::SKIPPED && d.severity == Severity::Info && kept(d))
+            .filter(|d| {
+                d.code == DiagnosticCode::Skipped && d.severity == Severity::Info && kept(d)
+            })
             .map(|d| d.path.as_str())
             .collect();
         // Selectors that match nothing, as pytest's `not found:`: a missing
@@ -493,7 +465,7 @@ impl Session {
         let pytest_runs = self
             .prepared
             .iter()
-            .any(|(name, _)| *name == aye_engine_pytest::NAME);
+            .any(|(name, _)| *name == aye_adapter_pytest::NAME);
         let mut collection_errors = false;
         let broken = broken_conftest_dirs(&collection.diagnostics);
         for diagnostic in &collection.diagnostics {
@@ -505,14 +477,14 @@ impl Session {
                 continue;
             }
             let mut diagnostic = diagnostic.clone();
-            if diagnostic.code == aye_collect::codes::REFINE_FAILED {
+            if diagnostic.code == DiagnosticCode::RefineFailed {
                 // aye's pytest front-end is the only source of pytest's
                 // tests: without it there are none, which is no result.
                 diagnostic.severity = Severity::Error;
             }
             conftests.see(None, &mut diagnostic);
             if pytest_runs {
-                once.refined(aye_engine_pytest::NAME, &diagnostic);
+                once.refined(&aye_adapter_pytest::NAME, &diagnostic);
             }
             collection_errors |= diagnostic.severity == Severity::Error;
             out.emit(Event::Diagnostic(diagnostic));
@@ -522,7 +494,7 @@ impl Session {
         let reported: HashSet<&str> = collection
             .diagnostics
             .iter()
-            .filter(|d| d.code == codes::NOT_FOUND)
+            .filter(|d| d.code == DiagnosticCode::NotFound)
             .map(|d| d.path.as_str())
             .collect();
         let mut not_found = Vec::new();
@@ -537,8 +509,8 @@ impl Session {
             }
             not_found.push(Diagnostic {
                 severity: Severity::Error,
-                code: codes::NOT_FOUND.to_string(),
-                path,
+                code: DiagnosticCode::NotFound,
+                path: DiagnosticPath::as_written(path),
                 span: None,
                 message: not_found_message(selector),
             });
@@ -547,7 +519,7 @@ impl Session {
             out.emit(Event::Diagnostic(diagnostic));
         }
         // pytest refuses to run when an explicit argument names nothing.
-        let usage_error = out.errors.not_found || out.errors.usage;
+        let usage_error = out.errors.usage;
         // A hook that failed while pytest collected (aye's pytest front-end
         // runs the collection hooks in refinement) is pytest's
         // `INTERNALERROR`: the session ends there, status 3, `--co` too.
@@ -615,20 +587,22 @@ impl Session {
         }
 
         // -- run ----------------------------------------------------------------
-        let requested = requested_ids(&self.positionals);
         let rerun_args = rerun_args(&self.args);
-        let selected_paths = reach.map(|reach| reach.selected).unwrap_or_default();
         let plan = Plan {
             cases,
             policy: self.policy(),
             contexts: self
                 .prepared
                 .iter()
-                .map(|(name, r)| {
-                    let context = with_requested(r.context(), &requested);
-                    let context = with_selected_paths(context, &selected_paths);
-                    ((*name).to_string(), with_rerun_args(context, &rerun_args))
-                })
+                .map(|(name, r)| (name.clone(), r.context()))
+                .collect(),
+            requested_ids: requested_ids(&self.positionals),
+            rerun_args: rerun_args.clone(),
+            selected_paths: reach
+                .map(|reach| reach.selected)
+                .unwrap_or_default()
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
                 .collect(),
             durations,
             first: if self.args.failed_first {
@@ -664,7 +638,7 @@ impl Session {
             deselected: selected.deselected,
             ..summary.counts
         };
-        let stopped = summary.stopped.map(aye_runner::StopReason::as_str);
+        let stopped = summary.stopped.clone();
         let mut errors = out.errors;
         // Collection's errors, which `--continue-on-collection-errors` let
         // the run go past, still fail it.
@@ -690,7 +664,7 @@ impl Session {
     /// Else the framework's own setting (pytest's `addopts`,
     /// `PYTEST_ADDOPTS`); 0 means no limit.
     fn maxfail(&self) -> Option<u32> {
-        maxfail(&self.args, &self.prepared)
+        maxfail(&self.args, &self.defaults)
     }
 
     /// Where the JUnit XML report goes: `--junitxml`, read as pytest reads
@@ -699,7 +673,12 @@ impl Session {
     /// after `--` gives, from the adapter's context). Relative to the
     /// current directory; empty means none.
     fn junit(&self) -> Option<PathBuf> {
-        junit_path(&self.cwd, self.args.junit_xml.as_deref(), &self.prepared)
+        junit_path(
+            &self.env,
+            &self.cwd,
+            self.args.junit_xml.as_deref(),
+            &self.defaults,
+        )
     }
 
     /// `--output`, else `[tool.aye] output`, else text.
@@ -738,8 +717,11 @@ impl Session {
                         live: io::stdout().is_terminal(),
                     },
                 )));
-                if aye_render::github_actions_enabled() {
-                    let workspace = std::env::var_os(EnvVars::GITHUB_WORKSPACE).map(PathBuf::from);
+                if aye_render::github_actions_enabled(&self.env) {
+                    let workspace = self
+                        .env
+                        .get_os(EnvVars::GITHUB_WORKSPACE)
+                        .map(PathBuf::from);
                     let prefix = repository_prefix(&self.root, workspace.as_deref());
                     tee.push(Stdout::new(
                         GithubAnnotations::new(io::stdout()).with_path_prefix(prefix),
@@ -751,8 +733,8 @@ impl Session {
         if let Some(path) = junit {
             tee.push(File {
                 inner: Junit::new(path)
-                    .with_prefix(junit_prefix(&self.prepared))
-                    .with_options(junit_options(&self.prepared)),
+                    .with_prefix(junit_prefix(&self.defaults))
+                    .with_options(junit_options(&self.defaults)),
                 failed: Arc::clone(file_failed),
             });
         }
@@ -765,7 +747,7 @@ struct Here<'a> {
     cwd: &'a Path,
     root: &'a Path,
     /// aye's options that shape the run, which a rerun repeats before the
-    /// id (see `keys::RERUN_ARGS`).
+    /// id ([`aye_protocol::BatchContext::rerun_args`]).
     rerun_args: &'a [String],
 }
 
@@ -783,29 +765,24 @@ impl Here<'_> {
         if result.reproduce.is_none() && !result.outcome.is_bad() {
             return;
         }
-        let Some(local) = self.local_id(result.id.as_str()) else {
+        let Some(local) = self.local_id(&result.id) else {
             return;
         };
         match &mut result.reproduce {
             Some(reproduce) => {
-                // `aye [aye's options] <id> [-- <the framework's>]`.
-                let command = &mut reproduce.command;
-                let options = command.iter().position(|arg| arg == "--");
-                let id = command[..options.unwrap_or(command.len())]
-                    .iter()
-                    .position(|arg| arg == result.id.as_str());
-                if command.first().is_some_and(|aye| aye == "aye")
-                    && let Some(at) = id.filter(|at| *at > 0)
-                {
-                    command[at] = local;
+                if let Some(mut rerun) = RerunCommand::parse(&reproduce.command, &result.id) {
+                    rerun.target = local;
+                    reproduce.command = rerun.to_command();
                 }
             }
             None if result.outcome.is_bad() => {
-                let mut command = vec!["aye".to_string()];
-                command.extend(self.rerun_args.iter().cloned());
-                command.push(local);
+                let rerun = RerunCommand {
+                    options: self.rerun_args.to_vec(),
+                    target: local,
+                    framework_args: Vec::new(),
+                };
                 result.reproduce = Some(aye_events::Reproduce {
-                    command,
+                    command: rerun.to_command(),
                     ..aye_events::Reproduce::default()
                 });
             }
@@ -815,23 +792,19 @@ impl Here<'_> {
 
     /// `id` spelled from the current directory, when spelled from the root
     /// it would name another file from here; see [`Self::rerun_from_here`].
-    fn local_id(&self, id: &str) -> Option<String> {
+    fn local_id(&self, id: &TestId) -> Option<String> {
         if self.cwd == self.root {
             return None;
         }
-        let (path, rest) = id
-            .split_once("::")
-            .map_or((id, None), |(p, r)| (p, Some(r)));
+        let path = id.path().as_str();
         let from_cwd = normalize_absolute(&self.cwd.join(path));
         let from_root = normalize_absolute(&self.root.join(path));
         if from_cwd == from_root || !from_cwd.exists() {
             return None;
         }
+        // The names, from their `::` on, follow the file as they are.
         let mut local = relative_below_root(&from_root, self.cwd);
-        if let Some(rest) = rest {
-            local.push_str("::");
-            local.push_str(rest);
-        }
+        local.push_str(&id.as_str()[path.len()..]);
         Some(local)
     }
 }
@@ -850,10 +823,10 @@ impl Here<'_> {
 #[derive(Debug, Default)]
 struct OneModuleErrors {
     /// Each batch's adapter, from its `batch_started`.
-    adapters: HashMap<aye_events::BatchId, String>,
+    adapters: HashMap<aye_events::BatchIndex, AdapterName>,
     /// By file, how many collection errors each adapter reported for it,
     /// in the order the adapters first did.
-    reported: HashMap<String, Vec<(String, usize)>>,
+    reported: HashMap<String, Vec<(AdapterName, usize)>>,
 }
 
 impl OneModuleErrors {
@@ -863,18 +836,21 @@ impl OneModuleErrors {
     /// adapter's errors, which pytest counts apart, then count as its too,
     /// so another adapter's batch error beyond them still becomes an info).
     /// A conftest's is [`OneConftestError`]'s.
-    fn refined(&mut self, adapter: &str, diagnostic: &Diagnostic) {
+    fn refined(&mut self, adapter: &AdapterName, diagnostic: &Diagnostic) {
         if diagnostic.severity != Severity::Error
-            || diagnostic.code != codes::COLLECTION_ERROR
-            || diagnostic.path.is_empty()
-            || registry::is_conftest(&diagnostic.path)
+            || diagnostic.code != DiagnosticCode::CollectionError
+            || diagnostic.path.is_nowhere()
+            || registry::is_conftest(diagnostic.path.as_str())
         {
             return;
         }
-        let counts = self.reported.entry(diagnostic.path.clone()).or_default();
+        let counts = self
+            .reported
+            .entry(diagnostic.path.to_string())
+            .or_default();
         match counts.iter_mut().find(|(by, _)| by == adapter) {
             Some((_, count)) => *count += 1,
-            None => counts.push((adapter.to_string(), 1)),
+            None => counts.push((adapter.clone(), 1)),
         }
     }
 
@@ -888,8 +864,8 @@ impl OneModuleErrors {
             }
             Event::Diagnostic(diagnostic)
                 if diagnostic.severity == Severity::Error
-                    && diagnostic.code == codes::COLLECTION_ERROR
-                    && !diagnostic.path.is_empty() =>
+                    && diagnostic.code == DiagnosticCode::CollectionError
+                    && !diagnostic.path.is_nowhere() =>
             {
                 let Some(adapter) = batch.and_then(|batch| self.adapters.get(&batch)) else {
                     return;
@@ -897,7 +873,10 @@ impl OneModuleErrors {
                 if !registry::collects_in_one_module(adapter) {
                     return;
                 }
-                let counts = self.reported.entry(diagnostic.path.clone()).or_default();
+                let counts = self
+                    .reported
+                    .entry(diagnostic.path.to_string())
+                    .or_default();
                 let mine = if let Some((_, count)) = counts.iter_mut().find(|(by, _)| by == adapter)
                 {
                     *count += 1;
@@ -940,10 +919,10 @@ impl OneModuleErrors {
 #[derive(Debug, Default)]
 struct OneConftestError {
     /// Each batch's adapter, from its `batch_started`.
-    adapters: HashMap<aye_events::BatchId, String>,
+    adapters: HashMap<aye_events::BatchIndex, AdapterName>,
     /// By code and path, who reported the error first (an adapter, or
     /// `None` for refinement), and its message.
-    first: HashMap<(String, String), (Option<String>, String)>,
+    first: HashMap<(DiagnosticCode, String), (Option<AdapterName>, String)>,
 }
 
 impl OneConftestError {
@@ -959,7 +938,7 @@ impl OneConftestError {
             Event::Diagnostic(diagnostic) => {
                 let adapter = batch.and_then(|batch| self.adapters.get(&batch)).cloned();
                 if adapter.is_some() {
-                    self.see(adapter.as_deref(), diagnostic);
+                    self.see(adapter.as_ref(), diagnostic);
                 }
             }
             _ => {}
@@ -967,22 +946,24 @@ impl OneConftestError {
     }
 
     /// A diagnostic `adapter` reported, or refinement (`None`).
-    fn see(&mut self, adapter: Option<&str>, diagnostic: &mut Diagnostic) {
-        let kind = match diagnostic.code.as_str() {
-            codes::USAGE_ERROR => "usage error",
-            codes::COLLECTION_ERROR => "collection error",
+    fn see(&mut self, adapter: Option<&AdapterName>, diagnostic: &mut Diagnostic) {
+        let kind = match diagnostic.code {
+            DiagnosticCode::UsageError => "usage error",
+            DiagnosticCode::CollectionError => "collection error",
             _ => return,
         };
-        if diagnostic.severity != Severity::Error || !registry::is_conftest(&diagnostic.path) {
+        if diagnostic.severity != Severity::Error
+            || !registry::is_conftest(diagnostic.path.as_str())
+        {
             return;
         }
-        let key = (diagnostic.code.clone(), diagnostic.path.clone());
+        let key = (diagnostic.code.clone(), diagnostic.path.to_string());
         let Some((first, message)) = self.first.get(&key) else {
-            let first = (adapter.map(str::to_string), diagnostic.message.clone());
+            let first = (adapter.cloned(), diagnostic.message.clone());
             self.first.insert(key, first);
             return;
         };
-        if first.is_some() && first.as_deref() == adapter {
+        if first.is_some() && first.as_ref() == adapter {
             return;
         }
         let by = adapter.map_or_else(
@@ -1014,7 +995,8 @@ struct Reach {
     paths: Vec<PathBuf>,
     /// The paths the user's run starts from: each path argument, and the
     /// files of the collected cases each other argument selects, in the
-    /// order of the arguments, each once (see `keys::SELECTED_PATHS`).
+    /// order of the arguments, each once
+    /// ([`aye_protocol::BatchContext::selected_paths`]).
     selected: Vec<PathBuf>,
     /// The arguments that aren't paths, as given: dotted names and keys.
     words: Vec<String>,
@@ -1049,7 +1031,7 @@ impl Reach {
                 if one.truth(case).is_false() {
                     continue;
                 }
-                let file = at_root(case.id.path());
+                let file = at_root(case.id.path().as_str());
                 if seen.insert(file.clone()) {
                     selected.push(file);
                 }
@@ -1073,9 +1055,9 @@ impl Reach {
     /// the run starts from (as `pytest <those paths>` loads it first), or
     /// some argument named nothing. Everything else is the run's.
     fn keeps(&self, root: &Path, diagnostic: &Diagnostic) -> bool {
-        let at = || normalize_absolute(&root.join(&diagnostic.path));
-        match (diagnostic.severity, diagnostic.code.as_str()) {
-            (Severity::Info, codes::SKIPPED) => {
+        let at = || normalize_absolute(&root.join(diagnostic.path.as_str()));
+        match (diagnostic.severity, &diagnostic.code) {
+            (Severity::Info, DiagnosticCode::Skipped) => {
                 let at = at();
                 self.paths
                     .iter()
@@ -1083,9 +1065,9 @@ impl Reach {
                     || self
                         .words
                         .iter()
-                        .any(|word| dotted_reach(word, &diagnostic.path) != Named::Nothing)
+                        .any(|word| dotted_reach(word, diagnostic.path.as_str()) != Named::Nothing)
             }
-            (Severity::Error, codes::USAGE_ERROR) if !diagnostic.path.is_empty() => {
+            (Severity::Error, DiagnosticCode::UsageError) if !diagnostic.path.is_nowhere() => {
                 if self.unmatched {
                     return true;
                 }
@@ -1109,8 +1091,8 @@ impl Reach {
 fn broken_conftest_dirs(diagnostics: &[Diagnostic]) -> Vec<&str> {
     diagnostics
         .iter()
-        .filter(|d| d.severity == Severity::Error && registry::is_conftest(&d.path))
-        .map(|d| &d.path[..d.path.len() - "conftest.py".len()])
+        .filter(|d| d.severity == Severity::Error && registry::is_conftest(d.path.as_str()))
+        .map(|d| &d.path.as_str()[..d.path.as_str().len() - "conftest.py".len()])
         .collect()
 }
 
@@ -1122,8 +1104,10 @@ fn broken_conftest_dirs(diagnostics: &[Diagnostic]) -> Vec<&str> {
 /// has none, is left out.
 fn explained_by_a_conftest(broken: &[&str], diagnostic: &Diagnostic) -> bool {
     diagnostic.severity == Severity::Info
-        && diagnostic.code == aye_collect::codes::NO_TESTS
-        && broken.iter().any(|dir| diagnostic.path.starts_with(dir))
+        && diagnostic.code == DiagnosticCode::NoTests
+        && broken
+            .iter()
+            .any(|dir| diagnostic.path.as_str().starts_with(dir))
 }
 
 /// What a dotted name names of a path collection reported skipped.
@@ -1174,25 +1158,24 @@ fn dotted_reach(word: &str, path: &str) -> Named {
     named
 }
 
-/// Error diagnostics seen in the stream, by what they mean for the exit code.
+/// Error diagnostics seen in the stream, by what they mean for the exit code
+/// ([`aye_events::ErrorClass::exit_code`]).
 #[derive(Debug, Clone, Copy, Default)]
 struct Errors {
     any: bool,
-    not_found: bool,
     usage: bool,
     internal: bool,
 }
 
 impl Errors {
-    fn see(&mut self, diagnostic: &Diagnostic) {
-        if diagnostic.severity != Severity::Error {
+    fn see(&mut self, diagnostic: &Diagnostic, origin: DiagnosticOrigin) {
+        let Some(class) = diagnostic.error_class(origin) else {
             return;
-        }
+        };
         self.any = true;
-        match diagnostic.code.as_str() {
-            codes::NOT_FOUND => self.not_found = true,
-            codes::UNCLAIMED | codes::USAGE_ERROR => self.usage = true,
-            codes::INTERNAL_ERROR => self.internal = true,
+        match class.exit_code() {
+            Some(ExitCode::UsageError) => self.usage = true,
+            Some(ExitCode::InternalError) => self.internal = true,
             _ => {}
         }
     }
@@ -1244,7 +1227,7 @@ impl Stream<'_> {
             history.tell(record);
         }
         if let Event::Diagnostic(d) = &record.event {
-            errors.see(d);
+            errors.see(d, DiagnosticOrigin::of(&record.envelope));
         }
         if let Err(err) = reporters.report(record)
             && err.kind() != io::ErrorKind::BrokenPipe
@@ -1265,14 +1248,14 @@ impl Stream<'_> {
         mut self,
         code: ExitCode,
         counts: Counts,
-        stopped: Option<&str>,
+        stopped: Option<StopReason>,
         file_failed: &AtomicBool,
     ) -> ExitCode {
         self.emit(Event::RunFinished {
             exit_code: code,
             counts,
             duration: self.started.elapsed(),
-            stopped: stopped.map(str::to_string),
+            stopped,
         });
         if let Err(err) = self.reporters.finish()
             && err.kind() != io::ErrorKind::BrokenPipe
@@ -1325,7 +1308,7 @@ impl Keep {
         self.writer.dir()
     }
 
-    fn finish(self) -> io::Result<Option<String>> {
+    fn finish(self) -> io::Result<Option<StoredRunId>> {
         self.writer.finish(self.tally.extra().named())
     }
 }
@@ -1426,25 +1409,40 @@ impl Remember<'_> {
     }
 }
 
+/// The first adapter's `field`, in priority order, that gives one: what
+/// the run takes from the frameworks' own configuration where aye's says
+/// nothing.
+fn first<T>(
+    defaults: &[(AdapterName, FrameworkDefaults)],
+    field: impl Fn(&FrameworkDefaults) -> Option<T>,
+) -> Option<T> {
+    defaults.iter().find_map(|(_, defaults)| field(defaults))
+}
+
+/// Each adapter's `field`, for those that give one, in priority order.
+fn each<T>(
+    defaults: &[(AdapterName, FrameworkDefaults)],
+    field: impl Fn(&FrameworkDefaults) -> Option<T>,
+) -> Vec<(&AdapterName, T)> {
+    defaults
+        .iter()
+        .filter_map(|(name, defaults)| Some((name, field(defaults)?)))
+        .collect()
+}
+
 /// See [`Session::maxfail`].
-fn maxfail(args: &Args, prepared: &[Prepared]) -> Option<u32> {
+fn maxfail(args: &Args, defaults: &[(AdapterName, FrameworkDefaults)]) -> Option<u32> {
     match passed_maxfail(&args.passthrough).unwrap_or_else(|| args.maxfail()) {
         Maxfail::After(n) => Some(n),
         Maxfail::Unlimited => None,
-        Maxfail::Unset => prepared.iter().find_map(|(_, recognizer)| {
-            recognizer
-                .context()
-                .get("maxfail")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|n| u32::try_from(n).ok())
-                .filter(|n| *n > 0)
-        }),
+        Maxfail::Unset => first(defaults, |d| d.maxfail).map(MaxFail::get),
     }
 }
 
 /// The ids with parameters the command line names (`path::test[x]`),
-/// relative to the root as collection spells them, each once.
-fn requested_ids(positionals: &[Positional]) -> Vec<String> {
+/// relative to the root as collection spells them, each once
+/// ([`aye_protocol::BatchContext::requested_ids`]).
+fn requested_ids(positionals: &[Positional]) -> Vec<TestId> {
     let mut seen = HashSet::new();
     positionals
         .iter()
@@ -1456,6 +1454,7 @@ fn requested_ids(positionals: &[Positional]) -> Vec<String> {
         })
         .map(|p| p.selector.clone())
         .filter(|id| seen.insert(id.clone()))
+        .map(TestId::new)
         .collect()
 }
 
@@ -1504,20 +1503,20 @@ fn run_exit_code(
 fn session_files(
     cases: &[Case],
     within: Option<(&[PathBuf], &Path)>,
-) -> BTreeMap<String, Vec<String>> {
-    let mut files: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut seen: HashSet<(&str, &str)> = HashSet::new();
+) -> BTreeMap<AdapterName, Vec<ProjectPath>> {
+    let mut files: BTreeMap<AdapterName, Vec<ProjectPath>> = BTreeMap::new();
+    let mut seen: HashSet<(&AdapterName, &str)> = HashSet::new();
     for case in cases {
         let path = case.id.path();
         let reached = within.is_none_or(|(paths, root)| {
-            let file = normalize_absolute(&root.join(path));
+            let file = normalize_absolute(&root.join(path.as_str()));
             paths.iter().any(|start| file.starts_with(start))
         });
-        if reached && seen.insert((case.adapter.as_str(), path)) {
+        if reached && seen.insert((&case.adapter, path.as_str())) {
             files
                 .entry(case.adapter.clone())
                 .or_default()
-                .push(path.to_string());
+                .push(path.to_project_path());
         }
     }
     files
@@ -1525,7 +1524,7 @@ fn session_files(
 
 /// Prepare each adapter for the project, knowing the others.
 fn prepare(adapters: &[Box<dyn Adapter>], project: &Project<'_>) -> Result<Vec<Prepared>> {
-    let names: Vec<&str> = adapters.iter().map(|adapter| adapter.name()).collect();
+    let names: Vec<AdapterName> = adapters.iter().map(|adapter| adapter.name()).collect();
     let mut prepared: Vec<Prepared> = Vec::new();
     for adapter in adapters {
         if let Some(recognizer) = adapter
@@ -1538,12 +1537,13 @@ fn prepare(adapters: &[Box<dyn Adapter>], project: &Project<'_>) -> Result<Vec<P
     Ok(prepared)
 }
 
-/// aye's options that shape the run, as a rerun repeats them (see
-/// `keys::RERUN_ARGS`): `-c FILE`, as given (a rerun runs where aye ran).
-/// `--python` is left out (a rerun finds the interpreter as aye did), and
-/// so are the options that only shape the output or the selection, which a
-/// rerun of one id doesn't need, `--native`, which does nothing, and
-/// `--junitxml`, whose report it would overwrite.
+/// aye's options that shape the run, as a rerun repeats them
+/// ([`aye_protocol::BatchContext::rerun_args`]): `-c FILE`, as given (a
+/// rerun runs where aye ran). `--python` is left out (a rerun finds the
+/// interpreter as aye did), and so are the options that only shape the
+/// output or the selection, which a rerun of one id doesn't need,
+/// `--native`, which does nothing, and `--junitxml`, whose report it would
+/// overwrite.
 fn rerun_args(args: &Args) -> Vec<String> {
     args.config_file
         .as_ref()
@@ -1551,102 +1551,48 @@ fn rerun_args(args: &Args) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// An adapter's context with aye's options a rerun repeats, when there are
-/// some (see `keys::RERUN_ARGS`).
-fn with_rerun_args(mut context: serde_json::Value, rerun_args: &[String]) -> serde_json::Value {
-    if !rerun_args.is_empty()
-        && let Some(object) = context.as_object_mut()
-    {
-        object.insert(keys::RERUN_ARGS.to_string(), rerun_args.into());
-    }
-    context
-}
-
-/// An adapter's context with the paths the user's run starts from, when
-/// some positional argument isn't a path (see `keys::SELECTED_PATHS`).
-fn with_selected_paths(mut context: serde_json::Value, paths: &[PathBuf]) -> serde_json::Value {
-    if !paths.is_empty()
-        && let Some(object) = context.as_object_mut()
-    {
-        let paths: Vec<String> = paths
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect();
-        object.insert(keys::SELECTED_PATHS.to_string(), paths.into());
-    }
-    context
-}
-
-/// An adapter's context with the ids the command line names, when it names
-/// some (see `keys::REQUESTED_IDS`).
-fn with_requested(mut context: serde_json::Value, requested: &[String]) -> serde_json::Value {
-    if !requested.is_empty()
-        && let Some(object) = context.as_object_mut()
-    {
-        object.insert(keys::REQUESTED_IDS.to_string(), requested.into());
-    }
-    context
-}
-
-/// See [`Session::junit`].
-fn junit_path(cwd: &Path, given: Option<&Path>, prepared: &[Prepared]) -> Option<PathBuf> {
+/// See [`Session::junit`]. `env` is the environment the command line's
+/// path is expanded with.
+fn junit_path(
+    env: &ProcessEnv,
+    cwd: &Path,
+    given: Option<&Path>,
+    defaults: &[(AdapterName, FrameworkDefaults)],
+) -> Option<PathBuf> {
     let path = match given {
-        Some(given) => aye_fs::expand_path(&given.to_string_lossy(), |name| std::env::var_os(name)),
-        None => context_strings(prepared, "junitxml")
-            .into_iter()
-            .next()
-            .map(|(_, path)| PathBuf::from(path))?,
+        Some(given) => aye_fs::expand_path(&given.to_string_lossy(), |name| {
+            env.get_os(name).map(ToOwned::to_owned)
+        }),
+        None => first(defaults, |d| d.junit.path.clone())?,
     };
     (!path.as_os_str().is_empty()).then(|| cwd.join(path))
 }
 
 /// What goes before the JUnit report's classnames: the framework's own
 /// (pytest's `--junitprefix`), wherever the report's path came from.
-fn junit_prefix(prepared: &[Prepared]) -> String {
-    context_strings(prepared, "junit_prefix")
-        .into_iter()
-        .next()
-        .map(|(_, prefix)| prefix)
-        .unwrap_or_default()
+fn junit_prefix(defaults: &[(AdapterName, FrameworkDefaults)]) -> String {
+    first(defaults, |d| d.junit.prefix.clone()).unwrap_or_default()
 }
 
 /// How the JUnit report is written: the framework's own settings, from the
-/// first adapter's context that gives each (pytest's `junit_suite_name`,
+/// first adapter that gives each (pytest's `junit_suite_name`,
 /// `junit_logging`, `junit_log_passing_tests`, `junit_duration_report` and
 /// `junit_family`, in pytest's spellings), else aye's own.
-fn junit_options(prepared: &[Prepared]) -> JunitOptions {
+fn junit_options(defaults: &[(AdapterName, FrameworkDefaults)]) -> JunitOptions {
     let mut options = JunitOptions::default();
-    let first = |key: &str| {
-        context_strings(prepared, key)
-            .into_iter()
-            .next()
-            .map(|(_, value)| value)
-    };
-    if let Some(name) = first("junit_suite_name") {
+    if let Some(name) = first(defaults, |d| d.junit.suite_name.clone()) {
         options.suite_name = name;
     }
-    if let Some(logging) = first("junit_logging") {
+    if let Some(logging) = first(defaults, |d| d.junit.logging.clone()) {
         options.logging = JunitLogging::from(logging.as_str());
     }
-    if let Some(duration) = first("junit_duration_report") {
+    if let Some(duration) = first(defaults, |d| d.junit.duration_report.clone()) {
         options.duration = JunitDuration::from(duration.as_str());
     }
-    if let Some(family) = first("junit_family") {
+    if let Some(family) = first(defaults, |d| d.junit.family.clone()) {
         options.family = JunitFamily::from(family.as_str());
     }
-    let log_passing_tests = prepared.iter().find_map(|(_, recognizer)| {
-        match recognizer.context().get("junit_log_passing_tests")? {
-            serde_json::Value::Bool(value) => Some(*value),
-            // pytest's `bool` ini values, as `_strtobool` reads them.
-            serde_json::Value::String(value) => match value.to_ascii_lowercase().as_str() {
-                "y" | "yes" | "t" | "true" | "on" | "1" => Some(true),
-                "n" | "no" | "f" | "false" | "off" | "0" => Some(false),
-                _ => None,
-            },
-            _ => None,
-        }
-    });
-    if let Some(value) = log_passing_tests {
+    if let Some(value) = first(defaults, |d| d.junit.log_passing_tests) {
         options.log_passing_tests = value;
     }
     options
@@ -1654,14 +1600,14 @@ fn junit_options(prepared: &[Prepared]) -> JunitOptions {
 
 /// What static selection keeps: the positional arguments' `selectors`, the
 /// `-k` and `-m` expressions [`pick`] picks, and each adapter's
-/// `--deselect` prefixes (`keys::DESELECT`). A malformed expression on the
-/// command line is a usage error, even where the arguments after `--`
-/// override it; the framework's own, should aye fail to parse it, drops no
-/// case.
+/// `--deselect` prefixes ([`FrameworkDefaults::deselect`]). A malformed
+/// expression on the command line is a usage error, even where the
+/// arguments after `--` override it; the framework's own, should aye fail
+/// to parse it, drops no case.
 fn selection<'s>(
     args: &Args,
     selectors: impl IntoIterator<Item = &'s str>,
-    prepared: &[Prepared],
+    defaults: &[(AdapterName, FrameworkDefaults)],
 ) -> Result<Selection, aye_select::SelectError> {
     if let Some(expr) = &args.keyword {
         Selection::default().with_keyword(expr)?;
@@ -1670,101 +1616,74 @@ fn selection<'s>(
         Selection::default().with_tags(expr)?;
     }
     let mut selection = Selection::default().with_ids(selectors);
+    let keyword = |d: &FrameworkDefaults| d.keyword.clone();
     let given = args.keyword.as_deref();
     match pick(given, passed(&args.passthrough, 'k')) {
         Pick::Given(expr) => {
             selection = selection.clone().with_keyword(&expr).unwrap_or(selection);
         }
         Pick::Unknown => {
-            for (name, expr) in unread(given, prepared, "keyword") {
+            for (name, expr) in unread(given, defaults, keyword) {
                 selection = selection
                     .clone()
-                    .with_own_keyword(name, &expr)
+                    .with_own_keyword(name.clone(), &expr)
                     .unwrap_or(selection);
             }
         }
         Pick::Own => {
-            for (name, expr) in context_strings(prepared, "keyword") {
+            for (name, expr) in each(defaults, keyword) {
                 selection = selection
                     .clone()
-                    .with_own_keyword(name, &expr)
+                    .with_own_keyword(name.clone(), &expr)
                     .unwrap_or(selection);
             }
         }
     }
+    let tags = |d: &FrameworkDefaults| d.tags.clone();
     let given = args.tags.as_deref();
     match pick(given, passed(&args.passthrough, 'm')) {
         Pick::Given(expr) => {
             selection = selection.clone().with_tags(&expr).unwrap_or(selection);
         }
         Pick::Unknown => {
-            for (name, expr) in unread(given, prepared, "tags") {
+            for (name, expr) in unread(given, defaults, tags) {
                 selection = selection
                     .clone()
-                    .with_own_tags(name, &expr)
+                    .with_own_tags(name.clone(), &expr)
                     .unwrap_or(selection);
             }
         }
         Pick::Own => {
-            for (name, expr) in context_strings(prepared, "tags") {
+            for (name, expr) in each(defaults, tags) {
                 selection = selection
                     .clone()
-                    .with_own_tags(name, &expr)
+                    .with_own_tags(name.clone(), &expr)
                     .unwrap_or(selection);
             }
         }
     }
-    for (name, recognizer) in prepared {
-        if let Some(prefixes) = recognizer
-            .context()
-            .get(keys::DESELECT)
-            .and_then(serde_json::Value::as_array)
-        {
-            selection = selection.with_deselect(
-                name,
-                prefixes
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::to_string),
-            );
-        }
+    for (name, defaults) in defaults {
+        selection = selection.with_deselect(name.clone(), defaults.deselect.iter().cloned());
     }
     Ok(selection)
 }
 
-/// The adapters' contexts' strings under `key`, by adapter, for those that
-/// give one.
-fn context_strings(prepared: &[Prepared], key: &str) -> Vec<(&'static str, String)> {
-    prepared
-        .iter()
-        .filter_map(|(name, recognizer)| {
-            recognizer
-                .context()
-                .get(key)
-                .and_then(serde_json::Value::as_str)
-                .map(|value| (*name, value.to_string()))
-        })
-        .collect()
-}
-
-/// The `-k` or `-m` expressions (the context's `key`) static selection
+/// The `-k` or `-m` expressions (each adapter's `own`) static selection
 /// applies, by adapter, when the arguments after `--` may hold one aye can't
 /// read ([`Pick::Unknown`]): the command line's (`given`), else the
 /// adapter's own. No adapter applies an expression at runtime (aye's
 /// pytest front-end lists every test, and nothing re-reads those
 /// arguments' `-k` or `-m` in a batch), so static selection is the last
 /// word on every case.
-fn unread(given: Option<&str>, prepared: &[Prepared], key: &str) -> Vec<(&'static str, String)> {
-    let own = context_strings(prepared, key);
-    prepared
+fn unread<'d>(
+    given: Option<&str>,
+    defaults: &'d [(AdapterName, FrameworkDefaults)],
+    own: impl Fn(&FrameworkDefaults) -> Option<String>,
+) -> Vec<(&'d AdapterName, String)> {
+    defaults
         .iter()
-        .map(|(name, _)| *name)
-        .filter_map(|name| {
-            let expr = given.map(str::to_string).or_else(|| {
-                own.iter()
-                    .find(|(adapter, _)| *adapter == name)
-                    .map(|(_, expr)| expr.clone())
-            })?;
+        .filter_map(|(name, defaults)| {
+            let expr = given.map(str::to_string).or_else(|| own(defaults))?;
             Some((name, expr))
         })
         .collect()

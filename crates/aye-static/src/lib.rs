@@ -9,7 +9,10 @@
 //! too, and the binary's tests check that it does.
 //!
 //! [`ProcessEnv`] is the environment as aye read it: every variable, each
-//! name's case kept, looked up as Python's `os.environ` looks one up.
+//! name's case kept, looked up as Python's `os.environ` looks one up. The
+//! binary reads it once ([`ProcessEnv::from_process`]) and hands it down;
+//! `clippy.toml` disallows `std::env`'s readers everywhere else, but for the
+//! refinement cache's key and the tests' own settings.
 //!
 //! Two reads go by no name and stay out of the catalogue: the refinement
 //! cache's key holds the whole environment workers inherit, and the paths
