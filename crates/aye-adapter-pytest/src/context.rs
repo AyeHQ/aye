@@ -183,7 +183,7 @@ pub(crate) struct NativeContext {
     consider_namespace_packages: bool,
     noconftest: bool,
     /// `prepend`, `append` or `importlib`.
-    import_mode: &'static str,
+    import_mode: ImportMode,
     /// `""` for pytest's default.
     empty_parameter_set_mark: String,
     /// The `-p` values in order (`no:NAME` included).
@@ -265,11 +265,7 @@ pub(crate) fn native_context(config: &PytestConfig) -> NativeContext {
         collect_imported_tests: config.collect_imported_tests.value,
         consider_namespace_packages: config.consider_namespace_packages,
         noconftest: config.noconftest,
-        import_mode: match config.import_mode {
-            ImportMode::Prepend => "prepend",
-            ImportMode::Append => "append",
-            ImportMode::Importlib => "importlib",
-        },
+        import_mode: config.import_mode,
         empty_parameter_set_mark: config.empty_parameter_set_mark.value.clone(),
         plugins: config.plugins.clone(),
         env_plugins: config.env_plugins.clone(),

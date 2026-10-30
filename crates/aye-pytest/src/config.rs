@@ -22,6 +22,7 @@ use aye_python_stdlib::fnmatch::SetTranslation;
 use aye_python_stdlib::glob;
 use aye_python_stdlib::os_path::{self, normalize_absolute};
 use aye_static::{EnvVars, ProcessEnv};
+use serde::Serialize;
 
 use crate::argv::{Lifted, MaxFail, option_values, without_addopts_override};
 use crate::getini::toml_json;
@@ -439,8 +440,10 @@ pub struct JunitSettings {
     pub family: String,
 }
 
-/// pytest's `--import-mode`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// pytest's `--import-mode`, serialized as pytest spells it (`prepend`,
+/// `append`, `importlib`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ImportMode {
     #[default]
     Prepend,
@@ -1082,6 +1085,18 @@ impl PytestConfig {
 mod tests {
     use super::*;
     use crate::argv::{Junit, split_junit};
+
+    /// The native context writes each as pytest spells it.
+    #[test]
+    fn import_modes_serialize_as_pytest_spells_them() {
+        let modes = [
+            ImportMode::Prepend,
+            ImportMode::Append,
+            ImportMode::Importlib,
+        ];
+        let written = serde_json::to_string(&modes).unwrap();
+        assert_eq!(written, r#"["prepend","append","importlib"]"#);
+    }
 
     fn write(root: &Path, rel: &str, body: &str) {
         let path = root.join(rel);
