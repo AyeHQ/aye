@@ -2,9 +2,10 @@
 //! (`cli.rs`: which command, and its arguments as clap reads them), the
 //! environment aye started in, once (`environment.rs`), resolves the
 //! command's settings from them and `[tool.aye]`, once and in the order that
-//! decides which usage error wins (`settings.rs`), and runs the command: a
-//! run (`session.rs`, whose exit code `exit.rs` decides), `aye config`
-//! (`config_cmd.rs`) or `aye show` (`show.rs`). What ends aye before a run's
+//! decides which usage error wins (`settings.rs`), and runs the command
+//! (`commands.rs`): a run (`commands/run.rs`, whose exit code
+//! `commands/run/exit.rs` decides), `aye config` (`commands/config.rs`) or
+//! `aye show` (`commands/show.rs`). What ends aye before a run's
 //! event stream starts is an `AyeError` (`error.rs`), and everything the
 //! binary writes beside the stream goes through its `Printer`
 //! (`printer.rs`). `main.rs` only calls [`main`].
@@ -197,8 +198,8 @@
 //!   written is a warning, never a failed run. History, folded after the
 //!   reporters, first gives each bad outcome its `history` (how the test
 //!   ended before this run), which reporters and the store see. `aye show`
-//!   (`show.rs`, detected as `aye config` is) reads it back and never runs
-//!   anything: the list of a run's results (its tests, and its failed
+//!   (`commands/show.rs`, detected as `aye config` is) reads it back and
+//!   never runs anything: the list of a run's results (its tests, and its failed
 //!   lifetimes, error diagnostics and modules skipped while collecting, so
 //!   that the whole list ends with the run's own summary), or the details
 //!   of the results named (by key, id, dotted name or path) or of every
@@ -219,22 +220,19 @@ use std::process;
 use aye_events::ExitCode;
 
 mod cli;
-mod config_cmd;
+mod commands;
 mod environment;
 mod error;
-mod exit;
 mod framework_args;
 mod positional;
 mod printer;
 mod registry;
-mod session;
 mod settings;
-mod show;
 
 use cli::Command;
+use commands::run::RunEnd;
 use environment::EnvironmentOptions;
 use error::AyeError;
-use exit::RunEnd;
 use printer::Printer;
 use settings::RunSettings;
 
@@ -253,17 +251,17 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> process::ExitCode {
 fn run(args: Vec<OsString>, printer: Printer) -> Result<ExitCode, AyeError> {
     match Command::parse(args)? {
         Command::Show(args) => {
-            show::show(&args, printer)?;
+            commands::show::show(&args, printer)?;
             Ok(ExitCode::Ok)
         }
         Command::Config(args) => {
             let settings = RunSettings::resolve(args, EnvironmentOptions::from_process(), printer)?;
-            config_cmd::print(&settings, printer)?;
+            commands::config::print(&settings, printer)?;
             Ok(ExitCode::Ok)
         }
         Command::Run(args) => {
             let settings = RunSettings::resolve(args, EnvironmentOptions::from_process(), printer)?;
-            Ok(process_exit_code(session::run(settings, printer)?))
+            Ok(process_exit_code(commands::run::run(settings, printer)?))
         }
     }
 }

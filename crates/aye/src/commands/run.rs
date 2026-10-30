@@ -27,11 +27,15 @@ use aye_select::Selection;
 use aye_static::EnvVars;
 
 use crate::error::AyeError;
-use crate::exit::{Errors, RunEnd, RunStage, RunVerdict};
 use crate::positional::Positional;
 use crate::printer::Printer;
 use crate::registry;
 use crate::settings::{JunitTarget, RunSettings};
+
+mod exit;
+
+pub(crate) use exit::RunEnd;
+use exit::{Errors, RunStage, RunVerdict};
 
 /// Run what `settings` ask for, and say how it ended ([`RunEnd`]), or why
 /// it couldn't start: a JUnit report that can't be written, before any
