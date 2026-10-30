@@ -28,16 +28,14 @@ use aye_static::EnvVars;
 
 use crate::exit::{Errors, RunStage, RunVerdict};
 use crate::positional::Positional;
+use crate::printer::Printer;
 use crate::registry;
 use crate::settings::{JunitTarget, RunSettings};
 
 /// Run what `settings` ask for, and say how it went: the exit code
-/// `run_finished` carries, or one before any event.
-#[expect(
-    clippy::print_stderr,
-    reason = "aye's own messages, outside the event stream"
-)]
-pub(crate) fn run(mut settings: RunSettings) -> ExitCode {
+/// `run_finished` carries, or one before any event. What aye says beside
+/// the stream goes to `printer`.
+pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> ExitCode {
     let started = Instant::now();
     // A report that can't be written fails before anything runs, not
     // after the whole suite.
@@ -45,10 +43,10 @@ pub(crate) fn run(mut settings: RunSettings) -> ExitCode {
     if let Some(junit) = &junit
         && let Err(err) = writable(&junit.path)
     {
-        eprintln!(
-            "aye: error: cannot write the JUnit XML report to {}: {err}",
+        printer.error(format_args!(
+            "cannot write the JUnit XML report to {}: {err}",
             junit.path.display()
-        );
+        ));
         return ExitCode::UsageError;
     }
     let state = StateDir::for_root(&settings.root);
@@ -89,6 +87,7 @@ pub(crate) fn run(mut settings: RunSettings) -> ExitCode {
         runner.stop_handle(),
         Arc::clone(&interrupted),
         Arc::clone(&running),
+        printer,
     );
 
     let file_failed = Arc::new(AtomicBool::new(false));
@@ -104,7 +103,7 @@ pub(crate) fn run(mut settings: RunSettings) -> ExitCode {
         writer.claim()
     };
     let mut out = Stream {
-        reporters: reporters(&settings, junit, &file_failed),
+        reporters: reporters(&settings, junit, &file_failed, printer),
         history: Some(Remember {
             history: &mut history,
             dir: state.path().to_path_buf(),
@@ -113,6 +112,7 @@ pub(crate) fn run(mut settings: RunSettings) -> ExitCode {
         stamper: Stamper::with_run(run_id),
         errors: Errors::default(),
         started,
+        printer,
     };
 
     out.emit(Event::RunStarted {
@@ -405,7 +405,7 @@ pub(crate) fn run(mut settings: RunSettings) -> ExitCode {
             here.rerun_from_here(&mut record);
             once.see(&mut record);
             conftests.see_record(&mut record);
-            Stream::deliver_to(reporters, history, store, errors, &mut record);
+            Stream::deliver_to(reporters, history, store, errors, printer, &mut record);
         })
     };
     let counts = Counts {
@@ -423,11 +423,13 @@ pub(crate) fn run(mut settings: RunSettings) -> ExitCode {
 
 /// The run's reporters: its output format's on stdout (and GitHub's
 /// annotations beside text, in a step of GitHub Actions), and the JUnit
-/// report, whose failure at the end `file_failed` remembers.
+/// report, whose failure at the end `printer` says and `file_failed`
+/// remembers.
 fn reporters<'a>(
     settings: &RunSettings,
     junit: Option<JunitTarget>,
     file_failed: &Arc<AtomicBool>,
+    printer: Printer,
 ) -> Tee<'a> {
     let mut tee = Tee::new();
     let verbosity = settings.output.verbosity.level();
@@ -457,6 +459,7 @@ fn reporters<'a>(
                 .with_prefix(junit.prefix)
                 .with_options(junit.options),
             failed: Arc::clone(file_failed),
+            printer,
         });
     }
     tee
@@ -891,6 +894,7 @@ struct Stream<'a> {
     stamper: Stamper,
     errors: Errors,
     started: Instant,
+    printer: Printer,
 }
 
 impl Stream<'_> {
@@ -901,6 +905,7 @@ impl Stream<'_> {
             &mut self.history,
             &mut self.store,
             &mut self.errors,
+            self.printer,
             &mut record,
         );
     }
@@ -909,15 +914,12 @@ impl Stream<'_> {
     /// this run). Then every reporter gets every record: one that fails
     /// (stdout, a closed pipe) stops writing, and the others carry on.
     /// Then history folds it, and the run store keeps it.
-    #[expect(
-        clippy::print_stderr,
-        reason = "aye's own messages, outside the event stream"
-    )]
     fn deliver_to(
         reporters: &mut Tee<'_>,
         history: &mut Option<Remember<'_>>,
         store: &mut Keep,
         errors: &mut Errors,
+        printer: Printer,
         record: &mut Record,
     ) {
         if let Some(history) = history.as_ref() {
@@ -929,7 +931,7 @@ impl Stream<'_> {
         if let Err(err) = reporters.report(record)
             && err.kind() != io::ErrorKind::BrokenPipe
         {
-            eprintln!("aye: cannot write output: {err}");
+            printer.note(format_args!("cannot write output: {err}"));
         }
         if let Some(history) = history.as_mut() {
             history.history.record(record);
@@ -937,10 +939,6 @@ impl Stream<'_> {
         store.record(record);
     }
 
-    #[expect(
-        clippy::print_stderr,
-        reason = "aye's own messages, outside the event stream"
-    )]
     fn finish(
         mut self,
         code: ExitCode,
@@ -957,18 +955,19 @@ impl Stream<'_> {
         if let Err(err) = self.reporters.finish()
             && err.kind() != io::ErrorKind::BrokenPipe
         {
-            eprintln!("aye: cannot write output: {err}");
+            self.printer
+                .note(format_args!("cannot write output: {err}"));
         }
         if let Some(history) = &self.history {
-            history.save();
+            history.save(self.printer);
         }
         // Kept for `aye show`; never fails the run.
         let runs = self.store.dir().to_path_buf();
         if let Err(err) = self.store.finish() {
-            eprintln!(
-                "aye: warning: could not keep this run for `aye show` in {}: {err}",
+            self.printer.warning(format_args!(
+                "could not keep this run for `aye show` in {}: {err}",
                 runs.display()
-            );
+            ));
         }
         // A report file that couldn't be written at the very end (it was
         // writable when the run started) fails the run, as it does pytest's;
@@ -1050,6 +1049,7 @@ impl<R: Reporter> Reporter for Stdout<R> {
 struct File<R> {
     inner: R,
     failed: Arc<AtomicBool>,
+    printer: Printer,
 }
 
 impl<R: Reporter> Reporter for File<R> {
@@ -1057,13 +1057,9 @@ impl<R: Reporter> Reporter for File<R> {
         self.inner.report(record)
     }
 
-    #[expect(
-        clippy::print_stderr,
-        reason = "aye's own messages, outside the event stream"
-    )]
     fn finish(&mut self) -> io::Result<()> {
         if let Err(err) = self.inner.finish() {
-            eprintln!("aye: error: {err}");
+            self.printer.error(err);
             self.failed.store(true, Ordering::Relaxed);
         }
         Ok(())
@@ -1090,18 +1086,14 @@ impl Remember<'_> {
         }
     }
 
-    #[expect(
-        clippy::print_stderr,
-        reason = "aye's own messages, outside the event stream"
-    )]
-    fn save(&self) {
+    fn save(&self, printer: Printer) {
         if self.history.changed()
             && let Err(err) = self.history.save(&self.dir)
         {
-            eprintln!(
-                "aye: warning: could not save history to {}: {err}",
+            printer.warning(format_args!(
+                "could not save history to {}: {err}",
                 self.dir.display()
-            );
+            ));
         }
     }
 }
@@ -1260,7 +1252,6 @@ const COLLECTING_GRACE: Duration = Duration::from_millis(1500);
 /// Before the run, a stop signal stops collection (`stop` the collector
 /// watches), and aye exits anyway if that takes too long; during the run
 /// (`running`), it stops the run cleanly.
-#[expect(clippy::print_stderr, reason = "says why aye stopped")]
 #[expect(
     clippy::exit,
     reason = "a second signal, or a collection that doesn't stop in time, ends aye at once"
@@ -1269,6 +1260,7 @@ fn install_interrupt(
     stop: aye_runner::StopHandle,
     collecting: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
+    printer: Printer,
 ) {
     let mut presses = Presses::default();
     let _ = ctrlc::set_handler(move || match presses.press(Instant::now()) {
@@ -1282,7 +1274,7 @@ fn install_interrupt(
                     std::thread::sleep(COLLECTING_GRACE);
                     if !running.load(Ordering::SeqCst) {
                         stop.kill();
-                        eprintln!("\naye: interrupted");
+                        printer.interrupted();
                         std::process::exit(i32::from(u8::from(ExitCode::Interrupted)));
                     }
                 });

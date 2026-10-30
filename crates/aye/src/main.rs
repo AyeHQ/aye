@@ -241,13 +241,13 @@ use std::process;
 
 use clap::error::ErrorKind;
 
-mod busy;
 mod cli;
 mod config_cmd;
 mod environment;
 mod exit;
 mod framework_args;
 mod positional;
+mod printer;
 mod registry;
 mod session;
 mod settings;
@@ -256,13 +256,11 @@ mod show;
 use aye_events::ExitCode;
 use cli::Command;
 use environment::EnvironmentOptions;
+use printer::Printer;
 use settings::RunSettings;
 
-#[expect(
-    clippy::print_stderr,
-    reason = "aye's own messages, outside the event stream"
-)]
 fn main() -> process::ExitCode {
+    let printer = Printer;
     let command = match Command::parse(std::env::args_os().collect()) {
         Ok(command) => command,
         Err(err) => {
@@ -275,26 +273,26 @@ fn main() -> process::ExitCode {
         }
     };
     let (args, show_config) = match command {
-        Command::Show(args) => return show::main(&args).into(),
+        Command::Show(args) => return show::main(&args, printer).into(),
         Command::Config(args) => (args, true),
         Command::Run(args) => (args, false),
     };
     // The environment is read once, here: everything after reads this.
-    let settings = match RunSettings::resolve(args, EnvironmentOptions::from_process()) {
+    let settings = match RunSettings::resolve(args, EnvironmentOptions::from_process(), printer) {
         Ok(settings) => settings,
         Err(err) => {
-            eprintln!("aye: error: {err:#}");
+            printer.error(format_args!("{err:#}"));
             return ExitCode::UsageError.into();
         }
     };
     if show_config {
-        return match config_cmd::print(&settings) {
+        return match config_cmd::print(&settings, printer) {
             Ok(()) => process::ExitCode::SUCCESS,
             Err(err) => {
-                eprintln!("aye: error: {err:#}");
+                printer.error(format_args!("{err:#}"));
                 ExitCode::UsageError.into()
             }
         };
     }
-    session::run(settings).into()
+    session::run(settings, printer).into()
 }

@@ -1,15 +1,16 @@
 //! `aye config`: the resolved configuration, and where each value came from.
 
-use std::io::{self, Write};
+use std::io::Write;
 
 use anyhow::Result;
 
 use aye_config::ValueSource;
 
+use crate::printer::Printer;
 use crate::settings::RunSettings;
 
-pub(crate) fn print(settings: &RunSettings) -> Result<()> {
-    let mut out = io::stdout().lock();
+pub(crate) fn print(settings: &RunSettings, printer: Printer) -> Result<()> {
+    let mut out = printer.stdout().lock();
     let root = &settings.root;
     writeln!(out, "root     {}", root.display())?;
     let python = &settings.interpreter;

@@ -62,6 +62,7 @@ use aye_select::Selection;
 
 use crate::cli::ShowArgs;
 use crate::positional;
+use crate::printer::Printer;
 use crate::settings::ShowSettings;
 
 /// How many of the closest names a selector naming nothing lists.
@@ -81,19 +82,15 @@ impl From<io::Error> for Problem {
     }
 }
 
-#[expect(
-    clippy::print_stderr,
-    reason = "aye's own messages, outside the event stream"
-)]
-pub(crate) fn main(args: &ShowArgs) -> ExitCode {
-    match show(args) {
+pub(crate) fn main(args: &ShowArgs, printer: Printer) -> ExitCode {
+    match show(args, printer) {
         Ok(()) => ExitCode::Ok,
         Err(Problem::Usage(message)) => {
-            eprintln!("aye: error: {message}");
+            printer.error(message);
             ExitCode::UsageError
         }
         Err(Problem::NoRun(message)) => {
-            eprintln!("aye: {message}");
+            printer.note(message);
             ExitCode::NoTests
         }
     }
@@ -109,13 +106,13 @@ enum Wanted {
     Test(String),
 }
 
-fn show(args: &ShowArgs) -> Result<(), Problem> {
+fn show(args: &ShowArgs, printer: Printer) -> Result<(), Problem> {
     let settings = ShowSettings::resolve(args).map_err(Problem::Usage)?;
     let (cwd, root, format) = (&settings.cwd, &settings.root, settings.format);
     let store = RunStore::new(aye_fs::StateDir::for_root(root).bucket(aye_fs::StateBucket::Runs));
     let keep = settings.keep_runs;
     if args.runs {
-        return list_runs(&store, format, keep);
+        return list_runs(&store, format, keep, printer);
     }
     let meta = pick(&store, args.run.as_deref(), keep)?;
     let unreadable = |err: io::Error| {
@@ -126,7 +123,7 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
         ))
     };
     if args.log {
-        let mut out = io::BufWriter::new(io::stdout().lock());
+        let mut out = io::BufWriter::new(printer.stdout().lock());
         return match store
             .copy_log(&meta.run.to_string(), &mut out)
             .and_then(|()| out.flush())
@@ -288,7 +285,12 @@ fn ids(runs: &[RunMeta]) -> String {
 
 /// `aye show --runs`: the stored runs, the last first (the one `aye show`
 /// shows), then the one that finished last.
-fn list_runs(store: &RunStore, format: OutputFormat, keep: usize) -> Result<(), Problem> {
+fn list_runs(
+    store: &RunStore,
+    format: OutputFormat,
+    keep: usize,
+    printer: Printer,
+) -> Result<(), Problem> {
     let runs = store.runs();
     if runs.is_empty() {
         return Err(no_run(store, keep));
@@ -320,7 +322,7 @@ fn list_runs(store: &RunStore, format: OutputFormat, keep: usize) -> Result<(), 
             }
         }
     }
-    match io::stdout().lock().write_all(&out) {
+    match printer.stdout().lock().write_all(&out) {
         Err(err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
         other => Ok(other?),
     }

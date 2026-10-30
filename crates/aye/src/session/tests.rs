@@ -82,6 +82,7 @@ fn a_closed_stdout_starves_no_other_reporter() {
         stamper: Stamper::with_run("r"),
         errors: Errors::default(),
         started: Instant::now(),
+        printer: Printer,
     };
     for _ in 0..5 {
         stream.emit(Event::CollectionStarted);
@@ -110,6 +111,7 @@ fn the_run_store_keeps_every_record_of_the_stream() {
         stamper: Stamper::with_run("0123456789abcdef"),
         errors: Errors::default(),
         started: Instant::now(),
+        printer: Printer,
     };
     stream.emit(Event::RunStarted {
         schema_version: aye_events::SCHEMA_VERSION,
@@ -233,6 +235,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
         stamper: Stamper::with_run("0123456789abcdef"),
         errors: Errors::default(),
         started: Instant::now(),
+        printer: Printer,
     };
     stream.emit(Event::RunStarted {
         schema_version: aye_events::SCHEMA_VERSION,
@@ -308,12 +311,14 @@ fn a_report_that_fails_at_the_end_fails_the_run() {
         reporters: Tee::new().with(File {
             inner: Junit::new(blocker.join("out.xml")),
             failed: Arc::clone(&failed),
+            printer: Printer,
         }),
         history: None,
         store: Keep::new(RunWriter::new(std::env::temp_dir().join("aye-no-store"), 0)),
         stamper: Stamper::with_run("r"),
         errors: Errors::default(),
         started: Instant::now(),
+        printer: Printer,
     };
     let code = stream.finish(ExitCode::Ok, Counts::default(), None, &failed);
     assert!(failed.load(Ordering::Relaxed));

@@ -7,23 +7,22 @@
 //! report. Nothing after resolution reads the arguments again.
 
 use std::fs;
-use std::io::{self, IsTerminal as _};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 use aye_adapter::{Adapter, FrameworkDefaults, Project};
 use aye_collect::Prepared;
-use aye_config::{AyeSettings, OutputFormat, Sourced, ValueSource};
+use aye_config::{AyeSettings, Sourced, ValueSource};
 use aye_events::AdapterName;
 use aye_fs::normalize_absolute;
 use aye_protocol::Policy;
 use aye_provision::Interpreter;
 use aye_select::Selection;
 
-use crate::busy::Busy;
 use crate::cli::{RunArgs, RunCompatArgs, Verbosity};
 use crate::environment::EnvironmentOptions;
 use crate::positional::{self, Positional, is_path_like, path_part};
+use crate::printer::Printer;
 use crate::{framework_args, registry};
 
 mod junit;
@@ -96,8 +95,13 @@ impl RunSettings {
     /// rule, the adapters `[tool.aye]` names and the tables of those that
     /// don't run (the registry), `--no-refine` without `--co`, the adapters'
     /// own configuration (preparing them), then the command line's `-k` and
-    /// `-m`. The rest can't fail.
-    pub(crate) fn resolve(args: RunArgs, env: EnvironmentOptions) -> Result<Self> {
+    /// `-m`. The rest can't fail. `printer` shows that aye is collecting,
+    /// if preparing the adapters takes a while.
+    pub(crate) fn resolve(
+        args: RunArgs,
+        env: EnvironmentOptions,
+        printer: Printer,
+    ) -> Result<Self> {
         let RunArgs {
             tests,
             keyword,
@@ -183,8 +187,7 @@ impl RunSettings {
             OutputSettings::resolve(output, &tool_aye, Verbosity::new(verbose, quiet), color);
         // Choosing and preparing the adapters can walk the project; on a
         // terminal, say so if it takes a while.
-        let busy =
-            Busy::start(output.format.value == OutputFormat::Text && io::stdout().is_terminal());
+        let busy = printer.collecting(output.format.value);
         // `--co --no-refine` lists without importing: pytest's cases are the
         // static recognizer's prediction.
         let static_listing = no_refine && collect_only;
