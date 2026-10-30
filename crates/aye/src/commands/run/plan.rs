@@ -30,7 +30,8 @@ pub(super) fn plan(
         cases: selected.cases,
         policy: settings.policy.clone(),
         contexts: settings
-            .prepared
+            .adapters
+            .prepared()
             .iter()
             .map(|(name, r)| (name.clone(), r.context()))
             .collect(),

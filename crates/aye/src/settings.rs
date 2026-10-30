@@ -10,9 +10,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
-use aye_adapter::{Adapter, FrameworkDefaults, Project};
-use aye_collect::Prepared;
-use aye_config::{AyeSettings, Sourced, ValueSource};
+use aye_adapter::{FrameworkDefaults, Project};
+use aye_config::{AyeSettings, Sourced};
 use aye_events::AdapterName;
 use aye_fs::normalize_absolute;
 use aye_protocol::Policy;
@@ -21,9 +20,10 @@ use aye_select::Selection;
 
 use crate::cli::{RunArgs, RunCompatArgs, Verbosity};
 use crate::environment::EnvironmentOptions;
+use crate::framework_args;
 use crate::positional::{self, Positional, is_path_like, path_part};
 use crate::printer::Printer;
-use crate::{framework_args, registry};
+use crate::registry::{self, ActiveAdapters, Listing};
 
 mod junit;
 mod maxfail;
@@ -59,12 +59,9 @@ pub(crate) struct RunSettings {
     /// The interpreter that runs the tests, and where it came from, as `aye
     /// config` shows it.
     pub(crate) interpreter: Sourced<Interpreter>,
-    /// The adapters the run uses, in priority order, and why those.
-    pub(crate) adapters: Vec<Box<dyn Adapter>>,
-    pub(crate) adapters_source: ValueSource,
-    /// The adapters prepared for the project, in the same order: those with
-    /// something to collect here.
-    pub(crate) prepared: Vec<Prepared>,
+    /// The adapters the run uses, in priority order, why those, and those
+    /// prepared for the project.
+    pub(crate) adapters: ActiveAdapters,
     /// What static selection keeps.
     pub(crate) selection: Selection,
     pub(crate) workers: u32,
@@ -190,28 +187,26 @@ impl RunSettings {
         let busy = printer.collecting(output.format.value);
         // `--co --no-refine` lists without importing: pytest's cases are the
         // static recognizer's prediction.
-        let static_listing = no_refine && collect_only;
-        let chosen = registry::choose(&project, static_listing)?;
-        let adapters_source = chosen.source;
-        let adapters = chosen.adapters;
+        let listing = if no_refine && collect_only {
+            Listing::Static
+        } else {
+            Listing::Refine
+        };
+        let chosen = registry::choose(&project, listing)?;
         // A run imports every pytest file it runs: aye's pytest front-end
         // lists each one, so there is no static run to fall back on.
-        if no_refine
-            && !collect_only
-            && adapters
-                .iter()
-                .any(|adapter| adapter.name() == aye_adapter_pytest::NAME)
-        {
+        if no_refine && !collect_only && chosen.refine_every_file() {
             anyhow::bail!(
                 "--no-refine lists tests without importing them, with --co; a run of \
                  pytest's tests imports every file it runs (aye's pytest front-end reads \
                  each one), so it can't do without"
             );
         }
-        let prepared = prepare(&adapters, &project)?;
+        let adapters = chosen.prepare(&project)?;
         // What each prepared adapter's framework says about the run, in the
         // same order.
-        let defaults: Vec<(AdapterName, FrameworkDefaults)> = prepared
+        let defaults: Vec<(AdapterName, FrameworkDefaults)> = adapters
+            .prepared()
             .iter()
             .map(|(name, recognizer)| (name.clone(), recognizer.defaults()))
             .collect();
@@ -246,8 +241,6 @@ impl RunSettings {
             env,
             interpreter,
             adapters,
-            adapters_source,
-            prepared,
             selection,
             workers,
             output,
@@ -277,11 +270,6 @@ impl RunSettings {
             tool_aye: &self.tool_aye,
         }
     }
-
-    /// The names of the adapters the run uses, in priority order.
-    pub(crate) fn adapter_names(&self) -> Vec<AdapterName> {
-        self.adapters.iter().map(|a| a.name()).collect()
-    }
 }
 
 /// `dir` when collecting from it means the user's whole home directory or a
@@ -293,21 +281,6 @@ fn everything(dir: &Path) -> Option<String> {
     }
     let home = std::env::home_dir().and_then(|home| fs::canonicalize(home).ok())?;
     (dir == home).then(|| format!("your whole home directory ({})", dir.display()))
-}
-
-/// Prepare each adapter for the project, knowing the others.
-fn prepare(adapters: &[Box<dyn Adapter>], project: &Project<'_>) -> Result<Vec<Prepared>> {
-    let names: Vec<AdapterName> = adapters.iter().map(|adapter| adapter.name()).collect();
-    let mut prepared: Vec<Prepared> = Vec::new();
-    for adapter in adapters {
-        if let Some(recognizer) = adapter
-            .prepare_among(project, &names)
-            .with_context(|| format!("invalid {} configuration", adapter.name()))?
-        {
-            prepared.push((adapter.name(), recognizer));
-        }
-    }
-    Ok(prepared)
 }
 
 /// aye's options that shape the run, as a rerun repeats them

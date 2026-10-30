@@ -155,15 +155,16 @@ impl RerunFromHere<'_> {
 }
 
 /// A file's collection errors from the batches of adapters pytest collects
-/// in one module ([`registry::collects_in_one_module`]: the unittest and
-/// pytest adapters, which may each have tests in the file), counted as
+/// in one module ([`registry::AdapterTraits::one_module`]: the unittest
+/// and pytest adapters, which may each have tests in the file), counted as
 /// pytest, the referee, counts them: its `Module` fails once, however many
 /// of these adapters load the file. So a file shows as many errors as the
 /// adapter reporting the most for it (pytest's batch may report its doctest
 /// collector's too); another adapter's beyond those becomes an info saying
 /// so. It isn't dropped, so the log's `seq` keeps counting every record.
 /// Collection's errors count too ([`Self::refined`]): aye's pytest
-/// front-end lists every pytest file in refinement, so a file that fails
+/// front-end lists every pytest file in refinement
+/// ([`registry::AdapterTraits::refines_every_file`]), so a file that fails
 /// to import there has its error from collection, not from a batch.
 #[derive(Debug, Default)]
 pub(crate) struct OneModuleErrors {
@@ -183,7 +184,7 @@ impl OneModuleErrors {
         if diagnostic.severity != Severity::Error
             || diagnostic.code != DiagnosticCode::CollectionError
             || diagnostic.path.is_nowhere()
-            || registry::is_conftest(diagnostic.path.as_str())
+            || registry::support_file(diagnostic.path.as_str()).is_some()
         {
             return;
         }
@@ -209,7 +210,7 @@ impl OneModuleErrors {
                 let Some(adapter) = batches.of(batch) else {
                     return;
                 };
-                if !registry::collects_in_one_module(adapter) {
+                if !registry::traits(adapter).one_module {
                     return;
                 }
                 let counts = self
@@ -248,13 +249,13 @@ impl OneModuleErrors {
 /// imports the conftests pytest would and words their failures as the
 /// pytest adapter does, but a frame or a word apart would make two errors
 /// of one. So a `usage-error` or `collection-error` on a `conftest.py`
-/// (`registry::is_conftest`) that another adapter already reported with
-/// that code, in refinement (where who reported it isn't known, and each
-/// adapter reports one once) or in a batch, becomes an info saying so,
-/// with its own words when they differ, kept in the stream as
-/// [`OneModuleErrors`] keeps its. One adapter's own repeats (every pytest
-/// batch reports an initial conftest's failure) stay errors, which
-/// renderers show once.
+/// ([`registry::AdapterTraits::support_file`]) that another adapter
+/// already reported with that code, in refinement (where who reported it
+/// isn't known, and each adapter reports one once) or in a batch, becomes
+/// an info saying so, with its own words when they differ, kept in the
+/// stream as [`OneModuleErrors`] keeps its. One adapter's own repeats
+/// (every pytest batch reports an initial conftest's failure) stay errors,
+/// which renderers show once.
 #[derive(Debug, Default)]
 pub(crate) struct OneConftestError {
     /// By code and path, who reported the error first (an adapter, or
@@ -281,7 +282,7 @@ impl OneConftestError {
             _ => return,
         };
         if diagnostic.severity != Severity::Error
-            || !registry::is_conftest(diagnostic.path.as_str())
+            || registry::support_file(diagnostic.path.as_str()).is_none()
         {
             return;
         }

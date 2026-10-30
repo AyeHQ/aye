@@ -189,9 +189,7 @@ fn emit_diagnostics(
     passes: &mut Passes<'_>,
     out: &mut Stream<'_>,
 ) -> bool {
-    let pytest = aye_adapter_pytest::NAME;
-    let pytest_runs = settings.prepared.iter().any(|(name, _)| *name == pytest);
-    let refined_by = pytest_runs.then_some(&pytest);
+    let refined_by = settings.adapters.refined_by();
     let mut errors = false;
     let broken = broken_conftest_dirs(diagnostics);
     for diagnostic in diagnostics {

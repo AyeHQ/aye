@@ -119,13 +119,18 @@ impl Reach {
 }
 
 /// The directories of the conftests collection reported an error for (a
-/// `conftest.py` that failed to load, `registry::is_conftest`), relative to
-/// the root, each with its trailing `/` (the root's is empty).
+/// `conftest.py` that failed to load: a support file,
+/// [`registry::support_file`]), relative to the root, each with its
+/// trailing `/` (the root's is empty).
 pub(super) fn broken_conftest_dirs(diagnostics: &[Diagnostic]) -> Vec<&str> {
     diagnostics
         .iter()
-        .filter(|d| d.severity == Severity::Error && registry::is_conftest(d.path.as_str()))
-        .map(|d| &d.path.as_str()[..d.path.as_str().len() - "conftest.py".len()])
+        .filter(|d| d.severity == Severity::Error)
+        .filter_map(|d| {
+            let path = d.path.as_str();
+            let file = registry::support_file(path)?;
+            Some(&path[..path.len() - file.len()])
+        })
         .collect()
 }
 

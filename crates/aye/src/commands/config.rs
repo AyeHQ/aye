@@ -29,12 +29,12 @@ pub(crate) fn print(settings: &RunSettings, printer: Printer) -> Result<()> {
         output.shown(),
         output.format.source.display_for("output")
     )?;
-    let adapters = settings.adapter_names();
+    let adapters = settings.adapters.names();
     writeln!(
         out,
         "adapters {}  ({})",
         adapters.join(", "),
-        why(&settings.adapters_source)
+        why(settings.adapters.source())
     )?;
     // Which engine runs the tests: aye's own, whatever the framework.
     writeln!(out, "engine   native")?;
@@ -50,7 +50,11 @@ pub(crate) fn print(settings: &RunSettings, printer: Printer) -> Result<()> {
     for adapter in adapters {
         writeln!(out)?;
         writeln!(out, "[{adapter}]")?;
-        let Some((_, recognizer)) = settings.prepared.iter().find(|(name, _)| *name == adapter)
+        let Some((_, recognizer)) = settings
+            .adapters
+            .prepared()
+            .iter()
+            .find(|(name, _)| *name == adapter)
         else {
             // Its `prepare` found nothing for it to collect here (doctest
             // without doctests turned on).

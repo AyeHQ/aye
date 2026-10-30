@@ -136,7 +136,7 @@ fn runner_options(settings: &RunSettings, run_id: &RunId) -> RunnerOptions {
         cwd: settings.cwd.clone(),
         workers: settings.workers,
         prelude: registry::PRELUDE,
-        runtimes: settings.adapters.iter().map(|a| a.runtime()).collect(),
+        runtimes: settings.adapters.runtimes(),
         // pytest-xdist's `testrun_uid`, which its workers share: one per
         // run, the run's id.
         env: vec![(

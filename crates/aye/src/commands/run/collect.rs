@@ -48,7 +48,7 @@ pub(super) fn collect(
     // refinement has no use for it).
     let collector = Collector::new(
         project,
-        &settings.prepared,
+        settings.adapters.prepared(),
         Options {
             strict: settings.strict,
             cache_dir: Some(state.bucket(StateBucket::Cache)),
@@ -108,7 +108,8 @@ fn targets(settings: &RunSettings, project: Project<'_>) -> Vec<PathBuf> {
         ..project
     };
     let mut targets: Vec<PathBuf> = settings
-        .prepared
+        .adapters
+        .prepared()
         .iter()
         .flat_map(|(_, recognizer)| recognizer.roots(&bare))
         .filter(|root| root.exists())

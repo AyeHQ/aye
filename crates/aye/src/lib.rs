@@ -115,7 +115,7 @@
 //!   a file failing to import are one collection error: the file shows as
 //!   many as the adapter reporting the most for it, and another adapter's
 //!   beyond those become infos saying so, kept in the stream
-//!   (`registry::collects_in_one_module`). The doctest adapter's are
+//!   (the registry's `AdapterTraits`). The doctest adapter's are
 //!   pytest's `DoctestModule`, another collector, and count apart. A
 //!   conftest pytest fails to load is one error too, however many adapters
 //!   load it (the doctest adapter imports the conftests pytest would): a

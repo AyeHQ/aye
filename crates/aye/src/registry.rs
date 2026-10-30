@@ -1,35 +1,139 @@
-//! The adapters the runner knows, in priority order, which of them a
-//! project runs, what every worker installs before any adapter's modules
-//! ([`PRELUDE`]), and what the binary must know of them beyond the
-//! contract (which ones pytest collects in one module, what a conftest
-//! is). Linking an adapter here is the only place one is depended on.
-//! aye's engine runs every test: the pytest adapter reads pytest's tests
-//! with its front-end and aye's own `pytest` module, which every adapter's
+//! The adapters the runner knows, in priority order, each with what the
+//! binary must know of it beyond the contract ([`AdapterTraits`]: which
+//! ones pytest collects in one module, which refines every file it
+//! collects, the support file pytest loads once), which of them a project
+//! runs and their preparation ([`choose`], [`ActiveAdapters`]), and what
+//! every worker installs before any adapter's modules ([`PRELUDE`]).
+//! Linking an adapter here is the only place one is depended on. aye's
+//! engine runs every test: the pytest adapter reads pytest's tests with
+//! its front-end and aye's own `pytest` module, which every adapter's
 //! workers get, so pytest is never imported.
 
 use anyhow::{Context as _, Result, bail};
 use aye_adapter::{Adapter, Project};
 use aye_adapter_pytest::native::SHIM_MODULE;
+use aye_collect::Prepared;
 use aye_config::ValueSource;
 use aye_engine::{MODEL_MODULE, NATIVE_ENGINE_MODULE, REWRITE_MODULE};
 use aye_events::AdapterName;
-use aye_protocol::ModuleSet;
+use aye_protocol::{ModuleSet, Runtime};
 
-/// Every adapter the binary links, in priority order: the pytest adapter
-/// (for a static listing, `aye --co --no-refine`, the one that predicts
-/// without importing: [`aye_adapter_pytest::Pytest::static_listing`]), then
-/// unittest's and doctest's.
-fn known(static_listing: bool) -> Vec<Box<dyn Adapter>> {
-    let pytest = if static_listing {
-        aye_adapter_pytest::Pytest::static_listing()
-    } else {
-        aye_adapter_pytest::Pytest::default()
+/// What the binary must know of an adapter beyond the contract, which each
+/// adapter it links declares ([`KNOWN`]): the rules by which pytest, the
+/// referee whenever it runs, reports some errors once, and what a run can
+/// do without refinement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AdapterTraits {
+    /// Whether pytest collects the adapter's tests of a file through the
+    /// one collector that collects pytest's own, its `Module` (which
+    /// collects `TestCase` classes too): a file that fails to import is
+    /// then one collection error, however many of these adapters load it.
+    /// The doctest adapter's tests are pytest's `DoctestModule`, another
+    /// collector, whose error pytest reports as well.
+    pub(crate) one_module: bool,
+    /// Whether its refinement lists every file it collects (aye's pytest
+    /// front-end): a run of its tests imports every file it runs, so it
+    /// can't do without refinement, and a file's collection error that
+    /// refinement reports is its.
+    pub(crate) refines_every_file: bool,
+    /// The name of the support file its framework loads once per session,
+    /// however many adapters load it (pytest's `conftest.py`, which the
+    /// doctest adapter imports too): its failure to load is one error.
+    pub(crate) support_file: Option<&'static str>,
+}
+
+impl AdapterTraits {
+    /// What an adapter the binary doesn't link would declare: nothing.
+    const NONE: Self = Self {
+        one_module: false,
+        refines_every_file: false,
+        support_file: None,
     };
-    vec![
-        Box::new(pytest),
-        Box::new(aye_adapter_unittest::Unittest),
-        Box::new(aye_adapter_doctest::Doctest),
-    ]
+}
+
+/// How the pytest adapter lists its cases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Listing {
+    /// As its front-end lists them, refining every test file.
+    Refine,
+    /// As the static recognizer predicts them, importing nothing: `aye
+    /// --co --no-refine` ([`aye_adapter_pytest::Pytest::static_listing`]).
+    Static,
+}
+
+/// An adapter the binary links: its name, its traits, and the adapter
+/// itself, for a listing.
+struct Known {
+    name: AdapterName,
+    traits: AdapterTraits,
+    adapter: fn(Listing) -> Box<dyn Adapter>,
+}
+
+/// Every adapter the binary links, in priority order: the pytest adapter,
+/// then unittest's and doctest's.
+static KNOWN: [Known; 3] = [
+    Known {
+        name: aye_adapter_pytest::NAME,
+        traits: AdapterTraits {
+            one_module: true,
+            refines_every_file: true,
+            support_file: Some("conftest.py"),
+        },
+        adapter: pytest,
+    },
+    Known {
+        name: aye_adapter_unittest::NAME,
+        traits: AdapterTraits {
+            one_module: true,
+            ..AdapterTraits::NONE
+        },
+        adapter: unittest,
+    },
+    Known {
+        name: aye_adapter_doctest::NAME,
+        traits: AdapterTraits::NONE,
+        adapter: doctest,
+    },
+];
+
+fn pytest(listing: Listing) -> Box<dyn Adapter> {
+    match listing {
+        Listing::Refine => Box::new(aye_adapter_pytest::Pytest::default()),
+        Listing::Static => Box::new(aye_adapter_pytest::Pytest::static_listing()),
+    }
+}
+
+fn unittest(_: Listing) -> Box<dyn Adapter> {
+    Box::new(aye_adapter_unittest::Unittest)
+}
+
+fn doctest(_: Listing) -> Box<dyn Adapter> {
+    Box::new(aye_adapter_doctest::Doctest)
+}
+
+/// Every adapter the binary links, in priority order, made for `listing`.
+fn known(listing: Listing) -> Vec<Box<dyn Adapter>> {
+    KNOWN.iter().map(|known| (known.adapter)(listing)).collect()
+}
+
+/// The traits of the adapter named `name`: nothing for a name the binary
+/// doesn't link.
+pub(crate) fn traits(name: &AdapterName) -> AdapterTraits {
+    KNOWN
+        .iter()
+        .find(|known| known.name == *name)
+        .map_or(AdapterTraits::NONE, |known| known.traits)
+}
+
+/// The support file a diagnostic's path (relative to the root, `/`
+/// separators) names, when it names one some adapter's framework loads
+/// once per session ([`AdapterTraits::support_file`]): its file name.
+pub(crate) fn support_file(path: &str) -> Option<&'static str> {
+    let name = path.rsplit('/').next()?;
+    KNOWN
+        .iter()
+        .filter_map(|known| known.traits.support_file)
+        .find(|file| *file == name)
 }
 
 /// What every worker installs after aye's engine and before its adapters'
@@ -50,35 +154,86 @@ pub(crate) const PRELUDE: ModuleSet = ModuleSet::new(
     },
 );
 
-/// Whether pytest, the referee whenever it runs, collects the adapter's
-/// tests of a file through the one collector that collects pytest's own,
-/// its `Module` (which collects `TestCase` classes too): a file that fails
-/// to import is then one collection error, however many of these adapters
-/// load it. The doctest adapter's tests are pytest's `DoctestModule`,
-/// another collector, whose error pytest reports as well.
-pub(crate) fn collects_in_one_module(adapter: &AdapterName) -> bool {
-    *adapter == aye_adapter_pytest::NAME || *adapter == aye_adapter_unittest::NAME
-}
-
-/// Whether a diagnostic's path (relative to the root, `/` separators) is a
-/// pytest conftest, which pytest loads once per session however many
-/// adapters load it (the doctest adapter imports the conftests pytest
-/// would): its failure to load is one error.
-pub(crate) fn is_conftest(path: &str) -> bool {
-    path.rsplit('/').next() == Some("conftest.py")
-}
-
 /// The adapters a run uses, in priority order, and why: `[tool.aye]
-/// adapters`, whose source is the table's, or [`DEFAULT_ADAPTERS`].
+/// adapters`, whose source is the table's, or [`DEFAULT_ADAPTERS`]. Not
+/// prepared yet ([`Chosen::prepare`]).
 pub(crate) struct Chosen {
-    pub adapters: Vec<Box<dyn Adapter>>,
-    pub source: ValueSource,
+    adapters: Vec<Box<dyn Adapter>>,
+    source: ValueSource,
 }
 
 impl Chosen {
-    #[cfg(test)]
+    /// Their names, in priority order.
     pub(crate) fn names(&self) -> Vec<AdapterName> {
         self.adapters.iter().map(|a| a.name()).collect()
+    }
+
+    /// Whether one of them refines every file it collects, which a run of
+    /// its tests can't do without ([`AdapterTraits::refines_every_file`]).
+    pub(crate) fn refine_every_file(&self) -> bool {
+        self.adapters
+            .iter()
+            .any(|adapter| traits(&adapter.name()).refines_every_file)
+    }
+
+    /// Prepare each adapter for the project, knowing the others.
+    pub(crate) fn prepare(self, project: &Project<'_>) -> Result<ActiveAdapters> {
+        let names = self.names();
+        let mut prepared: Vec<Prepared> = Vec::new();
+        for adapter in &self.adapters {
+            if let Some(recognizer) = adapter
+                .prepare_among(project, &names)
+                .with_context(|| format!("invalid {} configuration", adapter.name()))?
+            {
+                prepared.push((adapter.name(), recognizer));
+            }
+        }
+        Ok(ActiveAdapters {
+            chosen: self,
+            prepared,
+        })
+    }
+}
+
+/// The adapters a run uses ([`Chosen`]), prepared for the project: those
+/// with something to collect here have a recognizer, in the same order.
+pub(crate) struct ActiveAdapters {
+    chosen: Chosen,
+    prepared: Vec<Prepared>,
+}
+
+impl ActiveAdapters {
+    /// The names of the adapters the run uses, in priority order.
+    pub(crate) fn names(&self) -> Vec<AdapterName> {
+        self.chosen.names()
+    }
+
+    /// Why the run uses those: `[tool.aye] adapters`' source, or
+    /// [`DEFAULT_ADAPTERS`].
+    pub(crate) const fn source(&self) -> &ValueSource {
+        &self.chosen.source
+    }
+
+    /// What every worker builds an executor from, for each adapter the run
+    /// uses, prepared or not.
+    pub(crate) fn runtimes(&self) -> Vec<Runtime> {
+        self.chosen.adapters.iter().map(|a| a.runtime()).collect()
+    }
+
+    /// The adapters prepared for the project, each with its recognizer, in
+    /// priority order.
+    pub(crate) fn prepared(&self) -> &[Prepared] {
+        &self.prepared
+    }
+
+    /// The first prepared adapter that refines every file it collects
+    /// ([`AdapterTraits::refines_every_file`]): a file's collection error
+    /// that refinement reports counts as its.
+    pub(crate) fn refined_by(&self) -> Option<&AdapterName> {
+        self.prepared
+            .iter()
+            .map(|(name, _)| name)
+            .find(|name| traits(name).refines_every_file)
     }
 }
 
@@ -93,12 +248,11 @@ pub(crate) const DEFAULT_ADAPTERS: ValueSource =
 /// pytest, pytest's rules collect unittest's `TestCase` classes as well,
 /// pytest lists a file's doctests before its other tests, and the doctest
 /// adapter prepares nothing unless doctests are on. A project that wants
-/// `python -m unittest discover`'s rules names `unittest`. With
-/// `static_listing` (`aye --co --no-refine`), the pytest adapter predicts
-/// its cases without importing. The tables of adapters that don't run
-/// (`[tool.aye.unittest]`) are checked all the same: a bad value is an
-/// error whichever adapters run. `[tool.aye]` is the project's.
-pub(crate) fn choose(project: &Project<'_>, static_listing: bool) -> Result<Chosen> {
+/// `python -m unittest discover`'s rules names `unittest`. `listing` says
+/// how the pytest adapter lists its cases. The tables of adapters that
+/// don't run (`[tool.aye.unittest]`) are checked all the same: a bad value
+/// is an error whichever adapters run. `[tool.aye]` is the project's.
+pub(crate) fn choose(project: &Project<'_>, listing: Listing) -> Result<Chosen> {
     let settings = project.tool_aye;
     let (names, source) = match &settings.adapters {
         Some(names) => (names.value.names().to_vec(), names.source.clone()),
@@ -107,7 +261,7 @@ pub(crate) fn choose(project: &Project<'_>, static_listing: bool) -> Result<Chos
             DEFAULT_ADAPTERS,
         ),
     };
-    let mut known = known(static_listing);
+    let mut known = known(listing);
     let all = known
         .iter()
         .map(|a| a.name())
@@ -172,7 +326,47 @@ mod tests {
             }),
             ..AyeSettings::default()
         };
-        choose(&project(dir.path(), &[], &settings), false).map(|c| c.names())
+        choose(&project(dir.path(), &[], &settings), Listing::Refine).map(|c| c.names())
+    }
+
+    /// The table names each adapter as the adapter names itself, in
+    /// priority order, whichever the listing.
+    #[test]
+    fn the_known_adapters_are_pytest_unittest_and_doctest_in_order() {
+        let named: Vec<AdapterName> = KNOWN.iter().map(|known| known.name.clone()).collect();
+        assert_eq!(named, ["pytest", "unittest", "doctest"]);
+        for listing in [Listing::Refine, Listing::Static] {
+            let adapters: Vec<AdapterName> = known(listing).iter().map(|a| a.name()).collect();
+            assert_eq!(adapters, named, "{listing:?}");
+        }
+    }
+
+    /// What each adapter declares is what the binary asked of its name: the
+    /// pytest and unittest adapters are collected in one `Module`, the
+    /// pytest adapter refines every file, and a support file is a path
+    /// whose last part is `conftest.py`, whoever reports it.
+    #[test]
+    fn each_adapter_declares_what_the_binary_knows_of_it() {
+        for name in ["pytest", "unittest", "doctest", "nose"] {
+            let declared = traits(&AdapterName::from(name));
+            assert_eq!(
+                declared.one_module,
+                matches!(name, "pytest" | "unittest"),
+                "{name}"
+            );
+            assert_eq!(declared.refines_every_file, name == "pytest", "{name}");
+        }
+        for (path, file) in [
+            ("conftest.py", Some("conftest.py")),
+            ("tests/conftest.py", Some("conftest.py")),
+            ("a/b/conftest.py", Some("conftest.py")),
+            ("tests/conftest.pyc", None),
+            ("tests/my_conftest.py", None),
+            ("conftest.py/test_x.py", None),
+            ("", None),
+        ] {
+            assert_eq!(support_file(path), file, "{path}");
+        }
     }
 
     #[test]
@@ -204,7 +398,7 @@ mod tests {
         );
         let settings = AyeSettings::default();
         let chosen = |args: &[PathBuf]| {
-            let chosen = choose(&project(root, args, &settings), false).unwrap();
+            let chosen = choose(&project(root, args, &settings), Listing::Refine).unwrap();
             (chosen.names(), chosen.source)
         };
         let default = (
@@ -233,11 +427,11 @@ mod tests {
             PRELUDE.names().collect::<Vec<_>>(),
             ["aye_model", "aye_rewrite", "aye_native_engine", "pytest"]
         );
-        let adapters = known(false);
+        let adapters = known(Listing::Refine);
         let pytest = adapters[0].runtime();
         assert_eq!(pytest.entry.to_string(), "aye_pytest_native:NativeExecutor");
         assert_eq!(pytest.session, SessionMode::ListsSession);
-        assert_eq!(known(true)[0].runtime(), pytest);
+        assert_eq!(known(Listing::Static)[0].runtime(), pytest);
         for adapter in &adapters {
             let runtime = adapter.runtime();
             assert_eq!(runtime.adapter, adapter.name());
@@ -292,7 +486,7 @@ mod tests {
     /// The handshake of a worker for `adapters` (indices into the known
     /// adapters, in the order the run lists them), as the runner sends it.
     fn handshake(adapters: &[usize]) -> Request {
-        let known = known(false);
+        let known = known(Listing::Refine);
         let mut spec = aye_runner::WorkerSpec::new("python", "/repo", "/repo");
         spec.prelude = PRELUDE;
         spec.runtimes = adapters.iter().map(|&at| known[at].runtime()).collect();
@@ -502,7 +696,7 @@ mod tests {
             "[tool.aye.doctest]\nfoo = 1\n",
             "[tool.aye.doctest]\nmodules = \"yes\"\n",
         ] {
-            let err = choose(&project(root, &[], &settings(table)), false)
+            let err = choose(&project(root, &[], &settings(table)), Listing::Refine)
                 .err()
                 .unwrap_or_else(|| panic!("{table}: accepted"));
             assert!(
@@ -512,7 +706,9 @@ mod tests {
         }
         let good = settings("[tool.aye.unittest]\npattern = \"*_test.py\"\n");
         assert_eq!(
-            choose(&project(root, &[], &good), false).unwrap().names(),
+            choose(&project(root, &[], &good), Listing::Refine)
+                .unwrap()
+                .names(),
             ["pytest"]
         );
     }
@@ -523,7 +719,7 @@ mod tests {
     #[test]
     fn the_python_sent_to_workers_names_only_catalogued_variables() {
         let mut sources = vec![("aye_worker", aye_runner::WORKER_SOURCE)];
-        let runtimes: Vec<Runtime> = known(false).iter().map(|a| a.runtime()).collect();
+        let runtimes: Vec<Runtime> = known(Listing::Refine).iter().map(|a| a.runtime()).collect();
         let modules = aye_engine::ENGINE
             .iter()
             .chain(PRELUDE)
