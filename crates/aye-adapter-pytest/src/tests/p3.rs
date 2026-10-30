@@ -290,7 +290,10 @@ fn pytests_doctest_plugin_claims_what_it_collects() {
     // `-p no:doctest` blocks the plugin: it collects nothing.
     let recognizer = prepared(root, &[], &["-p", "no:doctest"], &["pytest"]);
     assert!(!recognizer.claim("test_a.txt", Requested::Found).has_tests());
-    assert!(recognizer.doctests.is_none());
+    assert_eq!(
+        recognizer.doctests,
+        crate::claims::doctest_plugin::PytestDoctests::Blocked
+    );
 }
 
 #[test]

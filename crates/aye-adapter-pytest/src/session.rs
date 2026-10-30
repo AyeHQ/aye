@@ -44,6 +44,7 @@ use aye_pytest::config;
 use aye_pytest::conftest::{in_confcutdir, initial_dirs};
 use aye_python_stdlib::os_path::normalize_absolute;
 
+use crate::claims::doctest_plugin::PytestDoctests;
 use crate::conftest::{Summary, Supports};
 use crate::marks::EmptyMark;
 use crate::marks::ids::IdOptions;
@@ -186,7 +187,7 @@ impl PytestRecognizer {
             initial_dirs: Vec::new(),
             reported: Mutex::new(HashSet::new()),
             env_pythonpath,
-            doctests: None,
+            doctests: PytestDoctests::ByDoctestAdapter,
             context: OnceLock::new(),
         };
         recognizer.collection_args = recognizer.roots(project);

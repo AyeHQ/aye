@@ -12,13 +12,13 @@ use aye_adapter::{
 use aye_config::ValueSource;
 use aye_events::{Diagnostic, DiagnosticCode, Severity};
 use aye_protocol::AdapterContext;
-use aye_pytest::config::{self, ConfigRules};
+use aye_pytest::config::ConfigRules;
 use aye_pytest::session::is_virtualenv;
 use aye_python_stdlib::fnmatch;
 use aye_python_stdlib::os_path::normalize_absolute;
 
 use crate::adapter::Listing;
-use crate::claims::doctest_plugin::PYTEST_DOCTESTS;
+use crate::claims::doctest_plugin::{PYTEST_DOCTESTS, PytestDoctests};
 use crate::claims::ignore::Ignored;
 use crate::conftest::{Summary, Supports};
 use crate::context::{PytestContext, native_context};
@@ -62,10 +62,9 @@ pub struct PytestRecognizer {
     pub(crate) reported: Mutex<HashSet<PathBuf>>,
     /// `PYTHONPATH`'s directories, absolute: on `sys.path` in the workers.
     pub(crate) env_pythonpath: Vec<PathBuf>,
-    /// What pytest's own doctest plugin collects, when it collects doctests
-    /// in this run (no doctest adapter runs beside this one; see
-    /// [`Self::with_pytest_doctests`]).
-    pub(crate) doctests: Option<config::DoctestOptions>,
+    /// Who collects the run's doctests: the doctest adapter, unless
+    /// [`Self::with_pytest_doctests`] says no doctest adapter runs.
+    pub(crate) doctests: PytestDoctests,
     /// The context, built once (see [`Self::pytest_context`]).
     pub(crate) context: OnceLock<PytestContext>,
 }
@@ -160,7 +159,7 @@ impl Recognizer for PytestRecognizer {
 
     fn settings(&self) -> Vec<Setting> {
         let mut settings = self.config.settings();
-        if let Some(doctests) = &self.doctests {
+        if let Some(doctests) = self.doctests.by_pytest() {
             let mut what = Vec::new();
             if doctests.modules {
                 what.push("modules (--doctest-modules)".to_string());
@@ -240,7 +239,7 @@ impl Recognizer for NativeRecognizer {
         requested: Requested,
         support: &[SourceFile<'_>],
     ) -> Recognition {
-        if self.inner.doctests.is_some()
+        if self.inner.doctests.by_pytest().is_some()
             && self
                 .inner
                 .doctest_file(file.rel.as_str(), requested.is_named())

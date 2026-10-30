@@ -37,6 +37,7 @@
 //! [`Pytest::prepare_among`]: aye_adapter::Adapter::prepare_among
 
 use aye_adapter::{Recognition, SourceFile};
+use aye_pytest::config::DoctestOptions;
 use aye_pytest::doctest::{self, DoctestFile};
 
 use super::ignore::Ignored;
@@ -44,6 +45,31 @@ use crate::{PytestRecognizer, SETS};
 
 /// Why pytest's doctest plugin collects doctests in a run, for messages.
 pub(crate) const PYTEST_DOCTESTS: &str = "the doctest adapter isn't among the run's adapters";
+
+/// Who collects the doctests of a run the pytest adapter is in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) enum PytestDoctests {
+    /// The doctest adapter, which runs beside this one.
+    #[default]
+    ByDoctestAdapter,
+    /// pytest's own doctest plugin, as without aye, by these options: no
+    /// doctest adapter runs.
+    ByPytestPlugin(DoctestOptions),
+    /// Nobody: no doctest adapter runs, and `-p no:doctest` blocks
+    /// pytest's plugin.
+    Blocked,
+}
+
+impl PytestDoctests {
+    /// What pytest's doctest plugin collects by, when it collects the run's
+    /// doctests.
+    pub(crate) fn by_pytest(&self) -> Option<&DoctestOptions> {
+        match self {
+            Self::ByPytestPlugin(options) => Some(options),
+            Self::ByDoctestAdapter | Self::Blocked => None,
+        }
+    }
+}
 
 impl PytestRecognizer {
     /// This recognizer for a run without the doctest adapter: pytest's own
@@ -64,16 +90,18 @@ impl PytestRecognizer {
             .plugins
             .iter()
             .any(|p| p.strip_prefix("no:").is_some_and(|n| n.trim() == "doctest"));
-        if !blocked {
-            self.doctests = Some(self.config.doctest.clone());
-        }
+        self.doctests = if blocked {
+            PytestDoctests::Blocked
+        } else {
+            PytestDoctests::ByPytestPlugin(self.config.doctest.clone())
+        };
         self
     }
 
     /// What pytest's doctest plugin collects from `rel`, when it collects
     /// doctests in this run (`_pytest/doctest.py`'s `pytest_collect_file`).
     pub(crate) fn doctest_file(&self, rel: &str, explicit: bool) -> Option<DoctestFile> {
-        let doctests = self.doctests.as_ref()?;
+        let doctests = self.doctests.by_pytest()?;
         let name = rel.rsplit('/').next().unwrap_or(rel);
         let abs = self.root.join(rel);
         // pytest's `--doctest-glob` without one.
