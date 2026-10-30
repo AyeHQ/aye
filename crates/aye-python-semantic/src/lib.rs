@@ -17,6 +17,9 @@
 //! - [`class`]: classes: their bases, known classes from elsewhere, and
 //!   names as a class body stores them.
 //! - [`decorator`]: whether a decorator hands back what it decorates.
+//! - [`sys_path`]: the directories a module's code puts on `sys.path`.
+//! - [`module_resolver`]: the file an import finds, as `FileFinder` looks
+//!   it up, and where a chain of packages ends.
 //!
 //! Owns: namespaces and the escape analysis over them, names resolved
 //! through imports, static values, classes and their C3 linearization,
@@ -35,5 +38,7 @@ mod escape;
 pub mod eval;
 pub mod flow;
 mod hash;
+pub mod module_resolver;
 pub mod namespace;
 pub mod resolve;
+pub mod sys_path;

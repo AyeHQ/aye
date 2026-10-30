@@ -478,7 +478,9 @@ use aye_adapter::{
 use aye_config::ValueSource;
 use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 use aye_protocol::AdapterContext;
+use aye_python_semantic::module_resolver::{absolute_imports, find_module, found_in};
 use aye_python_semantic::namespace::Namespace;
+use aye_python_semantic::sys_path::SysPath;
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
 use aye_python_stdlib::glob;
 use aye_python_stdlib::identifier::is_identifier;
@@ -563,7 +565,7 @@ struct Scan {
     /// [`Supports`] caches by address).
     modules: Vec<Arc<Summary>>,
     /// What the project's conftests put on `sys.path`.
-    sys_path: support::SysPath,
+    sys_path: SysPath,
     /// Module names more than one test directory's `sys.path` entry holds
     /// (see [`PytestRecognizer::colliding`]).
     colliding: BTreeSet<String>,
@@ -1252,7 +1254,7 @@ impl PytestRecognizer {
     /// it, and the `-p` plugins) put on `sys.path`: pytest keeps them there
     /// for the rest of the session, so their modules are project files
     /// too, wherever they are imported from.
-    fn sys_path(&self) -> &support::SysPath {
+    fn sys_path(&self) -> &SysPath {
         &self.scan().sys_path
     }
 
@@ -1315,7 +1317,7 @@ impl PytestRecognizer {
         }
         let base = self.supports.package_base(file.abs.parent()?);
         // In order: the first name is the key.
-        support::absolute_imports(file.module)
+        absolute_imports(file.module)
             .into_iter()
             .filter(|name| colliding.contains(name))
             .find(|name| {
@@ -1340,7 +1342,7 @@ impl PytestRecognizer {
         search.extend(self.env_pythonpath.iter().cloned());
         search.push(self.config.rootdir.join("src"));
         search.push(self.root.join("src"));
-        let found = support::find_module(name, &search)?;
+        let found = find_module(name, &search)?;
         let dir = found.parent().map(Path::to_path_buf);
         Some(if found.file_name().is_some_and(|f| f == "__init__.py") {
             dir.unwrap_or(found)
@@ -1624,9 +1626,7 @@ impl module::Imports for ProjectImports<'_> {
             return false;
         }
         let name = path.rsplit('.').next().unwrap_or(path);
-        self.path_unknown
-            || support::found_in(path, self.own_dirs)
-            || unittest::named_like_test_case(name)
+        self.path_unknown || found_in(path, self.own_dirs) || unittest::named_like_test_case(name)
     }
 
     fn project_test(&self, path: &str) -> bool {
@@ -1639,7 +1639,7 @@ impl module::Imports for ProjectImports<'_> {
 }
 
 /// Add what `summary`'s code puts on `sys.path` to `out`.
-fn add_sys_path(out: &mut support::SysPath, summary: &Summary) {
+fn add_sys_path(out: &mut SysPath, summary: &Summary) {
     for dir in &summary.sys_path.added {
         if !out.added.contains(dir) {
             out.added.push(dir.clone());
