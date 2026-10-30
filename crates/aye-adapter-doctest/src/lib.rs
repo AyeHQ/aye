@@ -330,6 +330,7 @@ use aye_events::{
 use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
 use aye_python_stdlib::glob;
+use aye_python_stdlib::identifier::is_ascii_identifier;
 use aye_python_stdlib::os_path;
 use aye_static::{EnvVars, ProcessEnv};
 
@@ -560,12 +561,7 @@ fn ascii_identifier(name: &str) -> Option<bool> {
     if !name.is_ascii() {
         return None;
     }
-    Some(
-        name.chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
-    )
+    Some(is_ascii_identifier(name))
 }
 
 /// The name pytest's `prepend` import mode imports a file under, and the

@@ -1,5 +1,7 @@
 //! Python's `re`: which patterns `re.compile` accepts.
 
+use crate::identifier::is_ascii_identifier;
+
 /// Whether `re.compile` surely accepts a `str` pattern, without warnings,
 /// on every Python aye supports: a conservative subset of the syntax
 /// (literals, escapes, classes, plain, non-capturing, named and lookahead
@@ -192,12 +194,7 @@ impl Regex<'_> {
                             c => name.push(c),
                         }
                     }
-                    let mut chars = name.chars();
-                    let valid = chars
-                        .next()
-                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-                        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
-                    if !valid || self.names.contains(&name) {
+                    if !is_ascii_identifier(&name) || self.names.contains(&name) {
                         return None;
                     }
                     self.names.push(name);

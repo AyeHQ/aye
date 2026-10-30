@@ -7,6 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
+use aye_python_stdlib::identifier::is_ascii_identifier;
+
 /// Hooks that may add marks to doctest items: `-k` and `-m` can't be
 /// evaluated on the source alone where one is in scope.
 pub(crate) const MARKING_HOOKS: [&str; 2] =
@@ -112,12 +114,7 @@ pub(crate) fn in_package(conftest: &Path) -> bool {
             && dir.file_name().is_some_and(|name| {
                 let name = name.to_string_lossy();
                 // `str.isidentifier()`; names that aren't ASCII count.
-                !name.is_ascii()
-                    || (name
-                        .chars()
-                        .next()
-                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-                        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+                !name.is_ascii() || is_ascii_identifier(&name)
             })
     })
 }

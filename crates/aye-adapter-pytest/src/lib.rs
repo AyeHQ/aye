@@ -480,6 +480,7 @@ use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticP
 use aye_protocol::AdapterContext;
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
 use aye_python_stdlib::glob;
+use aye_python_stdlib::identifier::is_identifier;
 use aye_python_stdlib::os_path::normalize_absolute;
 use aye_python_stdlib::unittest;
 use aye_static::{EnvVars, ProcessEnv};
@@ -676,12 +677,7 @@ fn package_path(file: &Path) -> Option<PathBuf> {
             .file_name()
             .map(|n| n.to_string_lossy())
             .unwrap_or_default();
-        let identifier = name
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_alphabetic() || c == '_')
-            && name.chars().all(|c| c.is_alphanumeric() || c == '_');
-        if !dir.join("__init__.py").is_file() || !identifier {
+        if !dir.join("__init__.py").is_file() || !is_identifier(&name) {
             break;
         }
         found = Some(dir.to_path_buf());
@@ -1335,13 +1331,7 @@ impl PytestRecognizer {
     /// editable install's). A namespace package is no match (pytest then
     /// takes the name as a path).
     fn pyarg(&self, name: &str) -> Option<PathBuf> {
-        let valid = name.split('.').all(|part| {
-            part.chars()
-                .next()
-                .is_some_and(|c| c.is_alphabetic() || c == '_')
-                && part.chars().all(|c| c.is_alphanumeric() || c == '_')
-        });
-        if !valid {
+        if !name.split('.').all(is_identifier) {
             return None;
         }
         let mut search: Vec<PathBuf> = self.config.pythonpath.clone();

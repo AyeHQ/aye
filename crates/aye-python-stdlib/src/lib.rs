@@ -22,6 +22,8 @@
 //!   with a `__name__`, what `float()` parses, `str.isdigit`, and those
 //!   that reach a namespace by name or only read.
 //! - [`re`]: which patterns `re.compile` surely accepts.
+//! - [`identifier`]: `str.isidentifier`, exactly for ASCII names and
+//!   approximately for the others.
 //! - [`modules`]: the standard library's modules.
 //! - [`unittest`]: unittest's loader rules: `VALID_MODULE_NAME`, the test
 //!   method prefix, the bases that bring no tests, what keeps a method a
@@ -37,6 +39,7 @@
 pub mod builtins;
 pub mod fnmatch;
 pub mod glob;
+pub mod identifier;
 pub mod modules;
 pub mod os_path;
 pub mod re;
