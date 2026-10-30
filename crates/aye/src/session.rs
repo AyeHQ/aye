@@ -66,7 +66,8 @@ pub(crate) struct Session {
     interpreter: Interpreter,
     workers: u32,
     /// The environment aye started in, read once: what the adapters, the
-    /// interpreter's discovery and the reporters read.
+    /// interpreter's discovery, the refinement cache's key and the
+    /// reporters read.
     env: EnvironmentOptions,
 }
 
