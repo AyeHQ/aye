@@ -16,10 +16,11 @@
 //! lands later behind the services interface in `aye-protocol`.
 //!
 //! Depends on: aye-adapter, aye-config (`[tool.aye.unittest]`, where a
-//! setting came from), aye-events, aye-index (a module's classes by index),
-//! aye-protocol, aye-python-semantic (the C3 merge of a class's MRO, the
-//! `__main__` guard), aye-python-stdlib (`fnmatch`, `os.path`, the
-//! builtins, the standard library's modules, unittest's loader rules).
+//! setting came from), aye-events, aye-index (the project's modules and
+//! their classes, by index), aye-protocol, aye-python-semantic (the C3
+//! merge of a class's MRO, the `__main__` guard), aye-python-stdlib
+//! (`fnmatch`, `os.path`, the builtins, the standard library's modules,
+//! unittest's loader rules).
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **The reference is `python -m unittest discover` on Python 3.13**

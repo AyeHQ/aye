@@ -1,25 +1,60 @@
-//! The project's own modules, read on demand ([`Modules`]): what an import
-//! leads to, and what importing a module may change elsewhere.
+//! The project's own modules, read on demand ([`ModuleIndex`]): what an
+//! import leads to, and what importing a module may change elsewhere.
 //!
-//! [`Modules`] follows imports into the project's own files, so that a class
-//! imported from a helper module, or a base defined there, is read too;
-//! classes from installed packages are not read.
+//! [`ModuleIndex`] follows imports into the project's own files, so that a
+//! class imported from a helper module, or a base defined there, is read too;
+//! classes from installed packages are not read. It is an arena: each file it
+//! meets gets a [`ModuleId`], and is read, and its imports and what importing
+//! it changes are resolved, once, however many recognitions ask at once. A
+//! project class is a [`ClassId`]: its module's id and its place among the
+//! module's classes, whichever read of the file found it.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_adapter::LineIndex;
+use aye_index::{IndexVec, newtype_index};
 
 use crate::loader::Loaded;
 use crate::module::{Binding, ClassIndex, Summary, Touch, is_stdlib, summarize};
 
+newtype_index! {
+    /// A project file's place in the [`ModuleIndex`].
+    pub(crate) struct ModuleId;
+}
+
+/// A project class: its module and its place among the module's classes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ClassId {
+    pub(crate) module: ModuleId,
+    pub(crate) class: ClassIndex,
+}
+
+/// A project module, read: its file's id and its summary, the index's read
+/// of the file or, for the test module, collection's.
+#[derive(Debug, Clone)]
+pub(crate) struct Module {
+    pub(crate) id: ModuleId,
+    pub(crate) summary: Arc<Summary>,
+}
+
+impl Module {
+    /// Its class at `class`.
+    pub(crate) fn class_id(&self, class: ClassIndex) -> ClassId {
+        ClassId {
+            module: self.id,
+            class,
+        }
+    }
+}
+
 /// Where an imported dotted path leads.
 #[derive(Debug, Clone)]
 pub(crate) enum Target {
-    Class(Arc<Summary>, ClassIndex),
+    Class(Module, ClassIndex),
     /// Another binding of a project module.
-    Binding(Arc<Summary>, Binding),
+    Binding(Module, Binding),
     Module,
     /// The standard library.
     Stdlib(String),
@@ -30,24 +65,40 @@ pub(crate) enum Target {
 
 /// The project's own modules, read on demand: what imports lead to.
 #[derive(Debug)]
-pub(crate) struct Modules {
+pub(crate) struct ModuleIndex {
     root: PathBuf,
     /// Where absolute imports are looked up: the top-level directory, the
     /// project root and its `src`.
     search: Vec<PathBuf>,
-    cache: Mutex<HashMap<PathBuf, Option<Arc<Summary>>>>,
-    /// By module file: what importing it may change elsewhere, resolved.
-    effects: Mutex<HashMap<PathBuf, Arc<Vec<Effect>>>>,
-    /// By module file: the project files importing it imports (its
-    /// imports' modules and their packages' `__init__.py`).
-    edges: Mutex<HashMap<PathBuf, Arc<Vec<PathBuf>>>>,
+    /// Every file met.
+    files: Mutex<Files>,
+}
+
+/// The index's files, by id and by path.
+#[derive(Debug, Default)]
+struct Files {
+    entries: IndexVec<ModuleId, Arc<Entry>>,
+    ids: HashMap<PathBuf, ModuleId>,
+}
+
+/// A file of the index, and what was read of it, each once.
+#[derive(Debug)]
+struct Entry {
+    path: PathBuf,
+    /// Its summary; `None` when it can't be read or doesn't parse.
+    summary: OnceLock<Option<Arc<Summary>>>,
+    /// What importing it may change elsewhere, resolved.
+    effects: OnceLock<Arc<Vec<Effect>>>,
+    /// The project files importing it imports (its imports' modules and
+    /// their packages' `__init__.py`).
+    edges: OnceLock<Arc<Vec<ModuleId>>>,
 }
 
 /// A [`Touch`], resolved where it was made.
 #[derive(Debug, Clone)]
 enum Effect {
     /// A project class may change.
-    Class(PathBuf, ClassIndex, String),
+    Class(ClassId, String),
     /// Something aye can't resolve may change: named so (its last name),
     /// or not at all.
     Unknown(Option<String>, String),
@@ -56,7 +107,7 @@ enum Effect {
 /// Modules followed from a test module before refinement takes over.
 const MAX_MODULES: usize = 4000;
 
-/// What [`Modules::module_file`] finds.
+/// What [`ModuleIndex::module_file`] finds.
 enum Found {
     File(PathBuf),
     Namespace,
@@ -65,7 +116,7 @@ enum Found {
 /// Imports followed this deep are left to refinement.
 pub(crate) const MAX_DEPTH: usize = 16;
 
-impl Modules {
+impl ModuleIndex {
     pub(crate) fn new(top: &Path, root: &Path) -> Self {
         let mut search = Vec::new();
         for dir in [top.to_path_buf(), root.to_path_buf(), root.join("src")] {
@@ -76,27 +127,60 @@ impl Modules {
         Self {
             root: root.to_path_buf(),
             search,
-            cache: Mutex::new(HashMap::new()),
-            effects: Mutex::new(HashMap::new()),
-            edges: Mutex::new(HashMap::new()),
+            files: Mutex::new(Files::default()),
+        }
+    }
+
+    /// The id of `path`, met now if not before.
+    pub(crate) fn id(&self, path: &Path) -> ModuleId {
+        let mut files = self.files.lock().expect("lock");
+        if let Some(id) = files.ids.get(path) {
+            return *id;
+        }
+        let id = files.entries.push(Arc::new(Entry {
+            path: path.to_path_buf(),
+            summary: OnceLock::new(),
+            effects: OnceLock::new(),
+            edges: OnceLock::new(),
+        }));
+        files.ids.insert(path.to_path_buf(), id);
+        id
+    }
+
+    fn entry(&self, id: ModuleId) -> Arc<Entry> {
+        Arc::clone(&self.files.lock().expect("lock").entries[id])
+    }
+
+    /// The test module, as collection parsed it: under its file's id, so
+    /// that a class of it is the class an import of the file finds.
+    pub(crate) fn test_module(&self, summary: Summary) -> Module {
+        Module {
+            id: self.id(&summary.path),
+            summary: Arc::new(summary),
         }
     }
 
     /// A project file, read and summarized once.
-    pub(crate) fn summary(&self, path: &Path) -> Option<Arc<Summary>> {
-        if let Some(found) = self.cache.lock().expect("lock").get(path) {
-            return found.clone();
-        }
-        let summary = std::fs::read_to_string(path).ok().and_then(|source| {
-            let parsed = ruff_python_parser::parse_module(&source).ok()?;
-            let lines = LineIndex::from_source_text(&source);
-            Some(Arc::new(summarize(path, parsed.syntax(), &lines)))
+    pub(crate) fn summary(&self, path: &Path) -> Option<Module> {
+        self.module(self.id(path))
+    }
+
+    /// The file of `id`, read and summarized once: a thread asking while
+    /// another reads it waits for that read.
+    fn module(&self, id: ModuleId) -> Option<Module> {
+        let entry = self.entry(id);
+        let summary = entry.summary.get_or_init(|| {
+            let path = &entry.path;
+            std::fs::read_to_string(path).ok().and_then(|source| {
+                let parsed = ruff_python_parser::parse_module(&source).ok()?;
+                let lines = LineIndex::from_source_text(&source);
+                Some(Arc::new(summarize(path, parsed.syntax(), &lines)))
+            })
         });
-        self.cache
-            .lock()
-            .expect("lock")
-            .insert(path.to_path_buf(), summary.clone());
-        summary
+        Some(Module {
+            id,
+            summary: Arc::clone(summary.as_ref()?),
+        })
     }
 
     /// The file of module `parts` under `base`: `a/b.py` or
@@ -227,32 +311,35 @@ impl Modules {
             .collect()
     }
 
-    /// See [`Modules::edges`].
-    fn edges_of(&self, summary: &Summary) -> Arc<Vec<PathBuf>> {
-        if let Some(found) = self.edges.lock().expect("lock").get(&summary.path) {
-            return Arc::clone(found);
-        }
-        let mut out: Vec<PathBuf> = Vec::new();
-        for import in &summary.imports {
-            if let Some(file) = self.module_path(import, &summary.path) {
-                out.extend(self.packages_of(&file));
-                out.push(file);
+    /// The project files importing `module` imports (its imports' modules
+    /// and their packages' `__init__.py`), resolved once.
+    fn edges_of(&self, module: &Module) -> Arc<Vec<ModuleId>> {
+        let entry = self.entry(module.id);
+        let edges = entry.edges.get_or_init(|| {
+            let summary = &module.summary;
+            let mut out: Vec<ModuleId> = Vec::new();
+            for import in &summary.imports {
+                if let Some(file) = self.module_path(import, &summary.path) {
+                    out.extend(self.packages_of(&file).iter().map(|init| self.id(init)));
+                    out.push(self.id(&file));
+                }
             }
-        }
-        out.dedup();
-        let out = Arc::new(out);
-        self.edges
-            .lock()
-            .expect("lock")
-            .insert(summary.path.clone(), Arc::clone(&out));
-        out
+            out.dedup();
+            Arc::new(out)
+        });
+        Arc::clone(edges)
     }
 
-    /// See [`Modules::effects`].
-    fn effects_of(&self, summary: &Arc<Summary>) -> Arc<Vec<Effect>> {
-        if let Some(found) = self.effects.lock().expect("lock").get(&summary.path) {
-            return Arc::clone(found);
-        }
+    /// What importing `module` may change elsewhere, resolved once.
+    fn effects_of(&self, module: &Module) -> Arc<Vec<Effect>> {
+        let entry = self.entry(module.id);
+        let effects = entry
+            .effects
+            .get_or_init(|| Arc::new(self.resolve_effects(&module.summary)));
+        Arc::clone(effects)
+    }
+
+    fn resolve_effects(&self, summary: &Summary) -> Vec<Effect> {
         let mut out = Vec::new();
         let shown = |what: &str, path: &str| {
             format!(
@@ -292,7 +379,7 @@ impl Modules {
                 }
                 (Touch::Call(_), _) => {}
                 (_, Target::Class(owner, index)) => {
-                    out.push(Effect::Class(owner.path.clone(), index, reason));
+                    out.push(Effect::Class(owner.class_id(index), reason));
                 }
                 (_, Target::Unknown(why)) => {
                     out.push(Effect::Unknown(Some(last), format!("{reason}: {why}")));
@@ -300,47 +387,44 @@ impl Modules {
                 _ => {}
             }
         }
-        let out = Arc::new(out);
-        self.effects
-            .lock()
-            .expect("lock")
-            .insert(summary.path.clone(), Arc::clone(&out));
         out
     }
 
-    /// Why importing the test module `summary` may give the classes it
+    /// Why importing the test module `test` may give the classes it
     /// loads (`loaded`) other tests than their source says: a module that
     /// runs before the loader reads them (the packages holding it, which
     /// discovery imports first; it; the project modules it imports, and
     /// theirs) changes one of those classes or its bases (`base.Base.test_x
     /// = f`, `setattr`, a classmethod called on it, the class passed to a
     /// call), or something aye can't follow. `None` when nothing may.
-    pub(crate) fn effects(&self, summary: &Arc<Summary>, loaded: &[Loaded]) -> Option<String> {
+    pub(crate) fn effects(&self, test: &Module, loaded: &[Loaded]) -> Option<String> {
         if loaded.is_empty() {
             return None;
         }
-        let classes: HashSet<(&Path, ClassIndex)> = loaded
-            .iter()
-            .flat_map(|l| l.mro.iter().map(|(path, index)| (path.as_path(), *index)))
-            .collect();
+        let classes: HashSet<ClassId> = loaded.iter().flat_map(|l| l.mro.iter().copied()).collect();
         // The names those classes go by, for what aye can't resolve.
         let mut names: HashSet<String> = loaded.iter().map(|l| l.name.clone()).collect();
         #[expect(
             clippy::iter_over_hash_type,
             reason = "fills a set: the order shows nowhere"
         )]
-        for (path, index) in &classes {
-            if let Some(owner) = self.summary(path)
-                && let Some(class) = owner.classes.get(*index)
+        for id in &classes {
+            if let Some(owner) = self.module(id.module)
+                && let Some(class) = owner.summary.classes.get(id.class)
             {
                 names.insert(class.name.clone());
             }
         }
-        let mut queue: Vec<PathBuf> = self.packages_of(&summary.path);
-        queue.push(summary.path.clone());
-        let mut seen: HashSet<PathBuf> = HashSet::new();
-        while let Some(file) = queue.pop() {
-            if !seen.insert(file.clone()) {
+        let summary = &test.summary;
+        let mut queue: Vec<ModuleId> = self
+            .packages_of(&summary.path)
+            .iter()
+            .map(|init| self.id(init))
+            .collect();
+        queue.push(test.id);
+        let mut seen: HashSet<ModuleId> = HashSet::new();
+        while let Some(id) = queue.pop() {
+            if !seen.insert(id) {
                 continue;
             }
             if seen.len() > MAX_MODULES {
@@ -350,18 +434,16 @@ impl Modules {
                     summary.path.display()
                 ));
             }
-            let Some(module) = (if file == summary.path {
-                Some(Arc::clone(summary))
+            let Some(module) = (if id == test.id {
+                Some(test.clone())
             } else {
-                self.summary(&file)
+                self.module(id)
             }) else {
                 continue;
             };
             for effect in self.effects_of(&module).iter() {
                 match effect {
-                    Effect::Class(path, index, reason)
-                        if classes.contains(&(path.as_path(), *index)) =>
-                    {
+                    Effect::Class(class, reason) if classes.contains(class) => {
                         return Some(reason.clone());
                     }
                     Effect::Unknown(name, reason)
@@ -372,12 +454,13 @@ impl Modules {
                     _ => {}
                 }
             }
-            queue.extend(self.edges_of(&module).iter().cloned());
+            queue.extend(self.edges_of(&module).iter().copied());
         }
         None
     }
 
-    fn member(&self, summary: &Arc<Summary>, names: &[&str], depth: usize) -> Target {
+    fn member(&self, module: &Module, names: &[&str], depth: usize) -> Target {
+        let summary = &module.summary;
         let shown = || format!("{} in {}", names.join("."), summary.path.display());
         if let Some(reason) = &summary.dynamic {
             return Target::Unknown(format!("{}: {reason}", shown()));
@@ -397,8 +480,8 @@ impl Modules {
             Binding::Import(path) | Binding::Module(path) => {
                 self.target(&join(path), &summary.path, depth + 1)
             }
-            Binding::Class(index) if rest.is_empty() => Target::Class(Arc::clone(summary), *index),
-            other if rest.is_empty() => Target::Binding(Arc::clone(summary), other.clone()),
+            Binding::Class(index) if rest.is_empty() => Target::Class(module.clone(), *index),
+            other if rest.is_empty() => Target::Binding(module.clone(), other.clone()),
             _ => Target::Unknown(format!("{} is an attribute aye can't follow", shown())),
         }
     }

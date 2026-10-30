@@ -76,7 +76,7 @@ pub(crate) enum Touch {
 #[derive(Debug, Clone)]
 pub(crate) enum Base {
     Local(ClassIndex),
-    /// Imported: resolved through [`Modules`](crate::project::Modules).
+    /// Imported: resolved through the [`ModuleIndex`](crate::project::ModuleIndex).
     Path(String),
     TestCase,
     Object,

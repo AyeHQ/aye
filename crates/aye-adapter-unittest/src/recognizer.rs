@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 use aye_adapter::{
     AdapterError, Claim, Project, Recognition, Recognizer, RefineReason, Requested, Setting,
@@ -20,7 +20,7 @@ use crate::context::UnittestContext;
 use crate::discovery::{DiscoveryStart, Starts, is_package, may_hold_tests};
 use crate::loader::Loaded;
 use crate::module;
-use crate::project::Modules;
+use crate::project::{Module, ModuleIndex};
 use crate::{NAME, SETS, UnittestConfig};
 
 /// Why a test module with no test aye can see is refined.
@@ -34,7 +34,7 @@ pub struct UnittestRecognizer {
     pub(crate) config: UnittestConfig,
     /// Where discovery starts.
     pub(crate) starts: Starts,
-    modules: Modules,
+    modules: ModuleIndex,
     /// By package directory: whether its `__init__.py` may define
     /// `load_tests`.
     pub(crate) takes_over: Mutex<HashMap<PathBuf, bool>>,
@@ -54,7 +54,7 @@ impl UnittestRecognizer {
             start: normalize_absolute(&config.start),
             top: normalize_absolute(&config.top),
         };
-        let modules = Modules::new(&configured.top, &root);
+        let modules = ModuleIndex::new(&configured.top, &root);
         let starts = Starts::new(configured, project);
         let named_files = project
             .args
@@ -216,7 +216,9 @@ impl Recognizer for UnittestRecognizer {
                 ..Recognition::default()
             };
         }
-        let summary = Arc::new(module::summarize(&abs, file.module, file.lines));
+        let test = self
+            .modules
+            .test_module(module::summarize(&abs, file.module, file.lines));
         // A file named on the command line is loaded alone, as `python -m
         // unittest path.py` loads it: no package's `load_tests` decides it.
         let package = if self.named_files.contains(&abs) {
@@ -227,13 +229,13 @@ impl Recognizer for UnittestRecognizer {
         let package_rel = package.as_deref().map(|p| self.relative(p));
         // Without an import, the guess keeps the classes that are surely
         // test classes, for when refinement is off or fails.
-        let (loaded, mut refine) = match self.modules.loaded(&summary) {
+        let (loaded, mut refine) = match self.modules.loaded(&test) {
             // What runs before the loader reads the classes may change them.
             Ok(loaded) => {
-                let effect = self.modules.effects(&summary, &loaded);
+                let effect = self.modules.effects(&test, &loaded);
                 (loaded, effect)
             }
-            Err(reason) => (guess(&self.modules, &summary), Some(reason)),
+            Err(reason) => (guess(&self.modules, &test), Some(reason)),
         };
         if let Some(package) = &package_rel {
             let reason = format!(
@@ -280,11 +282,11 @@ impl Recognizer for UnittestRecognizer {
 
 /// The best static guess for a module only an import can tell: the
 /// classes that are surely test classes, without what made it uncertain.
-fn guess(modules: &Modules, summary: &Arc<module::Summary>) -> Vec<Loaded> {
+fn guess(modules: &ModuleIndex, test: &Module) -> Vec<Loaded> {
     let mut out = Vec::new();
-    for (name, binding) in &summary.names {
+    for (name, binding) in &test.summary.names {
         if let module::Binding::Class(index) = binding
-            && let Ok(Some(mut loaded)) = modules.class_tests_for_guess(summary, *index)
+            && let Ok(Some(mut loaded)) = modules.class_tests_for_guess(test, *index)
         {
             loaded.name.clone_from(name);
             out.push(loaded);
