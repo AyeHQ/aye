@@ -9,5 +9,11 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 
+[dependencies]
+aye-python-stdlib = { workspace = true }
+get-size2 = { workspace = true } # version pin only; see the workspace Cargo.toml
+ruff_python_ast = { workspace = true }
+ruff_text_size = { workspace = true }
+
 [lints]
 workspace = true

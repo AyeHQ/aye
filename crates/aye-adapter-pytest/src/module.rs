@@ -7,16 +7,16 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use aye_adapter::ast::{Expr, ExprLambda, Stmt, StmtClassDef, StmtFunctionDef};
 use aye_adapter::{Ranged, Recognition, SourceFile, TextRange, TextSize};
 use aye_events::{AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity};
+use aye_python_semantic::eval::deref;
+use aye_python_semantic::flow::{exclusive, import_time_raise, import_time_skip, is_generator};
+use aye_python_semantic::namespace::{Binding, Bound, Flag, Namespace, OpKind};
+use aye_python_semantic::resolve::{Lookup, Resolved};
 use aye_python_stdlib::fnmatch::matches_prefix_or_glob;
 use aye_python_stdlib::unittest::{KNOWN_BASES, RUNTEST_BASES, TESTCASE_ROOTS};
 
 use crate::SETS;
 use crate::ids::{IdOptions, parameterset_ids};
 use crate::marks::{self, Decorator, EmptyMark, Mark, MarkList, Scoped, SetTimeout, decorator};
-use crate::scope::{
-    Binding, Bound, Flag, Lookup, Namespace, OpKind, Resolved, exclusive, import_time_raise,
-    import_time_skip, is_generator,
-};
 use crate::support::{
     BUILTIN_FIXTURES, FixtureDef, MARKING_HOOKS, REFINING_HOOKS, default_argnames, fixture_of,
 };
@@ -1373,7 +1373,7 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
             Binding::Value(expr) => {
                 let lookup = self.lookup(class, bound.range.end());
                 let list = marks::pytestmark(lookup, expr)?;
-                let (value, _) = marks::deref(lookup, expr);
+                let (value, _) = deref(lookup, expr);
                 // Only a list grows in place.
                 let grows = ops.iter().any(|op| op.at > bound.range.start());
                 if grows && !matches!(value, Expr::List(_)) {

@@ -463,6 +463,7 @@ fn fnmatch_answers_are_pinned() {
 mod p1;
 mod p2;
 mod p3;
+mod static_values;
 mod suites;
 
 fn materialize(suite: &suites::Suite) -> tempfile::TempDir {

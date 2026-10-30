@@ -6,6 +6,15 @@
 //! imported can change it, so every reading is conservative, and says
 //! when it can't tell.
 //!
+//! - [`namespace`]: a module's or class body's namespace in dict order,
+//!   each name's bindings with the branches they sit in, and the escape
+//!   analysis's verdicts on it.
+//! - [`resolve`]: names and attribute chains resolved through imports and
+//!   the builtins, where an expression is evaluated.
+//! - [`eval`]: static values, and which of them building surely succeeds.
+//! - [`flow`]: generators, exclusive bindings, and what may skip or raise
+//!   while a module is imported.
+//!
 //! Owns: namespaces and the escape analysis over them, names resolved
 //! through imports, static values, classes and their C3 linearization,
 //! decorator and import-time facts, `sys.path` changes and module
@@ -13,5 +22,13 @@
 //! (aye-python-stdlib), nor a framework's rules: what a framework does with
 //! a module (pytest's marks, hooks and skips) is a parameter.
 //!
-//! Depends on no aye crate. Knows no framework but the standard library's
-//! own unittest; only the adapters depend on it.
+//! Depends on: aye-python-stdlib (the builtins, `re`, reprs), and Ruff's
+//! AST. Knows no framework but the standard library's own unittest; only
+//! the adapters depend on it.
+
+mod escape;
+pub mod eval;
+pub mod flow;
+mod hash;
+pub mod namespace;
+pub mod resolve;

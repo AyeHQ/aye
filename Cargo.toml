@@ -60,8 +60,9 @@ walkdir = "2"
 # they are pinned exactly. Each release raises its MSRV; 0.0.4 is the newest
 # that builds on Rust 1.94. `get-size2` is pinned too: 0.10.2 pulls a second
 # `compact_str` and breaks `ruff_python_ast`. `aye-adapter`, which re-exports
-# Ruff's AST for collection and the adapters, depends on it directly so the
-# pin also holds for `cargo install aye` without `--locked`.
+# Ruff's AST for collection and the adapters, and `aye-python-semantic`, which
+# reads it, depend on it directly so the pin also holds for `cargo install
+# aye` without `--locked`, and for each of them published on its own.
 get-size2 = "=0.10.1"
 ruff_python_ast = "=0.0.4"
 ruff_python_parser = "=0.0.4"

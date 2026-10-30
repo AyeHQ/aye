@@ -211,6 +211,7 @@ dependencies = [
  "aye-events",
  "aye-fs",
  "aye-protocol",
+ "aye-python-semantic",
  "aye-python-stdlib",
  "aye-static",
  "aye-test",
@@ -336,6 +337,12 @@ dependencies = [
 [[package]]
 name = "aye-python-semantic"
 version = "0.0.1"
+dependencies = [
+ "aye-python-stdlib",
+ "get-size2",
+ "ruff_python_ast",
+ "ruff_text_size",
+]
 
 [[package]]
 name = "aye-python-stdlib"

@@ -6,33 +6,9 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
+use aye_python_semantic::eval::Value;
 use aye_python_stdlib::builtins::str_isdigit;
 use aye_python_stdlib::repr::{complex_repr, float_repr};
-
-/// A statically known parameter value, as far as ids are concerned.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Value {
-    Str(String),
-    Bytes(Vec<u8>),
-    /// Decimal digits, with a leading `-` when negative.
-    Int(String),
-    Float(f64),
-    Complex(f64, f64),
-    Bool(bool),
-    None,
-    /// An object identified by its `__name__`: a function, a class,
-    /// `<lambda>`.
-    Named(String),
-    /// A compiled regular expression; its id is its escaped pattern.
-    Pattern(Box<Value>),
-    /// A value with no id of its own (list, dict, tuple…): the id falls back
-    /// to the argument name and the parameter set's index.
-    Opaque,
-    /// Not known statically. Harmless inside a parameter set whose id is
-    /// explicit, but a lone unknown value may itself be a `pytest.param`
-    /// (a helper's result) whose id and marks win over `ids=`.
-    Unknown,
-}
 
 /// One parameter set (`pytest.param(...)` or a plain value).
 #[derive(Debug, Clone, PartialEq)]

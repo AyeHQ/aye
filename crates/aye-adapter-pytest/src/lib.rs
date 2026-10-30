@@ -462,7 +462,6 @@ mod ids;
 mod marks;
 mod module;
 pub mod native;
-mod scope;
 mod support;
 
 #[cfg(test)]
@@ -479,6 +478,7 @@ use aye_adapter::{
 use aye_config::ValueSource;
 use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 use aye_protocol::AdapterContext;
+use aye_python_semantic::namespace::Namespace;
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
 use aye_python_stdlib::glob;
 use aye_python_stdlib::identifier::is_identifier;
@@ -1856,7 +1856,7 @@ impl Recognizer for PytestRecognizer {
         // Fixtures the test module imports from project files register
         // with its own.
         let dir = file.abs.parent().unwrap_or(file.abs);
-        let mut namespace = scope::Namespace::build(&file.module.body);
+        let mut namespace = Namespace::build(&file.module.body);
         // What support files do to modules holds here too.
         namespace.assume_patched(scope.patched.iter().cloned(), scope.reflective);
         if !module::reached(&namespace, &scope, file.rel.as_str()).is_empty() {

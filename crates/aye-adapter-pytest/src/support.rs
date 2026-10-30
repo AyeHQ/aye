@@ -12,11 +12,12 @@ use aye_adapter::ast::visitor::{self, Visitor};
 use aye_adapter::ast::{Expr, ExprCall, ModModule, Stmt, StmtFunctionDef};
 use aye_adapter::{Ranged, SourceFile, TextSize};
 use aye_events::Fnv64;
+use aye_python_semantic::eval::{Elem, Value};
+use aye_python_semantic::flow::{exclusive, import_time_skip};
+use aye_python_semantic::namespace::{Binding, Bound, Flag, Namespace, OpKind};
+use aye_python_semantic::resolve::{Lookup, Resolved};
 
 use crate::marks::{Decorator, Scoped, decorator};
-use crate::scope::{
-    Binding, Bound, Elem, Flag, Lookup, Namespace, OpKind, exclusive, import_time_skip,
-};
 
 /// A fixture definition, as far as parametrization is concerned.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,7 +244,7 @@ impl<'a> SysPathVisitor<'_, 'a> {
                 path.is_absolute().then_some(path)
             }
             Expr::Name(_) => match self.lookup.resolve(expr) {
-                crate::scope::Resolved::Local(Bound {
+                Resolved::Local(Bound {
                     binding: Binding::Value(value),
                     conditional: false,
                     ..
@@ -262,7 +263,7 @@ impl<'a> SysPathVisitor<'_, 'a> {
                 if attr.attr.id.as_str() != "parents" {
                     return None;
                 }
-                let Ok(crate::ids::Value::Int(index)) = self.lookup.value(&sub.slice) else {
+                let Ok(Value::Int(index)) = self.lookup.value(&sub.slice) else {
                     return None;
                 };
                 let index: usize = index.parse().ok()?;
@@ -855,7 +856,7 @@ fn value_fixture<'a>(
                 };
                 let mut out = FixtureDef::named(name, Vec::new());
                 match lookup.resolve(function) {
-                    crate::scope::Resolved::Local(target) => match target.binding {
+                    Resolved::Local(target) => match target.binding {
                         Binding::Function(def) => out.args = funcargnames(def, is_method),
                         Binding::Value(Expr::Lambda(lambda)) => {
                             out.args = lambda
@@ -887,7 +888,7 @@ fn value_fixture<'a>(
             Some(FixtureDef::opaque(name))
         }
         Expr::Name(_) | Expr::Attribute(_) => match lookup.resolve(expr) {
-            crate::scope::Resolved::Local(target) => {
+            Resolved::Local(target) => {
                 if let Binding::Function(def) = target.binding
                     && fixture_def(lookup, def, is_method).is_none()
                     && !def
@@ -899,8 +900,8 @@ fn value_fixture<'a>(
                 }
                 binding_fixture(lookup, name, &target, is_method, depth + 1)
             }
-            crate::scope::Resolved::Path(path) if crate::module::no_tests(&path) => None,
-            crate::scope::Resolved::Path(path) if path.starts_with("builtins.") => None,
+            Resolved::Path(path) if crate::module::no_tests(&path) => None,
+            Resolved::Path(path) if path.starts_with("builtins.") => None,
             _ => Some(FixtureDef::opaque(name)),
         },
         _ => None,
@@ -917,7 +918,7 @@ fn makes_own_instance<'a>(lookup: Lookup<'_, 'a>, func: &'a Expr, depth: u8) -> 
     if depth > 8 || lookup.module.dynamic {
         return false;
     }
-    let crate::scope::Resolved::Local(Bound {
+    let Resolved::Local(Bound {
         binding: Binding::Class(class),
         conditional: false,
         ..

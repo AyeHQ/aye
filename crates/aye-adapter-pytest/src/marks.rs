@@ -2,9 +2,12 @@
 //! (`_pytest/mark/structures.py`).
 
 use aye_adapter::ast::{Expr, ExprCall};
+use aye_python_semantic::eval::{Elem, Value, deref};
+use aye_python_semantic::flow::is_generator;
+use aye_python_semantic::namespace::{Binding, Bound};
+use aye_python_semantic::resolve::{Lookup, Resolved};
 
-use crate::ids::{IdItem, ParamSet, Value};
-use crate::scope::{Binding, Elem, Lookup, Resolved};
+use crate::ids::{IdItem, ParamSet};
 
 /// A mark, with the call that gave it arguments and where to evaluate them.
 #[derive(Clone)]
@@ -235,7 +238,7 @@ fn returns_its_argument(def: &aye_adapter::ast::StmtFunctionDef) -> bool {
     let params = &def.parameters;
     let positional: Vec<_> = params.posonlyargs.iter().chain(&params.args).collect();
     if def.is_async
-        || crate::scope::is_generator(&def.body)
+        || is_generator(&def.body)
         || positional.len() != 1
         || params.vararg.is_some()
         || params.kwarg.is_some()
@@ -376,7 +379,7 @@ fn maybe_mark<'a>(lookup: Lookup<'_, 'a>, expr: &'a Expr) -> bool {
         Expr::Call(_) => true,
         Expr::Name(_) | Expr::Attribute(_) => !matches!(
             lookup.resolve(expr),
-            Resolved::Local(crate::scope::Bound {
+            Resolved::Local(Bound {
                 binding: Binding::Function(_) | Binding::Class(_),
                 ..
             })
@@ -422,24 +425,6 @@ pub(crate) fn pytestmark<'s, 'a>(
             }),
         },
     }
-}
-
-/// Follow names bound to constants.
-pub(crate) fn deref<'s, 'a>(lookup: Lookup<'s, 'a>, expr: &'a Expr) -> (&'a Expr, Lookup<'s, 'a>) {
-    let (mut expr, mut lookup) = (expr, lookup);
-    for _ in 0..8 {
-        let Expr::Name(name) = expr else {
-            break;
-        };
-        match lookup.constant(name.id.as_str()) {
-            Some((value, scope)) => {
-                expr = value;
-                lookup = scope;
-            }
-            None => break,
-        }
-    }
-    (expr, lookup)
 }
 
 /// What the empty parameter set becomes (`empty_parameter_set_mark`).
