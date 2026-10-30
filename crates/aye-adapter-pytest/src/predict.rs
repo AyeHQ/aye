@@ -172,7 +172,7 @@ use aye_python_semantic::namespace::Namespace;
 use aye_python_semantic::resolve::Lookup;
 use aye_python_stdlib::fnmatch::matches_prefix_or_glob;
 
-pub(crate) use scope::{Imports, ModuleImports, Scope, names_module, reached};
+pub(crate) use scope::{Imports, ModuleImports, SupportScope, names_module, reached};
 
 use crate::PytestRecognizer;
 use crate::claims::doctest_plugin::{PYTEST_DOCTESTS, doctest_text, may_hold_doctests};
@@ -269,10 +269,10 @@ impl PytestRecognizer {
             plugins.extend(expanded.map(|s| (s, PLUGIN_OF_SCOPED_CONFTEST)));
         }
         let global = self.global_hooks();
-        let mut scope = Scope {
+        let mut scope = SupportScope {
             global_hooks: global.keys().cloned().collect(),
             global_hook_sources: global.clone(),
-            ..Scope::default()
+            ..SupportScope::default()
         };
         // A collection ini value a support module in scope changes at
         // runtime (`config.addinivalue_line("python_functions", …)` in a
@@ -478,7 +478,7 @@ pub(crate) struct Settings {
 /// `module` is its namespace ([`Namespace::build`] over its body).
 pub(crate) fn recognize<'a>(
     settings: &Settings,
-    scope: &Scope,
+    scope: &SupportScope,
     imports: &dyn Imports,
     file: &SourceFile<'a>,
     module: &Namespace<'a>,
@@ -607,7 +607,7 @@ fn class_namespaces<'a>(
 
 struct ModuleRecognizer<'s, 'a> {
     settings: &'s Settings,
-    scope: &'s Scope,
+    scope: &'s SupportScope,
     imports: &'s dyn Imports,
     file: &'s SourceFile<'a>,
     module: &'s Namespace<'a>,

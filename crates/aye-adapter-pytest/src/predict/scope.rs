@@ -1,6 +1,6 @@
 //! What a test module's scope does to it: the support modules pytest has
-//! loaded when it collects the module ([`Scope`]), and what its imports
-//! refer to ([`Imports`]).
+//! loaded when it collects the module ([`SupportScope`]), and what its
+//! imports refer to ([`Imports`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use crate::conftest::{self, FixtureDef, Supports};
 
 /// What the support files in scope do.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Scope {
+pub(crate) struct SupportScope {
     /// Hooks of the conftests in scope (and the plugins they load).
     pub hooks: BTreeSet<String>,
     /// [`GLOBAL_HOOKS`](crate::conftest::GLOBAL_HOOKS) implemented by any
@@ -57,7 +57,7 @@ pub(crate) struct Scope {
     pub hidden_fixtures: bool,
 }
 
-impl Scope {
+impl SupportScope {
     /// What implements `hook`, of those in scope.
     pub(super) fn hook_source(&self, hook: &str) -> &str {
         self.hook_sources
@@ -113,7 +113,7 @@ pub(crate) struct ModuleImports {
 /// name, or a support file in scope reaches module namespaces, imports a
 /// module of its name, or implements a hook that gets the module before
 /// pytest collects it. `rel` is the module's path.
-pub(crate) fn reached(module: &Namespace<'_>, scope: &Scope, rel: &str) -> Vec<String> {
+pub(crate) fn reached(module: &Namespace<'_>, scope: &SupportScope, rel: &str) -> Vec<String> {
     let mut out = Vec::new();
     if names_module(module.imported_modules(), rel) {
         out.push("the module imports itself, which may change its names".to_string());
