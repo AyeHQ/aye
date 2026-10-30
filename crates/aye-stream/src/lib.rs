@@ -11,8 +11,9 @@
 //! [`Repeats`]); tests a failed lifetime kept from running
 //! ([`BlockedTests`], with whether a lifetime is shown again: [`Again`]);
 //! the first failure of each signature ([`FirstBySignature`]); the line
-//! each collected test is defined on ([`DefinitionLines`]); and the run's
-//! facts ([`RunFacts`]). Where the renderers differ (JUnit keeps a test's bare
+//! each collected test is defined on ([`DefinitionLines`]); the run's facts
+//! ([`RunFacts`]); and how a file of a stored run changed since
+//! ([`FileChange`]). Where the renderers differ (JUnit keeps a test's bare
 //! failure, text and JSON lines show a lifetime that fails again in their
 //! own ways, the order of what is left at the end), each says which rule it
 //! takes. Does not own: words, layout or limits, which are aye-render's,
@@ -41,6 +42,7 @@
 //!   aye-render words for `aye show --runs`).
 
 mod blocked;
+mod change;
 mod consumer;
 mod facts;
 mod keys;
@@ -50,6 +52,7 @@ mod subs;
 mod tally;
 
 pub use blocked::{Again, BlockedTests, Left};
+pub use change::FileChange;
 pub use consumer::{Consumer, FailOnFinish, StopAfterError, Tee};
 pub use facts::RunFacts;
 pub use keys::{Keys, ShortKey, Subject};

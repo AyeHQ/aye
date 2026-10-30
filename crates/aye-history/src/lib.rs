@@ -5,7 +5,9 @@
 //! durations are advisory and separate from result caching, which has stricter
 //! invalidation.
 //!
-//! Depends on: aye-events, and aye-fs for the state directory.
+//! Depends on: aye-events, aye-fs for the state directory, and aye-stream
+//! for what the run store tells of a file that changed since a run
+//! (`FileChange`).
 //!
 //! Native features (October 2026): the fingerprint that decides whether a
 //! cached result holds carries its own version, so changing its inputs
@@ -97,7 +99,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod runs;
 
-pub use runs::{Change, RunMeta, RunStore, RunWriter, StoredRunId};
+pub use runs::{RunMeta, RunStore, RunWriter, StoredRunId};
 
 /// The history file, inside the directory history is given.
 pub const FILE: &str = StateBucket::History.name();

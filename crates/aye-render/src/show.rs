@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use aye_events::{ProjectPath, RunNumber};
+use aye_stream::FileChange;
 
 /// What [`Text`](crate::Text) and [`JsonLines`](crate::JsonLines) make of a
 /// stored run's records, for `aye show`, which feeds them part of a log
@@ -29,6 +30,6 @@ pub struct ShowContext {
     /// How long ago the run finished: `2 min ago`.
     pub ago: Option<String>,
     /// The files, as ids spell them, that changed since the run, each with
-    /// whether it is gone.
-    pub stale: BTreeMap<ProjectPath, bool>,
+    /// how.
+    pub stale: BTreeMap<ProjectPath, FileChange>,
 }

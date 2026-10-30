@@ -9,7 +9,7 @@ use aye_events::{
     Counts, DiagnosticCode, Event, ExitCode, Outcome, ProjectPath, Record, RunNumber, TestId,
     TestKey,
 };
-use aye_stream::{Extra, Keys, Tally};
+use aye_stream::{Extra, FileChange, Keys, Tally};
 
 use super::{feed, lines, streams};
 use crate::{
@@ -204,9 +204,10 @@ fn details_say_where_the_run_was_and_whether_the_file_changed() {
         "{out}"
     );
     let mut changed = context();
-    changed
-        .stale
-        .insert(ProjectPath::new("tests/test_cart.py").unwrap(), false);
+    changed.stale.insert(
+        ProjectPath::new("tests/test_cart.py").unwrap(),
+        FileChange::Edited,
+    );
     let out = text_with(
         &part,
         1,
@@ -214,9 +215,10 @@ fn details_say_where_the_run_was_and_whether_the_file_changed() {
         changed.clone(),
     );
     assert!(out.contains(" · file changed since\n"), "{out}");
-    changed
-        .stale
-        .insert(ProjectPath::new("tests/test_cart.py").unwrap(), true);
+    changed.stale.insert(
+        ProjectPath::new("tests/test_cart.py").unwrap(),
+        FileChange::Gone,
+    );
     let out = text_with(
         &part,
         1,
@@ -350,8 +352,8 @@ fn a_file_changed_since_the_run_is_said_first() {
             live: false,
         },
     );
-    text.stale("tests/test a.py", false).unwrap();
-    text.stale("tests/test_b.py", true).unwrap();
+    text.stale("tests/test a.py", FileChange::Edited).unwrap();
+    text.stale("tests/test_b.py", FileChange::Gone).unwrap();
     feed(&mut text, &records);
     assert_eq!(
         String::from_utf8(text.into_inner()).unwrap(),
@@ -363,8 +365,8 @@ fn a_file_changed_since_the_run_is_said_first() {
         ])
     );
     let mut json = JsonLines::new(Vec::new(), Level::Default);
-    json.stale("tests/test_a.py", false).unwrap();
-    json.stale("tests/test_b.py", true).unwrap();
+    json.stale("tests/test_a.py", FileChange::Edited).unwrap();
+    json.stale("tests/test_b.py", FileChange::Gone).unwrap();
     feed(&mut json, &records);
     assert_eq!(
         String::from_utf8(json.into_inner()).unwrap(),
@@ -376,7 +378,7 @@ fn a_file_changed_since_the_run_is_said_first() {
     );
     // JSON's -q is the summary alone.
     let mut json = JsonLines::new(Vec::new(), Level::Quiet);
-    json.stale("tests/test_a.py", false).unwrap();
+    json.stale("tests/test_a.py", FileChange::Edited).unwrap();
     assert_eq!(json.into_inner(), [] as [u8; 0]);
 }
 

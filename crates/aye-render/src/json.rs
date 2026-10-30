@@ -139,8 +139,8 @@ use aye_events::{
     LifetimeId, Local, Outcome, Record, Severity, StopReason, TestId, TestResult, WorkerIndex,
 };
 use aye_stream::{
-    Again, BlockedTests, Consumer, FirstBySignature, HeldSub, Keys, Left, Noted, Repeats, RunFacts,
-    SubOutcomes, Subject, Tally,
+    Again, BlockedTests, Consumer, FileChange, FirstBySignature, HeldSub, Keys, Left, Noted,
+    Repeats, RunFacts, SubOutcomes, Subject, Tally,
 };
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
@@ -723,10 +723,11 @@ impl<W: Write> JsonLines<W> {
 
     /// Before anything else, for `aye show`: a `stale` line, `path` having
     /// changed since the run (or being `gone`). None at `-q`.
-    pub fn stale(&mut self, path: &str, gone: bool) -> io::Result<()> {
+    pub fn stale(&mut self, path: &str, change: FileChange) -> io::Result<()> {
         if self.verbosity <= QUIET {
             return Ok(());
         }
+        let gone = change == FileChange::Gone;
         self.line(&Line::Stale {
             path: shared::head(path, PATH_MAX),
             rerun: (!gone).then(|| shared::head(&shared::rerun_path(path), RERUN_MAX).into_owned()),

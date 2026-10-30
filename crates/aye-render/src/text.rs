@@ -149,8 +149,8 @@ use aye_events::{
     Severity, StopReason, TestId, TestResult, WorkerIndex,
 };
 use aye_stream::{
-    Again, BlockedTests, Consumer, FirstBySignature, HeldSub, Keys, Left, Noted, Repeats, RunFacts,
-    SubOutcomes, Subject, Tally,
+    Again, BlockedTests, Consumer, FileChange, FirstBySignature, HeldSub, Keys, Left, Noted,
+    Repeats, RunFacts, SubOutcomes, Subject, Tally,
 };
 
 use crate::summary::{self, Tone};
@@ -396,8 +396,8 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// Before anything else, for `aye show`: `path` changed since the run
     /// (or is `gone`), so what is shown of its tests may be out of date. A
     /// warning, shown at every level.
-    pub fn stale(&mut self, path: &str, gone: bool) -> io::Result<()> {
-        if gone {
+    pub fn stale(&mut self, path: &str, change: FileChange) -> io::Result<()> {
+        if change == FileChange::Gone {
             writeln!(self.out, "{YELLOW}{path} is gone since this run{YELLOW:#}")
         } else {
             let rerun = shared::rerun_path(path);
@@ -1211,8 +1211,8 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             parts.push(
                 match self.context.stale.get(bad.path) {
                     None => "file unchanged",
-                    Some(false) => "file changed since",
-                    Some(true) => "file gone",
+                    Some(FileChange::Edited) => "file changed since",
+                    Some(FileChange::Gone) => "file gone",
                 }
                 .to_owned(),
             );

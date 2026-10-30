@@ -297,6 +297,7 @@ version = "0.0.1"
 dependencies = [
  "aye-events",
  "aye-fs",
+ "aye-stream",
  "flate2",
  "serde",
  "serde_json",

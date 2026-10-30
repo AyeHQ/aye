@@ -6,6 +6,8 @@ use aye_events::{
     RunNumber, Severity, TestId, TestResult, WorkerIndex,
 };
 
+use aye_stream::FileChange;
+
 use super::choose::{closest, distance};
 use super::feed::ago;
 use super::runs::{rfc3339, utc};
@@ -57,8 +59,8 @@ fn the_renderers_are_told_the_runs_number_age_and_stale_files() {
     stored.finished_ms = 1_792_091_602_130;
     let path = |path: &str| ProjectPath::new(path).unwrap();
     let stale = [
-        (path("tests/test_a.py"), Change::Edited),
-        (path("tests/test_b.py"), Change::Gone),
+        (path("tests/test_a.py"), FileChange::Edited),
+        (path("tests/test_b.py"), FileChange::Gone),
     ];
     let told = context(&stored, &stale, stored.finished_ms + 120_000);
     assert_eq!(told.run, RunNumber::new(81));
@@ -66,8 +68,8 @@ fn the_renderers_are_told_the_runs_number_age_and_stale_files() {
     assert_eq!(
         told.stale,
         std::collections::BTreeMap::from([
-            (path("tests/test_a.py"), false),
-            (path("tests/test_b.py"), true)
+            (path("tests/test_a.py"), FileChange::Edited),
+            (path("tests/test_b.py"), FileChange::Gone)
         ])
     );
     // A run stored under a hex id has no number; one with no finishing

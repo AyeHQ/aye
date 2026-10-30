@@ -3,7 +3,7 @@
 //! ([`feed`]), with what it tells them of the run beside the log
 //! ([`context`], [`stale`]).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -11,9 +11,9 @@ use aye_events::{
     AdapterName, Case, Certainty, Counts, Diagnostic, Event, ExitCode, LifetimeId, Outcome,
     ProjectPath, Record, Severity, TestId, TestResult, WorkerIndex,
 };
-use aye_history::{Change, RunMeta};
+use aye_history::RunMeta;
 use aye_render::{ShowContext, ShowMode};
-use aye_stream::module_skip;
+use aye_stream::{FileChange, module_skip};
 
 /// A result of the run, as `aye show` lists and selects them.
 pub(super) struct Item<'a> {
@@ -303,7 +303,7 @@ pub(super) fn stale(
     meta: &RunMeta,
     root: &Path,
     shown: &[&Item<'_>],
-) -> Vec<(ProjectPath, Change)> {
+) -> Vec<(ProjectPath, FileChange)> {
     let mut seen = HashSet::new();
     shown
         .iter()
@@ -315,16 +315,16 @@ pub(super) fn stale(
 
 /// What the renderers are told of the run `meta` beside its log, at
 /// `now_ms`: its number, how long ago it finished, and the files of the
-/// results shown that changed since (`stale`), each with whether it is
-/// gone.
-pub(super) fn context(meta: &RunMeta, stale: &[(ProjectPath, Change)], now_ms: u64) -> ShowContext {
+/// results shown that changed since (`stale`), each with how.
+pub(super) fn context(
+    meta: &RunMeta,
+    stale: &[(ProjectPath, FileChange)],
+    now_ms: u64,
+) -> ShowContext {
     ShowContext {
         run: meta.number(),
         ago: (meta.finished_ms > 0).then(|| ago(now_ms, meta.finished_ms)),
-        stale: stale
-            .iter()
-            .map(|(path, change)| (path.clone(), *change == Change::Gone))
-            .collect::<BTreeMap<_, _>>(),
+        stale: stale.iter().cloned().collect(),
     }
 }
 

@@ -320,9 +320,12 @@ fn each_file_with_a_test_has_its_digest_and_changes_are_told() {
     let root = project.path();
     assert_eq!(meta.change(root, "tests/test_a.py"), None);
     fs::write(root.join("tests/test_a.py"), "def test_a(): assert 0\n").unwrap();
-    assert_eq!(meta.change(root, "tests/test_a.py"), Some(Change::Edited));
+    assert_eq!(
+        meta.change(root, "tests/test_a.py"),
+        Some(FileChange::Edited)
+    );
     fs::remove_file(root.join("tests/test_b.py")).unwrap();
-    assert_eq!(meta.change(root, "tests/test_b.py"), Some(Change::Gone));
+    assert_eq!(meta.change(root, "tests/test_b.py"), Some(FileChange::Gone));
     // A file the run has no digest of is not said to have changed.
     assert_eq!(meta.change(root, "tests/test_c.py"), None);
 }

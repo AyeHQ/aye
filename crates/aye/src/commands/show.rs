@@ -61,7 +61,7 @@ use std::io::{self, Write as _};
 
 use aye_config::OutputFormat;
 use aye_events::RunNumber;
-use aye_history::{Change, RunMeta, RunStore, StoredRunId};
+use aye_history::{RunMeta, RunStore, StoredRunId};
 use aye_render::{JsonLines, ShowMode, Text, TextOptions};
 use aye_stream::{Consumer, Keys};
 
@@ -169,14 +169,14 @@ pub(crate) fn show(args: &ShowArgs, printer: Printer) -> Result<(), AyeError> {
             )
             .for_show(mode, keys, context);
             for (path, change) in &stale {
-                text.stale(path.as_str(), *change == Change::Gone)?;
+                text.stale(path.as_str(), *change)?;
             }
             Box::new(text)
         }
         OutputFormat::Json => {
             let mut json = JsonLines::new(io::stdout(), verbosity).for_show(mode, keys, context);
             for (path, change) in &stale {
-                json.stale(path.as_str(), *change == Change::Gone)?;
+                json.stale(path.as_str(), *change)?;
             }
             Box::new(json)
         }

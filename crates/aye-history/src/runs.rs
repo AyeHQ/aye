@@ -63,6 +63,7 @@ use aye_events::{
     ContentDigest, Counts, DiagnosticCode, DiagnosticOrigin, ErrorClass, Event, ExitCode,
     ProjectPath, Record, RunId, RunNumber, Severity, StopReason,
 };
+use aye_stream::FileChange;
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -130,24 +131,15 @@ pub struct RunMeta {
     pub files: BTreeMap<ProjectPath, ContentDigest>,
 }
 
-/// How a file differs from what a stored run read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Change {
-    /// Its content changed.
-    Edited,
-    /// It no longer exists.
-    Gone,
-}
-
 impl RunMeta {
     /// How the file `path` (relative to `root`, as ids spell it) changed
     /// since the run; `None` when it didn't, or when the run recorded no
     /// digest for it.
-    pub fn change(&self, root: &Path, path: &str) -> Option<Change> {
+    pub fn change(&self, root: &Path, path: &str) -> Option<FileChange> {
         let recorded = self.files.get(path)?;
         match fs::read(root.join(path)) {
-            Ok(bytes) => (ContentDigest::of(&bytes) != *recorded).then_some(Change::Edited),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Some(Change::Gone),
+            Ok(bytes) => (ContentDigest::of(&bytes) != *recorded).then_some(FileChange::Edited),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Some(FileChange::Gone),
             Err(_) => None,
         }
     }
