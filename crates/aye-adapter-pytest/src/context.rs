@@ -301,6 +301,7 @@ mod tests {
     use aye_adapter::{Project, Recognizer};
 
     use super::*;
+    use crate::adapter::Listing;
     use crate::recognizer::NativeRecognizer;
 
     fn write(root: &Path, rel: &str, body: &str) {
@@ -318,7 +319,10 @@ mod tests {
             framework_args,
             ..Project::new(root, root)
         };
-        NativeRecognizer::new(PytestRecognizer::with_env(&project, None).unwrap(), false)
+        NativeRecognizer::new(
+            PytestRecognizer::with_env(&project, None).unwrap(),
+            Listing::Refine,
+        )
     }
 
     #[test]
@@ -451,7 +455,7 @@ mod tests {
         };
         let set = NativeRecognizer::new(
             PytestRecognizer::with_environment(&project, env).unwrap(),
-            false,
+            Listing::Refine,
         );
         let nothing = tempfile::tempdir().unwrap();
         let unset = recognizer(nothing.path(), &[]);
@@ -592,7 +596,7 @@ mod tests {
                 };
                 let recognizer = NativeRecognizer::new(
                     PytestRecognizer::with_env(&project, None).unwrap(),
-                    false,
+                    Listing::Refine,
                 );
                 recognizer.context().into_value()["native"]["ini"].to_string()
             })

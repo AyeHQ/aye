@@ -17,6 +17,7 @@ use aye_pytest::session::is_virtualenv;
 use aye_python_stdlib::fnmatch;
 use aye_python_stdlib::os_path::normalize_absolute;
 
+use crate::adapter::Listing;
 use crate::claims::doctest_plugin::PYTEST_DOCTESTS;
 use crate::claims::ignore::Ignored;
 use crate::conftest::{Summary, Supports};
@@ -199,18 +200,17 @@ const REFINE_REASON: &str = "aye's pytest front-end reads every test file";
 #[derive(Debug)]
 pub(crate) struct NativeRecognizer {
     inner: PytestRecognizer,
-    /// Whether [`Recognizer::recognize`] gives the static recognizer's
-    /// prediction ([`crate::Pytest::static_listing`]).
-    static_listing: bool,
+    /// What [`Recognizer::recognize`] gives for a test file.
+    listing: Listing,
     /// The context, with its `native` section, built once.
     context: OnceLock<PytestContext>,
 }
 
 impl NativeRecognizer {
-    pub(crate) fn new(inner: PytestRecognizer, static_listing: bool) -> Self {
+    pub(crate) fn new(inner: PytestRecognizer, listing: Listing) -> Self {
         Self {
             inner,
-            static_listing,
+            listing,
             context: OnceLock::new(),
         }
     }
@@ -260,12 +260,12 @@ impl Recognizer for NativeRecognizer {
                 ..Recognition::default()
             };
         }
-        if self.static_listing {
-            return self.inner.recognize(file, requested, support);
-        }
-        Recognition {
-            refine: Some(REFINE_REASON.into()),
-            ..Recognition::default()
+        match self.listing {
+            Listing::Static => self.inner.recognize(file, requested, support),
+            Listing::Refine => Recognition {
+                refine: Some(REFINE_REASON.into()),
+                ..Recognition::default()
+            },
         }
     }
 
@@ -306,7 +306,10 @@ mod tests {
             framework_args,
             ..Project::new(root, root)
         };
-        NativeRecognizer::new(PytestRecognizer::with_env(&project, None).unwrap(), false)
+        NativeRecognizer::new(
+            PytestRecognizer::with_env(&project, None).unwrap(),
+            Listing::Refine,
+        )
     }
 
     #[test]

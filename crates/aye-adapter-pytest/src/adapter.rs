@@ -55,9 +55,20 @@ pub const NAME: AdapterName = names::PYTEST;
 /// aye's engine, with no pytest installed.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Pytest {
-    /// Whether the recognizer gives the static prediction rather than
-    /// refining every file ([`Self::static_listing`]).
-    static_listing: bool,
+    /// What its recognizer gives for a test file.
+    listing: Listing,
+}
+
+/// What the pytest adapter's recognizer gives for a test file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Listing {
+    /// No static case: the file is refined, and the front-end lists it.
+    /// Every run but `aye --co --no-refine`.
+    #[default]
+    Refine,
+    /// The static recognizer's prediction, without importing anything
+    /// ([`Pytest::static_listing`]).
+    Static,
 }
 
 impl Pytest {
@@ -68,7 +79,7 @@ impl Pytest {
     #[must_use]
     pub const fn static_listing() -> Self {
         Self {
-            static_listing: true,
+            listing: Listing::Static,
         }
     }
 }
@@ -83,7 +94,7 @@ impl Adapter for Pytest {
     fn prepare(&self, project: &Project<'_>) -> Result<Option<Box<dyn Recognizer>>, AdapterError> {
         Ok(Some(Box::new(NativeRecognizer::new(
             PytestRecognizer::new(project)?,
-            self.static_listing,
+            self.listing,
         ))))
     }
 
@@ -103,7 +114,7 @@ impl Adapter for Pytest {
         };
         Ok(Some(Box::new(NativeRecognizer::new(
             recognizer,
-            self.static_listing,
+            self.listing,
         ))))
     }
 
