@@ -37,7 +37,7 @@
 //! <key>` shows it again), `id`, `sub`, `outcome`, `phase` (`setup` or
 //! `teardown`; absent for the test itself), `at` (`path:line` where it was
 //! raised, or the innermost project frame when that was outside the
-//! project), `why` (the one line saying why: see [`shared::why`]; a bad
+//! project), `why` (the one line saying why: see [`failure::why`]; a bad
 //! outcome without a failure has the last line its test wrote to stderr,
 //! else stdout). Below level 3, a failure whose signature an earlier one
 //! had is `same_as` (the earlier one's key) instead of `why` and the rest,
@@ -145,7 +145,7 @@ use aye_stream::{
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
 
-use crate::{Level, ShowContext, ShowMode, shared};
+use crate::{Level, ShowContext, ShowMode, failure, rerun, words};
 
 const ID_MAX: usize = 1000;
 const PATH_MAX: usize = 500;
@@ -301,7 +301,7 @@ impl<'a> Fail<'a> {
     fn new(key: String, id: &'a TestId, outcome: Outcome) -> Self {
         Self {
             key,
-            id: shared::head(id.as_str(), ID_MAX),
+            id: words::head(id.as_str(), ID_MAX),
             sub: None,
             outcome: outcome.as_str(),
             phase: None,
@@ -447,8 +447,8 @@ impl Serialize for Locals<'_> {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
         for local in self.0 {
             map.serialize_entry(
-                &shared::head(&local.name, LOCAL_MAX),
-                &shared::head(&local.value, LOCAL_MAX),
+                &words::head(&local.name, LOCAL_MAX),
+                &words::head(&local.value, LOCAL_MAX),
             )?;
         }
         map.end()
@@ -517,24 +517,24 @@ const fn is_false(b: &bool) -> bool {
 
 /// `at`: where the failure is shown.
 fn at(failure: &Failure) -> Option<String> {
-    shared::origin(failure)
-        .map(|(path, line)| shared::head(&format!("{path}:{line}"), PATH_MAX).into_owned())
+    failure::origin(failure)
+        .map(|(path, line)| words::head(&format!("{path}:{line}"), PATH_MAX).into_owned())
 }
 
 /// The whole message, when it spans lines: its first line, then at most
 /// 10 more, bounded.
 fn message(failure: &Failure) -> Option<Cow<'_, str>> {
-    let rest = shared::message_rest(failure);
+    let rest = failure::message_rest(failure);
     if rest.is_empty() {
         return None;
     }
-    let mut lines = vec![shared::message(failure)];
+    let mut lines = vec![failure::message(failure)];
     lines.extend(rest.iter().take(MESSAGE_LINES));
     if rest.len() > MESSAGE_LINES {
         lines.push("…");
     }
     Some(Cow::Owned(
-        shared::head(&lines.join("\n"), MESSAGE_MAX).into_owned(),
+        words::head(&lines.join("\n"), MESSAGE_MAX).into_owned(),
     ))
 }
 
@@ -550,16 +550,16 @@ fn compare_line<'a>(
         DIFFERENCES.min(compare.differs.len())
     };
     let known = assertion.expected.is_some();
-    let value = |value: Option<&'a str>| value.map(|value| shared::head(value, VALUE_MAX));
+    let value = |value: Option<&'a str>| value.map(|value| words::head(value, VALUE_MAX));
     let differs = compare.differs[..shown]
         .iter()
         .map(|difference| {
             let at = difference
                 .at
                 .as_deref()
-                .map(|at| shared::head(at, VALUE_MAX));
+                .map(|at| words::head(at, VALUE_MAX));
             if known {
-                let (expected, actual) = shared::entries(assertion, difference);
+                let (expected, actual) = failure::entries(assertion, difference);
                 Entry {
                     at,
                     expected: value(expected),
@@ -582,8 +582,8 @@ fn compare_line<'a>(
         .unwrap_or(u32::MAX)
         .saturating_add(compare.omitted);
     CompareLine {
-        kind: shared::head(compare.kind.as_str(), VALUE_MAX),
-        summary: shared::head(&compare.summary, SUMMARY_MAX),
+        kind: words::head(compare.kind.as_str(), VALUE_MAX),
+        summary: words::head(&compare.summary, SUMMARY_MAX),
         same: compare.same,
         differs,
         omitted,
@@ -593,21 +593,21 @@ fn compare_line<'a>(
 /// The explanation, bounded; none when it only restates the operands,
 /// which the line carries already.
 fn bounded_diff(assertion: &aye_events::Assertion) -> Vec<Cow<'_, str>> {
-    let mut lines = shared::explanation(assertion);
-    if shared::only_restates(assertion, &lines) {
+    let mut lines = failure::explanation(assertion);
+    if failure::only_restates(assertion, &lines) {
         lines.clear();
     }
     if lines.len() <= DIFF_LINES {
         return lines
             .into_iter()
-            .map(|line| shared::head(line, DIFF_LINE_MAX))
+            .map(|line| words::head(line, DIFF_LINE_MAX))
             .collect();
     }
     let more = lines.len() - (DIFF_LINES - 1);
     lines
         .into_iter()
         .take(DIFF_LINES - 1)
-        .map(|line| shared::head(line, DIFF_LINE_MAX))
+        .map(|line| words::head(line, DIFF_LINE_MAX))
         .chain([Cow::Owned(format!("… {more} more lines"))])
         .collect()
 }
@@ -620,7 +620,7 @@ fn comparison<'a>(detail: &mut Detail<'a>, failure: &'a Failure, all: bool) {
     };
     let source = |source: Option<&'a String>| {
         source.map(|source| {
-            Cow::Owned(shared::head(&shared::first_line(source), SOURCE_MAX).into_owned())
+            Cow::Owned(words::head(&failure::first_line(source), SOURCE_MAX).into_owned())
         })
     };
     let known = assertion.expected.is_some();
@@ -645,25 +645,25 @@ fn comparison<'a>(detail: &mut Detail<'a>, failure: &'a Failure, all: bool) {
     }
     if operands {
         if known {
-            let (expected, actual) = shared::whole(assertion);
-            detail.expected = Some(shared::head(expected, OPERAND_MAX));
-            detail.actual = Some(shared::head(actual, OPERAND_MAX));
+            let (expected, actual) = failure::whole(assertion);
+            detail.expected = Some(words::head(expected, OPERAND_MAX));
+            detail.actual = Some(words::head(actual, OPERAND_MAX));
         } else {
-            detail.left = Some(shared::head(&assertion.left, OPERAND_MAX));
-            detail.right = Some(shared::head(&assertion.right, OPERAND_MAX));
+            detail.left = Some(words::head(&assertion.left, OPERAND_MAX));
+            detail.right = Some(words::head(&assertion.right, OPERAND_MAX));
         }
     }
 }
 
 /// L3's frames: each project frame, and each run of others as one entry.
 fn frames(failure: &Failure) -> Vec<String> {
-    shared::frame_items(&failure.frames)
+    failure::frame_items(&failure.frames)
         .into_iter()
         .map(|item| match item {
-            shared::FrameItem::Project(frame) => {
-                shared::head(&shared::frame_line(frame), FRAME_MAX).into_owned()
+            failure::FrameItem::Project(frame) => {
+                words::head(&failure::frame_line(frame), FRAME_MAX).into_owned()
             }
-            shared::FrameItem::Others { count, package } => shared::others(count, &package),
+            failure::FrameItem::Others { count, package } => failure::others(count, &package),
         })
         .collect()
 }
@@ -673,7 +673,7 @@ fn output_tails(output: &Captured) -> Option<Output> {
         if captured.trim().is_empty() {
             return None;
         }
-        let lines = shared::last_lines(captured, OUTPUT_LINES);
+        let lines = words::last_lines(captured, OUTPUT_LINES);
         let mut shown = lines.lines.join("\n");
         if lines.total > lines.lines.len() {
             shown = format!(
@@ -681,7 +681,7 @@ fn output_tails(output: &Captured) -> Option<Output> {
                 lines.total - lines.lines.len()
             );
         }
-        Some(shared::tail(&shown, OUTPUT_MAX).into_owned())
+        Some(words::tail(&shown, OUTPUT_MAX).into_owned())
     };
     let output = Output {
         stdout: tail(&output.stdout),
@@ -729,8 +729,8 @@ impl<W: Write> JsonLines<W> {
         }
         let gone = change == FileChange::Gone;
         self.line(&Line::Stale {
-            path: shared::head(path, PATH_MAX),
-            rerun: (!gone).then(|| shared::head(&shared::rerun_path(path), RERUN_MAX).into_owned()),
+            path: words::head(path, PATH_MAX),
+            rerun: (!gone).then(|| words::head(&rerun::rerun_path(path), RERUN_MAX).into_owned()),
             gone,
         })
     }
@@ -799,7 +799,7 @@ impl<W: Write> JsonLines<W> {
         }
         self.signatures
             .first_or_keep(signature, || {
-                (key.to_owned(), shared::message(failure).to_owned())
+                (key.to_owned(), failure::message(failure).to_owned())
             })
             .cloned()
     }
@@ -817,7 +817,7 @@ impl<W: Write> JsonLines<W> {
         if !self.detailed() {
             return detail;
         }
-        if let Some(frame) = shared::pointed(failure) {
+        if let Some(frame) = failure::pointed(failure) {
             // The failing line at its indentation relative to `before`.
             let indent = if frame.before.is_empty() {
                 0
@@ -825,7 +825,7 @@ impl<W: Write> JsonLines<W> {
                 frame.indent.min(40)
             };
             detail.code = frame.source.as_deref().map(|source| {
-                let source = shared::head(source, CODE_MAX);
+                let source = words::head(source, CODE_MAX);
                 if indent == 0 {
                     source
                 } else {
@@ -839,7 +839,7 @@ impl<W: Write> JsonLines<W> {
             detail.before = frame
                 .before
                 .iter()
-                .map(|line| shared::head(line, CODE_MAX))
+                .map(|line| words::head(line, CODE_MAX))
                 .collect();
         }
         comparison(&mut detail, failure, self.all());
@@ -851,29 +851,29 @@ impl<W: Write> JsonLines<W> {
             failure
                 .assertion
                 .as_ref()
-                .and_then(|assertion| shared::own_message(failure, assertion))
-                .map(|own| shared::head(own, MESSAGE_MAX))
+                .and_then(|assertion| failure::own_message(failure, assertion))
+                .map(|own| words::head(own, MESSAGE_MAX))
         } else {
             message(failure)
         };
         detail.hint = failure
             .hint
             .as_deref()
-            .map(|hint| shared::head(hint, HINT_MAX));
+            .map(|hint| words::head(hint, HINT_MAX));
         detail.fixture = failure
             .resource
             .as_deref()
-            .map(|resource| shared::resource_name(resource, failure.phase))
+            .map(|resource| failure::resource_name(resource, failure.phase))
             .filter(|(_, fixture)| *fixture)
-            .map(|(name, _)| Cow::Owned(shared::head(&name, FIXTURE_MAX).into_owned()));
+            .map(|(name, _)| Cow::Owned(words::head(&name, FIXTURE_MAX).into_owned()));
         if let Some(result) = result {
             detail.setup = result
                 .resources
                 .iter()
                 .take(SETUP)
                 .map(|resource| {
-                    let (name, _) = shared::resource_name(&resource.name, None);
-                    shared::head(&format!("{name}:{}", resource.scope), FIXTURE_MAX).into_owned()
+                    let (name, _) = failure::resource_name(&resource.name, None);
+                    words::head(&format!("{name}:{}", resource.scope), FIXTURE_MAX).into_owned()
                 })
                 .collect();
             detail.history = result.history.as_ref().and_then(|previous| {
@@ -891,17 +891,17 @@ impl<W: Write> JsonLines<W> {
             .iter()
             .take(ALSO)
             .map(|also| {
-                let phase = also.phase.map_or("test", shared::phase);
-                shared::head(&format!("{phase}: {}", shared::message(also)), MESSAGE_MAX)
+                let phase = also.phase.map_or("test", words::phase);
+                words::head(&format!("{phase}: {}", failure::message(also)), MESSAGE_MAX)
                     .into_owned()
             })
             .collect();
-        detail.rerun = rerun.map(|rerun| shared::head(&rerun, RERUN_MAX).into_owned());
-        detail.ms = Some(shared::millis(duration));
+        detail.rerun = rerun.map(|rerun| words::head(&rerun, RERUN_MAX).into_owned());
+        detail.ms = Some(words::millis(duration));
         if self.all() {
             detail.frames = frames(failure);
             detail.output = result.and_then(|result| output_tails(&result.output));
-            let locals = shared::locals(failure);
+            let locals = failure::locals(failure);
             detail.locals = (!locals.is_empty()).then_some(Locals(locals));
         }
         detail
@@ -914,8 +914,8 @@ impl<W: Write> JsonLines<W> {
             return;
         }
         detail.rerun = Some(
-            shared::head(
-                &shared::rerun(&result.id, result.reproduce.as_ref()),
+            words::head(
+                &rerun::rerun(&result.id, result.reproduce.as_ref()),
                 RERUN_MAX,
             )
             .into_owned(),
@@ -965,11 +965,11 @@ impl<W: Write> JsonLines<W> {
         }
         let Some(first) = own.first() else {
             let mut fail = Fail::new(key, &result.id, result.outcome);
-            fail.why = shared::bare_why(&result.output);
+            fail.why = failure::bare_why(&result.output);
             fail.shown = self.shown(result.id.path().as_str(), worker);
             self.carry(&mut fail.detail, result);
             if self.detailed() {
-                fail.detail.ms = Some(shared::millis(result.duration));
+                fail.detail.ms = Some(words::millis(result.duration));
                 if !self.all() {
                     fail.detail.output = output_tails(&result.output);
                 }
@@ -977,17 +977,17 @@ impl<W: Write> JsonLines<W> {
             return self.line(&Line::Fail(Box::new(fail)));
         };
         let mut fail = Fail::new(key.clone(), &result.id, result.outcome);
-        fail.phase = shared::notable_phase(first);
+        fail.phase = failure::notable_phase(first);
         fail.at = at(first);
         fail.shown = self.shown(result.id.path().as_str(), worker);
         if let Some((same, message)) = self.first_with(first, &key) {
             fail.same_as = Some(same);
-            if message != shared::message(first) {
-                fail.why = Some(shared::why(first, true));
+            if message != failure::message(first) {
+                fail.why = Some(failure::why(first, true));
             }
         } else {
-            fail.why = Some(shared::why(first, true));
-            let rerun = shared::rerun(&result.id, result.reproduce.as_ref());
+            fail.why = Some(failure::why(first, true));
+            let rerun = rerun::rerun(&result.id, result.reproduce.as_ref());
             fail.detail = self.detail(first, &own[1..], Some(result), result.duration, Some(rerun));
         }
         self.line(&Line::Fail(Box::new(fail)))
@@ -1006,22 +1006,22 @@ impl<W: Write> JsonLines<W> {
     ) -> io::Result<()> {
         let key = self.key(id);
         let mut fail = Fail::new(key.clone(), id, sub.outcome);
-        fail.sub = Some(shared::head(&sub.name, ID_MAX));
+        fail.sub = Some(words::head(&sub.name, ID_MAX));
         fail.shown = self.shown(id.path().as_str(), sub.worker);
         if let Some(failure) = &sub.failure {
-            fail.phase = shared::notable_phase(failure);
+            fail.phase = failure::notable_phase(failure);
             fail.at = at(failure);
             // A sub-outcome is named by its test's key and its name.
             let label = format!("{key} › {}", sub.name);
             if let Some((same, message)) = self.first_with(failure, &label) {
                 fail.same_as = Some(same);
-                if message != shared::message(failure) {
-                    fail.why = Some(shared::why(failure, false));
+                if message != failure::message(failure) {
+                    fail.why = Some(failure::why(failure, false));
                 }
             } else {
-                fail.why = Some(shared::why(failure, false));
+                fail.why = Some(failure::why(failure, false));
                 if !brief {
-                    let rerun = shared::rerun(id, carried.and_then(|r| r.reproduce.as_ref()));
+                    let rerun = rerun::rerun(id, carried.and_then(|r| r.reproduce.as_ref()));
                     fail.detail = self.detail(failure, &[], None, sub.duration, Some(rerun));
                 }
             }
@@ -1056,7 +1056,7 @@ impl<W: Write> JsonLines<W> {
         lifetime: &LifetimeId,
     ) -> io::Result<()> {
         let mut fail = Fail::new(key, id, outcome);
-        fail.cause = Some(shared::head(lifetime.as_str(), ID_MAX));
+        fail.cause = Some(words::head(lifetime.as_str(), ID_MAX));
         self.line(&Line::Fail(Box::new(fail)))
     }
 
@@ -1081,8 +1081,8 @@ impl<W: Write> JsonLines<W> {
         let key = self.key(lifetime);
         let mut line = LifetimeFail {
             key: key.clone(),
-            lifetime: shared::head(lifetime.as_str(), ID_MAX),
-            phase: failure.phase.map(shared::phase),
+            lifetime: words::head(lifetime.as_str(), ID_MAX),
+            phase: failure.phase.map(words::phase),
             same_as: None,
             at: at(failure),
             why: None,
@@ -1097,12 +1097,12 @@ impl<W: Write> JsonLines<W> {
         };
         if let Some((same, message)) = self.first_with(failure, &key) {
             line.same_as = Some(same);
-            if message != shared::message(failure) {
-                line.why = Some(shared::why(failure, false));
+            if message != failure::message(failure) {
+                line.why = Some(failure::why(failure, false));
             }
         } else {
-            line.why = Some(shared::why(failure, false));
-            let rerun = blocked.first().map(|(id, _)| shared::rerun(id, None));
+            line.why = Some(failure::why(failure, false));
+            let rerun = blocked.first().map(|(id, _)| rerun::rerun(id, None));
             line.detail = self.detail(failure, &[], None, duration, rerun);
         }
         self.line(&Line::LifetimeFail(Box::new(line)))
@@ -1116,11 +1116,11 @@ impl<W: Write> JsonLines<W> {
         }
         self.line(&Line::LifetimeFail(Box::new(LifetimeFail {
             key: self.key(lifetime),
-            lifetime: shared::head(lifetime.as_str(), ID_MAX),
-            phase: failure.phase.map(shared::phase),
+            lifetime: words::head(lifetime.as_str(), ID_MAX),
+            phase: failure.phase.map(words::phase),
             same_as: None,
             at: at(failure),
-            why: Some(shared::why(failure, false)),
+            why: Some(failure::why(failure, false)),
             shown: None,
             detail: Detail::default(),
             blocked: Vec::new(),
@@ -1132,26 +1132,26 @@ impl<W: Write> JsonLines<W> {
     fn list_line(&mut self, result: &TestResult) -> io::Result<()> {
         let why = if result.outcome.is_bad() && result.cause.is_none() {
             match result.failure() {
-                Some(failure) => Some(shared::why(failure, true)),
-                None => shared::bare_why(&result.output),
+                Some(failure) => Some(failure::why(failure, true)),
+                None => failure::bare_why(&result.output),
             }
         } else {
             None
         };
         self.line(&Line::Test {
             key: Some(self.key(&result.id)),
-            id: shared::head(result.id.as_str(), ID_MAX),
+            id: words::head(result.id.as_str(), ID_MAX),
             outcome: result.outcome.as_str(),
-            ms: shared::millis(result.duration),
+            ms: words::millis(result.duration),
             why,
             reason: result
                 .reason
                 .as_deref()
-                .map(|reason| shared::head(reason, REASON_MAX)),
+                .map(|reason| words::head(reason, REASON_MAX)),
             cause: result
                 .cause
                 .as_ref()
-                .map(|cause| shared::head(cause.as_str(), ID_MAX)),
+                .map(|cause| words::head(cause.as_str(), ID_MAX)),
         })
     }
 
@@ -1160,11 +1160,11 @@ impl<W: Write> JsonLines<W> {
     fn module_skip_line(&mut self, diagnostic: &Diagnostic) -> io::Result<()> {
         self.line(&Line::Test {
             key: None,
-            id: shared::head(diagnostic.path.as_str(), ID_MAX),
+            id: words::head(diagnostic.path.as_str(), ID_MAX),
             outcome: Outcome::Skipped.as_str(),
             ms: 0,
             why: None,
-            reason: Some(shared::head(&diagnostic.message, REASON_MAX)),
+            reason: Some(words::head(&diagnostic.message, REASON_MAX)),
             cause: None,
         })
     }
@@ -1193,10 +1193,10 @@ impl<W: Write> JsonLines<W> {
         {
             return Ok(());
         }
-        let path = shared::head(diagnostic.path.as_str(), PATH_MAX);
+        let path = words::head(diagnostic.path.as_str(), PATH_MAX);
         let line = diagnostic.span.as_ref().and_then(|span| span.line);
-        let code = shared::head(diagnostic.code.as_str(), DIAGNOSTIC_CODE_MAX);
-        let message = shared::head(&diagnostic.message, COLLECTION_ERROR_MAX);
+        let code = words::head(diagnostic.code.as_str(), DIAGNOSTIC_CODE_MAX);
+        let message = words::head(&diagnostic.message, COLLECTION_ERROR_MAX);
         if diagnostic.severity == Severity::Error {
             return self.line(&Line::CollectionError {
                 path,
@@ -1217,7 +1217,7 @@ impl<W: Write> JsonLines<W> {
     fn worker_error(&mut self, worker: Option<WorkerIndex>, error: &str) -> io::Result<()> {
         self.line(&Line::WorkerError {
             worker,
-            error: shared::tail(error.trim_end(), WORKER_ERROR_MAX),
+            error: words::tail(error.trim_end(), WORKER_ERROR_MAX),
         })
     }
 
@@ -1260,7 +1260,7 @@ impl<W: Write> JsonLines<W> {
             setup_error: extra.setup_error,
             teardown_error: extra.teardown_error,
             lifetime_error: extra.lifetime_error,
-            s: shared::secs(duration),
+            s: words::secs(duration),
             stopped: stopped.cloned(),
             failures: failures.into_iter().take(FAILURES).collect(),
             failures_omitted: omitted,
@@ -1329,7 +1329,7 @@ impl<W: Write> Consumer for JsonLines<W> {
         }
         match &record.event {
             Event::CaseCollected(case) if self.facts.collect_only => self.line(&Line::Case {
-                id: shared::head(case.id.as_str(), ID_MAX),
+                id: words::head(case.id.as_str(), ID_MAX),
                 partial: case.certainty == Certainty::Partial,
             }),
             _ if !self.lines() => Ok(()),

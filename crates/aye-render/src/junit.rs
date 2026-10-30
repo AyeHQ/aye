@@ -32,7 +32,7 @@ use aye_events::{
 };
 use aye_stream::{Consumer, DefinitionLines, HeldSub, ModuleSkips, Repeats, SubOutcomes};
 
-use crate::shared;
+use crate::{failure, words};
 
 /// How the report is written: the framework's JUnit settings (pytest's
 /// `junit_*` options, which the binary reads from the adapter's context),
@@ -371,7 +371,7 @@ impl Junit {
             let message = sub
                 .failure
                 .as_ref()
-                .map_or(sub.outcome.as_str(), shared::message);
+                .map_or(sub.outcome.as_str(), failure::message);
             element(
                 &mut children,
                 tag,
@@ -478,20 +478,20 @@ impl Junit {
 
     /// The test case of a failed lifetime that kept no test from running.
     fn lifetime_case(&self, lifetime: &LifetimeId, failure: &Failure) -> String {
-        let phase = failure.phase.map_or("lifetime", shared::phase);
+        let phase = failure.phase.map_or("lifetime", words::phase);
         let mut xml = format!(
             "    <testcase classname=\"{}\" name=\"{}\"",
             attr(&self.classname("")),
             attr(&format!("{phase} of {lifetime}"))
         );
-        if let Some((path, line)) = shared::origin(failure) {
+        if let Some((path, line)) = failure::origin(failure) {
             xml.push_str(&self.location(path.as_str(), Some(line)));
         }
         xml.push_str(" time=\"0.000\">\n");
         element(
             &mut xml,
             "error",
-            Some(shared::message(failure)),
+            Some(failure::message(failure)),
             failure.exception.as_deref(),
             &detail(failure),
         );
@@ -614,7 +614,7 @@ fn failures(children: &mut String, result: &TestResult, lifetime: Option<&Failur
                     Some(Phase::Teardown) => "teardown",
                     _ => "setup",
                 };
-                format!("{phase} of {cause} failed: {}", shared::message(failure))
+                format!("{phase} of {cause} failed: {}", failure::message(failure))
             }
             None => format!("setup of {cause} failed"),
         };
@@ -648,7 +648,7 @@ fn failures(children: &mut String, result: &TestResult, lifetime: Option<&Failur
         element(
             children,
             tag,
-            Some(shared::message(failure)),
+            Some(failure::message(failure)),
             failure.exception.as_deref(),
             &detail(failure),
         );
@@ -671,9 +671,9 @@ fn detail(failure: &Failure) -> String {
             let _ = writeln!(detail, "    {source}");
         }
     }
-    detail.push_str(shared::message(failure));
+    detail.push_str(failure::message(failure));
     if let Some(assertion) = &failure.assertion {
-        for line in shared::diff_lines(&assertion.diff) {
+        for line in failure::diff_lines(&assertion.diff) {
             detail.push('\n');
             detail.push_str(line);
         }

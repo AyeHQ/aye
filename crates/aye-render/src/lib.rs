@@ -31,7 +31,7 @@
 //!   module's docs give its format exactly.
 //! - **Keys** (`aye_stream::Keys`): every test and lifetime is named by its
 //!   key, the same in every format and in `aye show` later.
-//! - **Why, in one line** (`shared::why`), the same in both formats: a
+//! - **Why, in one line** (`failure::why`), the same in both formats: a
 //!   test's failed teardown says it passed, a fixture's failed setup names
 //!   it, a comparison says what was expected and what was got, and
 //!   otherwise the message speaks, with its hint.
@@ -151,14 +151,16 @@
 //!   The binary enables them when [`github_actions_enabled`] says of the
 //!   environment it read.
 
+mod failure;
 mod github;
 mod json;
 mod junit;
 mod level;
-mod shared;
+mod rerun;
 mod show;
 mod summary;
 mod text;
+mod words;
 
 pub use anstream::ColorChoice;
 pub use github::{GithubAnnotations, github_actions_enabled};

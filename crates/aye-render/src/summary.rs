@@ -4,7 +4,7 @@
 use aye_events::Counts;
 use aye_stream::Extra;
 
-use crate::shared;
+use crate::words;
 
 /// How the text summary line colours a count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +84,6 @@ pub(crate) fn parts(counts: &Counts, extra: &Extra) -> Vec<Part> {
 pub fn summary_words(counts: &Counts, extra: &Extra) -> Vec<String> {
     parts(counts, extra)
         .into_iter()
-        .map(|(n, one, many, _)| shared::plural(n, one, many))
+        .map(|(n, one, many, _)| words::plural(n, one, many))
         .collect()
 }

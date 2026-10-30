@@ -22,7 +22,7 @@ use aye_stream::{
     Again, BlockedTests, Consumer, DefinitionLines, FirstBySignature, Repeats, SubOutcomes,
 };
 
-use crate::shared;
+use crate::{failure, words};
 
 /// Failure annotations written per run.
 const ANNOTATIONS: usize = 50;
@@ -113,7 +113,7 @@ impl<W: Write> GithubAnnotations<W> {
     /// project frame, else the test's definition.
     fn locate(&self, failure: Option<&Failure>, id: &TestId) -> (Option<String>, Option<u32>) {
         if let Some((path, line)) = failure
-            .and_then(shared::origin)
+            .and_then(failure::origin)
             .filter(|(path, _)| path.is_project())
         {
             return (Some(path.as_str().to_owned()), Some(line));
@@ -194,7 +194,7 @@ impl<W: Write> GithubAnnotations<W> {
         }
         let (file, line) = match self.blocked.held(lifetime).first() {
             Some(first) => self.locate(Some(failure), first),
-            None => shared::origin(failure)
+            None => failure::origin(failure)
                 .filter(|(path, _)| path.is_project())
                 .map_or((None, None), |(path, line)| {
                     (Some(path.as_str().to_owned()), Some(line))
@@ -242,7 +242,7 @@ impl<W: Write> GithubAnnotations<W> {
             || "a worker failed".to_owned(),
             |w| format!("worker {w} failed"),
         );
-        let tail = shared::last_lines(error, WORKER_LINES).lines.join("\n");
+        let tail = words::last_lines(error, WORKER_LINES).lines.join("\n");
         writeln!(self.out, "{}", command(None, None, &title, &tail))
     }
 
@@ -273,7 +273,7 @@ impl<W: Write> GithubAnnotations<W> {
                 let _ = write!(
                     message,
                     "\n{} failed the same way",
-                    shared::plural(annotation.repeats, "more test", "more tests")
+                    words::plural(annotation.repeats, "more test", "more tests")
                 );
             }
             if let Some(count) = annotation
@@ -285,7 +285,7 @@ impl<W: Write> GithubAnnotations<W> {
                 let _ = write!(
                     message,
                     "\n{} not run",
-                    shared::plural(count, "test", "tests")
+                    words::plural(count, "test", "tests")
                 );
             }
             let file = annotation.file.as_deref().map(|file| self.file(file));
@@ -301,7 +301,7 @@ impl<W: Write> GithubAnnotations<W> {
             let more = annotations.len() - ANNOTATIONS;
             let message = format!(
                 "{} not annotated; see the log",
-                shared::plural(more, "more failure", "more failures")
+                words::plural(more, "more failure", "more failures")
             );
             writeln!(self.out, "{}", command(None, None, "aye", &message))?;
         }
@@ -312,13 +312,13 @@ impl<W: Write> GithubAnnotations<W> {
 /// The annotation's text: the message, with the rest of a message that
 /// spans lines, then the start of the explanation.
 fn message(failure: &Failure) -> String {
-    let mut message = shared::message(failure).to_owned();
+    let mut message = failure::message(failure).to_owned();
     let explanation = failure
         .assertion
         .as_ref()
-        .map(shared::explanation)
+        .map(failure::explanation)
         .unwrap_or_default();
-    for line in shared::message_rest(failure)
+    for line in failure::message_rest(failure)
         .into_iter()
         .chain(explanation)
         .take(DIFF_LINES)

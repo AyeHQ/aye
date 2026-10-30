@@ -16,7 +16,7 @@
 //! ```
 //! The key and the id (with ` (setup)` after it for a setup failure the
 //! second line doesn't name), then the one line saying why (see
-//! [`shared::why`]) and where: `at <path>:<line>`, the innermost project
+//! [`failure::why`]) and where: `at <path>:<line>`, the innermost project
 //! frame, cyan, and on a live terminal with colour an OSC 8 hyperlink to
 //! the file. A failure whose signature an earlier one had says `same as
 //! <key>` instead (and its own why after ` · ` when its message differs).
@@ -154,7 +154,7 @@ use aye_stream::{
 };
 
 use crate::summary::{self, Tone};
-use crate::{ColorChoice, ShowContext, ShowMode, shared};
+use crate::{ColorChoice, ShowContext, ShowMode, failure, rerun, words};
 
 const BOLD: Style = Style::new().bold();
 const DIM: Style = Style::new().dimmed();
@@ -400,7 +400,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         if change == FileChange::Gone {
             writeln!(self.out, "{YELLOW}{path} is gone since this run{YELLOW:#}")
         } else {
-            let rerun = shared::rerun_path(path);
+            let rerun = rerun::rerun_path(path);
             writeln!(
                 self.out,
                 "{YELLOW}{path} changed since this run; rerun: {rerun}{YELLOW:#}"
@@ -422,13 +422,13 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         let line = if refining > 0 {
             format!(
                 "collecting: importing {} to find their tests",
-                shared::plural(refining, "file", "files")
+                words::plural(refining, "file", "files")
             )
         } else {
             format!(
                 "collecting: {} walked, {} found",
-                shared::plural(walked, "file", "files"),
-                shared::plural(test_files, "test file", "test files")
+                words::plural(walked, "file", "files"),
+                words::plural(test_files, "test file", "test files")
             )
         };
         let width = line.chars().count();
@@ -526,9 +526,9 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             parts.push(format!("python {python}"));
         }
         if let Some(selected) = self.facts.selected {
-            parts.push(shared::plural(selected, "test", "tests"));
+            parts.push(words::plural(selected, "test", "tests"));
         }
-        parts.push(shared::plural(
+        parts.push(words::plural(
             self.facts.workers.max(1),
             "worker",
             "workers",
@@ -633,18 +633,18 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         note: Option<&str>,
     ) -> io::Result<()> {
         let (symbol, style) = symbol(outcome);
-        let word = shared::outcome_words(outcome);
+        let word = words::outcome_words(outcome);
         write!(self.out, "{style}{symbol} {word:<7}{style:#} ")?;
         if let Some(key) = key {
             write!(self.out, "{KEY}{key}{KEY:#}  ")?;
         }
         write!(self.out, "{name}")?;
         if let Some(duration) = duration {
-            write!(self.out, "  {DIM}{}{DIM:#}", shared::spaced(duration))?;
+            write!(self.out, "  {DIM}{}{DIM:#}", words::spaced(duration))?;
         }
         if let Some(note) = note {
             let note = note.lines().next().unwrap_or_default();
-            write!(self.out, " — {}", shared::head(note, self.line_max()))?;
+            write!(self.out, " — {}", words::head(note, self.line_max()))?;
         }
         writeln!(self.out)
     }
@@ -667,7 +667,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             }
             Event::BatchStarted { adapter, cases } => format!(
                 "{batch} started on {worker} ({adapter}, {})",
-                shared::plural(*cases, "test", "tests")
+                words::plural(*cases, "test", "tests")
             ),
             Event::LifetimeStarted { lifetime, kind } => {
                 format!("lifetime {lifetime} started ({kind})")
@@ -684,7 +684,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
                 };
                 format!(
                     "lifetime {lifetime} {finished} ({})",
-                    shared::spaced(*duration)
+                    words::spaced(*duration)
                 )
             }
             Event::BatchFinished { status } => match status {
@@ -737,7 +737,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             notes.push(format!("{deselected} deselected"));
         }
         if refined_files > 0 && self.full() {
-            notes.push(shared::plural(
+            notes.push(words::plural(
                 refined_files,
                 "file imported",
                 "files imported",
@@ -750,8 +750,8 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         };
         let line = format!(
             "collected {}{notes} in {}",
-            shared::plural(selected, "test", "tests"),
-            shared::spaced(duration)
+            words::plural(selected, "test", "tests"),
+            words::spaced(duration)
         );
         // In a run, it follows the header (when a worker starts).
         if !self.facts.collect_only && self.show.is_none() && !self.quiet() {
@@ -780,8 +780,8 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         let note = if bad {
             match (&result.cause, result.failure()) {
                 (Some(lifetime), _) => Some(format!("setup of {lifetime} failed")),
-                (None, Some(failure)) => Some(shared::why(failure, true)),
-                (None, None) => shared::bare_why(&result.output),
+                (None, Some(failure)) => Some(failure::why(failure, true)),
+                (None, None) => failure::bare_why(&result.output),
             }
         } else {
             result.reason.clone()
@@ -800,7 +800,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         let outcome = result.outcome;
         let id = result.id.as_str();
         let key = self.key(&result.id);
-        let rerun = shared::rerun(&result.id, result.reproduce.as_ref());
+        let rerun = rerun::rerun(&result.id, result.reproduce.as_ref());
         let subs = self.subs.take(&result.id);
         let blocks = self.show_subs(&result.id, &key, &subs, Some(&rerun))?;
         if !outcome.is_bad() {
@@ -910,7 +910,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         let level = self.level();
         let has_output = level == Level::L3 && !result.output.is_empty();
         let has_rerun =
-            level >= Level::L2 && blocks == 0 && rerun != shared::rerun(&result.id, None);
+            level >= Level::L2 && blocks == 0 && rerun != rerun::rerun(&result.id, None);
         if !(has_output || has_rerun) {
             return Ok(());
         }
@@ -920,8 +920,8 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             .failure()
             .filter(|failure| aye_stream::is_bare(failure))
         {
-            Some(failure) => shared::message(failure).to_owned(),
-            None => format!("{} above", shared::plural(count, "failure", "failures")),
+            Some(failure) => failure::message(failure).to_owned(),
+            None => format!("{} above", words::plural(count, "failure", "failures")),
         };
         self.block()?;
         self.head(result.outcome, key, result.id.as_str(), Some(&note), true)?;
@@ -955,7 +955,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
                 test: false,
                 duration: Some(sub.duration),
                 result: None,
-                rerun: Some(rerun.map_or_else(|| shared::rerun(id, None), str::to_owned)),
+                rerun: Some(rerun.map_or_else(|| rerun::rerun(id, None), str::to_owned)),
                 worker: sub.worker,
                 not_run: &[],
                 brief,
@@ -1001,7 +1001,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         let key = self.key(lifetime);
         self.note_bad(&key);
         let name = lifetime_name(lifetime, failure);
-        let rerun = not_run.first().map(|(first, _)| shared::rerun(first, None));
+        let rerun = not_run.first().map(|(first, _)| rerun::rerun(first, None));
         self.bad(&Bad {
             outcome: Outcome::Error,
             key: &key,
@@ -1032,7 +1032,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         }
         let key = self.key(lifetime);
         let name = lifetime_name(lifetime, failure);
-        let why = shared::why(failure, false);
+        let why = failure::why(failure, false);
         self.lines()?;
         self.result_line(
             Outcome::Error,
@@ -1057,7 +1057,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
                     Some(sub) => format!("{} › {sub}", bad.key),
                     None => bad.key.to_owned(),
                 };
-                (label, shared::message(first).to_owned())
+                (label, failure::message(first).to_owned())
             };
             if let Some((same, message)) = self.signatures.first_or_keep(signature, label).cloned()
             {
@@ -1089,8 +1089,8 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         self.head(bad.outcome, bad.key, bad.name, None, false)?;
         let indent = indent(bad.key);
         write!(self.out, "{indent}{DIM}same as{DIM:#} {KEY}{same}{KEY:#}")?;
-        if message != shared::message(failure) {
-            write!(self.out, " · {}", shared::why(failure, bad.test))?;
+        if message != failure::message(failure) {
+            write!(self.out, " · {}", failure::why(failure, bad.test))?;
         }
         writeln!(self.out)?;
         self.kept(bad)
@@ -1107,17 +1107,17 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         self.head(bad.outcome, bad.key, bad.name, note, false)?;
         let indent = indent(bad.key);
         if let Some(failure) = first {
-            let why = shared::why(failure, bad.test);
+            let why = failure::why(failure, bad.test);
             write!(self.out, "{indent}{why}")?;
-            if let Some((path, line)) = shared::origin(failure) {
+            if let Some((path, line)) = failure::origin(failure) {
                 write!(self.out, " at {}", self.location(path.as_str(), line))?;
             }
             writeln!(self.out)?;
         } else {
             let why = bad
                 .result
-                .and_then(|result| shared::bare_why(&result.output))
-                .unwrap_or_else(|| shared::outcome_words(bad.outcome).to_owned());
+                .and_then(|result| failure::bare_why(&result.output))
+                .unwrap_or_else(|| words::outcome_words(bad.outcome).to_owned());
             writeln!(self.out, "{indent}{why}")?;
         }
         self.kept(bad)
@@ -1132,7 +1132,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         writeln!(
             self.out,
             "{indent}{DIM}kept {} from running:{DIM:#} aye show {KEY}{}{KEY:#}",
-            shared::plural(bad.not_run.len(), "test", "tests"),
+            words::plural(bad.not_run.len(), "test", "tests"),
             bad.key
         )
     }
@@ -1148,11 +1148,11 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             self.pointed_code(failure)?;
             self.explanation(failure, level)?;
             for also in &bad.failures[1..] {
-                let phase = also.phase.map_or("test", shared::phase);
+                let phase = also.phase.map_or("test", words::phase);
                 writeln!(
                     self.out,
                     "  {DIM}also in {phase}:{DIM:#} {RED}{}{RED:#}",
-                    shared::head(shared::message(also), self.line_max())
+                    words::head(failure::message(also), self.line_max())
                 )?;
             }
         }
@@ -1164,7 +1164,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             .filter(|output| !output.is_empty())
             .filter(|_| level == Level::L3 || first.is_none());
         let (frames, locals) = match (level, first) {
-            (Level::L3, Some(failure)) => (failure.frames.as_slice(), shared::locals(failure)),
+            (Level::L3, Some(failure)) => (failure.frames.as_slice(), failure::locals(failure)),
             _ => (&[][..], &[][..]),
         };
         if !frames.is_empty() || output.is_some() || !locals.is_empty() {
@@ -1185,13 +1185,13 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// run and the file.
     fn second_line(&mut self, bad: &Bad<'_>) -> io::Result<()> {
         let mut parts = Vec::new();
-        let word = shared::outcome_words(bad.outcome);
-        parts.push(match shared::phase_words(bad.failures.first()) {
+        let word = words::outcome_words(bad.outcome);
+        parts.push(match failure::phase_words(bad.failures.first()) {
             Some(phase) => format!("{word} in {phase}"),
             None => word.to_owned(),
         });
         if let Some(duration) = bad.duration {
-            parts.push(shared::spaced(duration));
+            parts.push(words::spaced(duration));
         }
         if self.show.is_some() {
             if let Some(python) = self.facts.python(bad.worker) {
@@ -1223,11 +1223,11 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// The location, then the failing line with the two before it and the
     /// failing expression marked.
     fn pointed_code(&mut self, failure: &Failure) -> io::Result<()> {
-        let Some((path, line)) = shared::origin(failure) else {
+        let Some((path, line)) = failure::origin(failure) else {
             return Ok(());
         };
         writeln!(self.out, "  {}", self.location(path.as_str(), line))?;
-        let Some(frame) = shared::pointed(failure) else {
+        let Some(frame) = failure::pointed(failure) else {
             return Ok(());
         };
         let Some(source) = &frame.source else {
@@ -1239,7 +1239,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             writeln!(
                 self.out,
                 "     {DIM}{at:>width$} │{DIM:#} {}",
-                shared::head(code, self.line_max())
+                words::head(code, self.line_max())
             )?;
         }
         // The failing line at its indentation relative to the ones before.
@@ -1253,7 +1253,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             "  {RED_BOLD}→{RED_BOLD:#}  {DIM}{line:>width$} │{DIM:#} {:indent$}",
             ""
         )?;
-        let source = shared::head(source, self.line_max());
+        let source = words::head(source, self.line_max());
         self.marked(&source, frame.cols)?;
         if let Some(cols) = frame.cols {
             let (start, len) = span(&source, cols);
@@ -1300,18 +1300,18 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         };
         if let Some(compare) = &assertion.compare {
             // The test's own message (`assert a == b, "why"`) first.
-            if let Some(own) = shared::own_message(failure, assertion) {
+            if let Some(own) = failure::own_message(failure, assertion) {
                 writeln!(
                     self.out,
                     "  {RED_BOLD}{}{RED_BOLD:#}",
-                    shared::head(own, self.line_max())
+                    words::head(own, self.line_max())
                 )?;
             }
             return self.compare(assertion, compare, level);
         }
         self.message(failure, level)?;
-        if shared::operands_add(failure, assertion) {
-            let (expected, actual) = shared::whole(assertion);
+        if failure::operands_add(failure, assertion) {
+            let (expected, actual) = failure::whole(assertion);
             if assertion.expected.is_some() {
                 self.operand("expected:", expected, level)?;
                 self.operand("actual:  ", actual, level)?;
@@ -1328,9 +1328,9 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         writeln!(
             self.out,
             "  {RED_BOLD}{}{RED_BOLD:#}",
-            shared::head(shared::message(failure), self.line_max())
+            words::head(failure::message(failure), self.line_max())
         )?;
-        let rest = shared::message_rest(failure);
+        let rest = failure::message_rest(failure);
         let shown = if level == Level::L3 {
             rest.len()
         } else {
@@ -1340,7 +1340,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             writeln!(
                 self.out,
                 "  {RED}{}{RED:#}",
-                shared::head(line, self.line_max())
+                words::head(line, self.line_max())
             )?;
         }
         self.more_lines(rest.len() - shown, "  ")
@@ -1351,7 +1351,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         if more == 0 {
             return Ok(());
         }
-        let more = shared::plural(more, "more line", "more lines");
+        let more = words::plural(more, "more line", "more lines");
         writeln!(self.out, "{indent}{DIM}… {more}{DIM:#}")
     }
 
@@ -1363,7 +1363,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         writeln!(
             self.out,
             "    {DIM}{label}{DIM:#} {}",
-            shared::head(first, self.line_max())
+            words::head(first, self.line_max())
         )?;
         let rest: Vec<&str> = lines.collect();
         let shown = if level == Level::L3 {
@@ -1372,14 +1372,14 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             DIFF_LINES.min(rest.len())
         };
         for line in &rest[..shown] {
-            writeln!(self.out, "{pad}{}", shared::head(line, self.line_max()))?;
+            writeln!(self.out, "{pad}{}", words::head(line, self.line_max()))?;
         }
         self.more_lines(rest.len() - shown, &pad)
     }
 
     /// The framework's explanation, `-` lines red and `+` lines green.
     fn diff(&mut self, assertion: &Assertion, level: Level) -> io::Result<()> {
-        let diff = shared::explanation(assertion);
+        let diff = failure::explanation(assertion);
         let shown = if level == Level::L3 {
             diff.len()
         } else {
@@ -1396,7 +1396,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             writeln!(
                 self.out,
                 "    {style}{}{style:#}",
-                shared::head(line, self.line_max())
+                words::head(line, self.line_max())
             )?;
         }
         self.more_lines(diff.len() - shown, "    ")
@@ -1426,16 +1426,16 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             _ => compare.summary.clone(),
         };
         if !summary.is_empty() {
-            writeln!(self.out, "  {}", shared::head(&summary, self.line_max()))?;
+            writeln!(self.out, "  {}", words::head(&summary, self.line_max()))?;
         }
         let known = assertion.expected.is_some();
         let (first_name, second_name) = if known {
             ("expected".to_owned(), "actual".to_owned())
         } else {
-            let (left, right) = shared::sources(assertion);
+            let (left, right) = failure::sources(assertion);
             (
-                shared::head(&left, SOURCE_LABEL).into_owned(),
-                shared::head(&right, SOURCE_LABEL).into_owned(),
+                words::head(&left, SOURCE_LABEL).into_owned(),
+                words::head(&right, SOURCE_LABEL).into_owned(),
             )
         };
         let (first_style, second_style) = if known {
@@ -1452,12 +1452,12 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         let value = |value: Option<&str>| {
             value.map_or_else(
                 || "missing".to_owned(),
-                |value| shared::head(value, line_max).into_owned(),
+                |value| words::head(value, line_max).into_owned(),
             )
         };
         let rows: Vec<(String, String, String)> = if compare.differs.is_empty() {
             let (first, second) = if known {
-                shared::whole(assertion)
+                failure::whole(assertion)
             } else {
                 (assertion.left.as_str(), assertion.right.as_str())
             };
@@ -1466,7 +1466,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             compare.differs[..shown]
                 .iter()
                 .map(|difference| {
-                    let (first, second) = shared::entries(assertion, difference);
+                    let (first, second) = failure::entries(assertion, difference);
                     (
                         difference.at.clone().unwrap_or_default(),
                         value(first),
@@ -1515,9 +1515,9 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// frames as a line.
     fn frames(&mut self, frames: &[Frame]) -> io::Result<()> {
         let mut label = "frames";
-        for item in shared::frame_items(frames) {
+        for item in failure::frame_items(frames) {
             match item {
-                shared::FrameItem::Project(frame) => {
+                failure::FrameItem::Project(frame) => {
                     let mut line = self.location(frame.path.as_str(), frame.line);
                     if let Some(function) = &frame.function {
                         line = format!("{line} {DIM}in {function}{DIM:#}");
@@ -1528,8 +1528,8 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
                         self.marked(source, frame.cols)?;
                     }
                 }
-                shared::FrameItem::Others { count, package } => {
-                    let others = shared::others(count, &package);
+                failure::FrameItem::Others { count, package } => {
+                    let others = failure::others(count, &package);
                     self.row(label, &format!("{DIM}{others}{DIM:#}"))?;
                 }
             }
@@ -1558,15 +1558,15 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         }
         if let Some(failure) = first
             && let Some(resource) = failure.resource.as_deref()
-            && let (name, true) = shared::resource_name(resource, failure.phase)
+            && let (name, true) = failure::resource_name(resource, failure.phase)
         {
             rows.push(("fixture", name));
         }
         if let Some(result) = bad.result {
             if !result.resources.is_empty() {
-                rows.push(("setup", shared::setup_chain(&result.resources)));
+                rows.push(("setup", failure::setup_chain(&result.resources)));
             }
-            if let Some(history) = result.history.as_ref().and_then(shared::history) {
+            if let Some(history) = result.history.as_ref().and_then(words::history) {
                 rows.push(("history", history));
             }
         }
@@ -1625,11 +1625,11 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             if captured.trim().is_empty() {
                 continue;
             }
-            let tail = shared::last_lines(captured, lines);
+            let tail = words::last_lines(captured, lines);
             let mut label = name;
             let earlier = tail.total - tail.lines.len();
             if earlier > 0 {
-                let earlier = shared::plural(earlier, "earlier line", "earlier lines");
+                let earlier = words::plural(earlier, "earlier line", "earlier lines");
                 self.row(label, &format!("{DIM}… {earlier}{DIM:#}"))?;
                 label = "";
             } else if output.truncated {
@@ -1637,7 +1637,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
                 label = "";
             }
             for line in tail.lines {
-                self.row(label, &shared::head(line, self.line_max()))?;
+                self.row(label, &words::head(line, self.line_max()))?;
                 label = "";
             }
         }
@@ -1699,8 +1699,8 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         } else {
             WORKER_LINES
         };
-        for line in shared::last_lines(error, lines).lines {
-            writeln!(self.out, "  {}", shared::head(line, self.line_max()))?;
+        for line in words::last_lines(error, lines).lines {
+            writeln!(self.out, "  {}", words::head(line, self.line_max()))?;
         }
         writeln!(self.out)
     }
@@ -1773,7 +1773,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             let mut words: Vec<String> = skips
                 .iter()
                 .take(GROUPS)
-                .map(|(reason, count)| format!("{} ({count})", shared::head(reason, REASON_MAX)))
+                .map(|(reason, count)| format!("{} ({count})", words::head(reason, REASON_MAX)))
                 .collect();
             if skips.len() > GROUPS {
                 words.push("…".to_owned());
@@ -1794,7 +1794,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         let why = match stopped {
             StopReason::Maxfail => format!(
                 "stopped after {} (-x/--maxfail)",
-                shared::plural(counts.bad(), "failure", "failures")
+                words::plural(counts.bad(), "failure", "failures")
             ),
             StopReason::Interrupted if exit_code == ExitCode::Interrupted => return Ok(()),
             StopReason::Interrupted => "interrupted".to_owned(),
@@ -1830,7 +1830,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         let parts: Vec<String> = summary::parts(counts, &self.tally.extra())
             .into_iter()
             .map(|(n, one, many, tone)| {
-                let words = shared::plural(n, one, many);
+                let words = words::plural(n, one, many);
                 match tone {
                     Tone::Bad if one == "failed" => format!("{RED_BOLD}✗ {words}{RED_BOLD:#}"),
                     Tone::Bad => format!("{YELLOW_BOLD}! {words}{YELLOW_BOLD:#}"),
@@ -1862,7 +1862,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             self.out,
             "{}   {DIM}{}{DIM:#}",
             line.join(" · "),
-            shared::seconds(duration)
+            words::seconds(duration)
         )
     }
 
