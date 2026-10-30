@@ -9,7 +9,7 @@ use aye_events::{AdapterName, Case, Certainty, IdPrefix, TestId};
 use aye_index::{IndexVec, newtype_index};
 
 use crate::keyword::{keyword_truth, parse_keyword};
-use crate::last_failed::{Failed, Seen, Visible};
+use crate::last_failed::{Failed, FailedEntry, LastFailed, Seen, Visible};
 use crate::marker::{parse_tags, tags_truth};
 use crate::selector::Parts;
 use crate::{Expression, SelectError, Selector, Truth};
@@ -30,8 +30,8 @@ pub struct Selection {
     pub keyword: Option<Expression>,
     /// `-m`.
     pub tags: Option<Expression>,
-    /// The ids that failed last time, when running last-failed (`--lf`).
-    pub last_failed: Option<HashSet<TestId>>,
+    /// What failed last time, when running last-failed (`--lf`).
+    pub last_failed: Option<LastFailed>,
     /// What each adapter's cases get beside the command line's: its own
     /// `-k` and `-m`, and its `--deselect`. An adapter is here only when it
     /// has one of them.
@@ -206,9 +206,14 @@ impl Selection {
         self
     }
 
-    /// Run last-failed with the ids that failed last time.
+    /// Run last-failed with what failed last time: each a [`FailedEntry`],
+    /// or an id as history keeps it.
     #[must_use]
-    pub fn with_last_failed(mut self, failed: impl IntoIterator<Item = TestId>) -> Self {
+    pub fn with_last_failed<I>(mut self, failed: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<FailedEntry>,
+    {
         self.last_failed = Some(failed.into_iter().collect());
         self
     }

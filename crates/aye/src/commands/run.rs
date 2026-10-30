@@ -40,6 +40,7 @@ use aye_events::{Counts, Event, RunId, SCHEMA_VERSION, Stamper, StopReason};
 use aye_fs::{StateBucket, StateDir};
 use aye_history::{History, RunWriter};
 use aye_runner::{Echo, Runner, RunnerOptions};
+use aye_select::LastFailed;
 use aye_static::EnvVars;
 
 use crate::error::AyeError;
@@ -74,7 +75,7 @@ pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> Result<RunEnd,
     let state = StateDir::for_root(&settings.root);
     let mut history = History::load(state.path());
     let durations = history.durations();
-    let last_failed = history.last_failed();
+    let last_failed: LastFailed = history.last_failed().into_iter().collect();
     let run_id = RunId::random();
     let runner = Runner::new(runner_options(&settings, &run_id));
     let signals = Signals::install(&runner, printer);
@@ -125,7 +126,7 @@ pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> Result<RunEnd,
     }
 
     // Run.
-    let plan = plan::plan(&settings, selected, durations, last_failed);
+    let plan = plan::plan(&settings, selected, durations);
     signals.running();
     let summary = runner.run(&plan, &mut out.stamper, &mut |mut record| {
         passes.apply(&mut record);

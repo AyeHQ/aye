@@ -761,7 +761,9 @@ fn deselect_prefixes_drop_and_count_their_adapters_cases() {
 
 #[test]
 fn last_failed_with_nothing_failed_keeps_everything() {
-    let selected = Selection::default().with_last_failed([]).apply(project());
+    let selected = Selection::default()
+        .with_last_failed([] as [TestId; 0])
+        .apply(project());
     assert_eq!(selected.cases.len(), 6);
 }
 

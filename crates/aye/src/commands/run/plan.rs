@@ -2,8 +2,8 @@
 //! batch's policy and each adapter's context, with what every batch's
 //! context gets beside them (the ids with parameters the command line
 //! names, [`requested_ids`]; the reruns' options; the paths the run starts
-//! from), history's durations, what runs first under `--ff`, and, by
-//! adapter, the session's files
+//! from), history's durations, what runs first under `--ff`
+//! ([`aye_select::Order::first`]), and, by adapter, the session's files
 //! ([`aye_collect::Collection::session_files`]).
 //!
 //! Decided (implementation, October 2026):
@@ -33,14 +33,12 @@ use super::select::Selected;
 use crate::positional::Positionals;
 use crate::settings::RunSettings;
 
-/// The plan of the run `settings` ask for, of the cases `selected`, with
-/// history's `durations` and, under `--ff`, the tests that failed last
-/// (`last_failed`) to run first.
+/// The plan of the run `settings` ask for, of the cases `selected` (with
+/// what runs first under `--ff`), with history's `durations`.
 pub(super) fn plan(
     settings: &RunSettings,
     selected: Selected,
     durations: HashMap<TestId, Duration>,
-    last_failed: HashSet<TestId>,
 ) -> Plan {
     Plan {
         cases: selected.cases,
@@ -61,11 +59,7 @@ pub(super) fn plan(
             .map(|path| path.to_string_lossy().into_owned())
             .collect(),
         durations,
-        first: if settings.failed_first {
-            last_failed
-        } else {
-            HashSet::new()
-        },
+        first: selected.first,
         session_files: selected.session_files,
     }
 }

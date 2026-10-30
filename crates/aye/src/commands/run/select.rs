@@ -30,7 +30,9 @@ use aye_events::{
     Severity, TestId,
 };
 use aye_fs::root_relative;
-use aye_select::{Named, SelectedCase, Selection, Selector, SelectorIndex, dotted_reach};
+use aye_select::{
+    LastFailed, Named, Order, SelectedCase, Selection, Selector, SelectorIndex, dotted_reach,
+};
 
 use super::collect::Collected;
 use super::exit::RunVerdict;
@@ -41,10 +43,12 @@ use crate::settings::RunSettings;
 use crate::stream::{Passes, Stream};
 
 /// What a run selected for the runner, once collection is over: the
-/// cases it runs, what its arguments reach when some aren't paths, and the
-/// session's files by adapter.
+/// cases it runs, in its order, those it runs first (under `--ff`), what
+/// its arguments reach when some aren't paths, and the session's files by
+/// adapter.
 pub(super) struct Selected {
     pub(super) cases: Vec<Case>,
+    pub(super) first: HashSet<TestId>,
     pub(super) reach: Option<Reach>,
     pub(super) session_files: BTreeMap<AdapterName, Vec<ProjectPath>>,
 }
@@ -64,7 +68,7 @@ pub(super) fn select(
     settings: &RunSettings,
     collected: Collected,
     selection: Selection,
-    last_failed: &HashSet<TestId>,
+    last_failed: &LastFailed,
     passes: &mut Passes<'_>,
     out: &mut Stream<'_>,
 ) -> (Selected, RunVerdict) {
@@ -73,7 +77,7 @@ pub(super) fn select(
         started,
     } = collected;
     let selection = if settings.last_failed {
-        selection.with_last_failed(last_failed.iter().cloned())
+        selection.with_last_failed(last_failed.ids())
     } else {
         selection
     };
@@ -118,9 +122,12 @@ pub(super) fn select(
         .into_iter()
         .flat_map(SelectedCase::into_cases)
         .collect();
-    if settings.failed_first {
-        aye_select::failed_first(&mut cases, last_failed);
-    }
+    let order = if settings.failed_first {
+        Order::FailedFirst(last_failed)
+    } else {
+        Order::Arguments
+    };
+    order.sort(&mut cases);
     for case in &cases {
         out.emit(Event::CaseCollected(Box::new(case.clone())));
     }
@@ -149,6 +156,7 @@ pub(super) fn select(
     });
     let selected = Selected {
         cases,
+        first: order.first(),
         reach,
         session_files,
     };
