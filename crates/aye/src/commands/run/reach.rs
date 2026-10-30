@@ -33,7 +33,7 @@ use aye_events::{Case, Diagnostic, DiagnosticCode, Severity};
 use aye_fs::{normalize_absolute, root_relative};
 use aye_select::Selection;
 
-use crate::positional::Positional;
+use crate::positional::{Positional, Positionals};
 use crate::registry;
 
 /// What the positional arguments reach when some of them aren't paths
@@ -62,8 +62,8 @@ pub(super) struct Reach {
 
 impl Reach {
     /// `None` when every positional argument is a path, or there is none.
-    pub(super) fn of(positionals: &[Positional], root: &Path, cases: &[Case]) -> Option<Self> {
-        if positionals.iter().all(|p| p.path.is_some()) {
+    pub(super) fn of(positionals: &Positionals, root: &Path, cases: &[Case]) -> Option<Self> {
+        if positionals.only_paths() {
             return None;
         }
         let at_root = |relative: &str| normalize_absolute(&root.join(relative));
@@ -71,24 +71,27 @@ impl Reach {
         let mut words = Vec::new();
         let mut selected: Vec<PathBuf> = Vec::new();
         let mut seen: HashSet<PathBuf> = HashSet::new();
-        for positional in positionals {
-            if let Some(path) = &positional.path {
-                let path = at_root(&root_relative(path, root));
-                paths.push(path.clone());
-                if seen.insert(path.clone()) {
-                    selected.push(path);
+        for positional in positionals.iter() {
+            match positional {
+                Positional::Path { absolute: path, .. } | Positional::Id { file: path, .. } => {
+                    let path = at_root(&root_relative(path, root));
+                    paths.push(path.clone());
+                    if seen.insert(path.clone()) {
+                        selected.push(path);
+                    }
                 }
-                continue;
-            }
-            words.push(positional.selector.clone());
-            let one = Selection::default().with_ids([positional.selector.as_str()]);
-            for case in cases {
-                if one.truth(case).is_false() {
-                    continue;
-                }
-                let file = at_root(case.id.path().as_str());
-                if seen.insert(file.clone()) {
-                    selected.push(file);
+                Positional::Word(word) => {
+                    words.push(word.clone());
+                    let one = Selection::default().with_ids([word.as_str()]);
+                    for case in cases {
+                        if one.truth(case).is_false() {
+                            continue;
+                        }
+                        let file = at_root(case.id.path().as_str());
+                        if seen.insert(file.clone()) {
+                            selected.push(file);
+                        }
+                    }
                 }
             }
         }

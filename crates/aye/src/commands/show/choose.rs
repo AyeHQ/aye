@@ -14,7 +14,7 @@ use aye_select::Selection;
 use super::feed::{Item, Log};
 use crate::cli::ShowArgs;
 use crate::error::AyeError;
-use crate::positional;
+use crate::positional::Positional;
 
 /// How many of the closest names a selector naming nothing lists.
 pub(super) const CLOSEST: usize = 5;
@@ -32,10 +32,9 @@ pub(super) enum Wanted {
 /// How `aye show` reads a positional argument: a path (read as a run reads
 /// one), or a test's key or its start, id or dotted name.
 pub(super) fn read(cwd: &Path, root: &Path, arg: &str) -> Wanted {
-    let positional = positional::resolve(cwd, root, arg);
-    match positional.path {
-        Some(_) if !positional.id => Wanted::Path(positional.selector),
-        _ => Wanted::Test(positional.selector),
+    match Positional::resolve(cwd, root, arg) {
+        Positional::Path { selector, .. } => Wanted::Path(selector),
+        Positional::Id { selector, .. } | Positional::Word(selector) => Wanted::Test(selector),
     }
 }
 

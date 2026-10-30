@@ -37,7 +37,7 @@ use super::exit::RunVerdict;
 use super::plan::session_files;
 use super::reach::{Named, Reach, broken_conftest_dirs, dotted_reach, explained_by_a_conftest};
 use crate::framework_args::Passed;
-use crate::positional::Positional;
+use crate::positional::{Positional, Positionals};
 use crate::settings::RunSettings;
 use crate::stream::{Passes, Stream};
 
@@ -178,18 +178,20 @@ fn skips<'d>(diagnostics: &'d [Diagnostic], reach: Option<&Reach>, root: &Path) 
 /// skipped (in `skips`).
 fn unmatched<'a>(
     selected: &'a [String],
-    positionals: &'a [Positional],
+    positionals: &'a Positionals,
     skips: &[&str],
 ) -> Vec<(&'a String, &'a Positional)> {
     selected
         .iter()
         .filter_map(|selector| {
-            let positional = positionals.iter().find(|p| p.selector == *selector)?;
-            let found = (positional.exists() && !positional.id)
-                || (positional.path.is_none()
-                    && skips
-                        .iter()
-                        .any(|path| dotted_reach(selector, path) == Named::Whole));
+            let positional = positionals.find(selector)?;
+            let found = match positional {
+                Positional::Path { absolute, .. } => absolute.exists(),
+                Positional::Id { .. } => false,
+                Positional::Word(_) => skips
+                    .iter()
+                    .any(|path| dotted_reach(selector, path) == Named::Whole),
+            };
             (!found).then_some((selector, positional))
         })
         .collect()
@@ -244,8 +246,7 @@ fn not_found(
     let mut not_found = Vec::new();
     for (selector, positional) in unmatched {
         let path = positional
-            .path
-            .as_deref()
+            .path()
             .map(|path| root_relative(path, root))
             .unwrap_or_default();
         if !positional.exists() && reported.contains(path.as_str()) {

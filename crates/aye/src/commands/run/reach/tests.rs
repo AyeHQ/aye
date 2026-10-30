@@ -1,7 +1,7 @@
 use std::fs;
 
 use super::*;
-use crate::positional;
+use crate::positional::{Positional, Positionals};
 
 /// Recheck regressions 2 and 4: dotted names and keys are resolved by
 /// collecting the whole project, whose refinement reports on all of it
@@ -21,9 +21,9 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
         fs::create_dir_all(root.join(file).parent().unwrap()).unwrap();
         fs::write(root.join(file), "").unwrap();
     }
-    let positionals = |args: &[&str]| -> Vec<Positional> {
+    let positionals = |args: &[&str]| -> Positionals {
         args.iter()
-            .map(|arg| positional::resolve(root, root, arg))
+            .map(|arg| Positional::resolve(root, root, arg))
             .collect()
     };
     let cases: Vec<Case> = [
@@ -47,7 +47,7 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
 
     // No argument, or only paths: collection walked only what the run
     // reaches, and everything is the run's.
-    assert_eq!(Reach::of(&[], root, &cases), None);
+    assert_eq!(Reach::of(&Positionals::default(), root, &cases), None);
     assert_eq!(
         Reach::of(&positionals(&["tests", "other/test_o.py"]), root, &cases),
         None

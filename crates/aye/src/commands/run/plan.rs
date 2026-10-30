@@ -31,7 +31,7 @@ use aye_fs::normalize_absolute;
 use aye_runner::Plan;
 
 use super::select::Selected;
-use crate::positional::Positional;
+use crate::positional::Positionals;
 use crate::settings::RunSettings;
 
 /// The plan of the run `settings` ask for, of the cases `selected`, with
@@ -74,17 +74,12 @@ pub(super) fn plan(
 /// The ids with parameters the command line names (`path::test[x]`),
 /// relative to the root as collection spells them, each once
 /// ([`aye_protocol::BatchContext::requested_ids`]).
-fn requested_ids(positionals: &[Positional]) -> Vec<TestId> {
+fn requested_ids(positionals: &Positionals) -> Vec<TestId> {
     let mut seen = HashSet::new();
     positionals
         .iter()
-        .filter(|p| p.id && p.path.is_some())
-        .filter(|p| {
-            p.selector
-                .split_once("::")
-                .is_some_and(|(_, rest)| rest.contains('['))
-        })
-        .map(|p| p.selector.clone())
+        .filter(|p| p.has_params())
+        .map(|p| p.selector().to_owned())
         .filter(|id| seen.insert(id.clone()))
         .map(TestId::new)
         .collect()
@@ -126,13 +121,13 @@ pub(super) fn session_files(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::positional;
+    use crate::positional::Positional;
 
     #[test]
     fn ids_with_parameters_on_the_command_line_go_to_the_adapters() {
         let root = Path::new("/repo");
         let cwd = Path::new("/repo/tests");
-        let positionals: Vec<Positional> = [
+        let positionals: Positionals = [
             "test_p.py::test_dyn[9]",
             "/repo/tests/test_p.py::TestK::test_m[a-b]",
             "test_p.py::test_plain",
@@ -141,7 +136,7 @@ mod tests {
             "../tests/test_p.py::test_dyn[9]",
         ]
         .iter()
-        .map(|arg| positional::resolve(cwd, root, arg))
+        .map(|arg| Positional::resolve(cwd, root, arg))
         .collect();
         let requested = requested_ids(&positionals);
         assert_eq!(

@@ -97,7 +97,7 @@ pub(super) fn collect(
 /// roots); and for paths mixed with dotted names or keys, the paths, and
 /// wherever the adapters look when no path is given, for the rest.
 fn targets(settings: &RunSettings, project: Project<'_>) -> Vec<PathBuf> {
-    if settings.only_paths {
+    if settings.positionals.only_paths() {
         return settings.paths.clone();
     }
     if settings.paths.is_empty() {

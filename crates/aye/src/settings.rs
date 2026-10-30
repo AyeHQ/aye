@@ -27,7 +27,7 @@ use aye_select::Selection;
 use crate::cli::{RunArgs, RunCompatArgs, Verbosity};
 use crate::environment::EnvironmentOptions;
 use crate::framework_args;
-use crate::positional::{self, Positional, is_path_like, path_part};
+use crate::positional::{Positionals, is_path_like, path_part};
 use crate::printer::Printer;
 use crate::registry::{self, ActiveAdapters, Listing};
 
@@ -50,13 +50,11 @@ pub(crate) struct RunSettings {
     pub(crate) cwd: PathBuf,
     pub(crate) root: PathBuf,
     /// Each positional argument, resolved.
-    pub(crate) positionals: Vec<Positional>,
-    /// Positional arguments that are paths: as given, or absolute when only
-    /// the project root makes sense of them.
+    pub(crate) positionals: Positionals,
+    /// The positional arguments' paths and ids' files, as the adapters take
+    /// them: as given, or absolute when only the project root makes sense
+    /// of them ([`Positionals::project_args`]).
     pub(crate) paths: Vec<PathBuf>,
-    /// Whether every positional argument is a path (collection can then be
-    /// limited to them).
-    pub(crate) only_paths: bool,
     /// `[tool.aye]`, the project's.
     pub(crate) tool_aye: AyeSettings,
     /// The environment aye started in, read once: what the adapters, the
@@ -146,24 +144,8 @@ impl RunSettings {
             .map(|path| normalize_absolute(&cwd.join(path)))
             .collect();
         let root = normalize_absolute(&aye_config::project_root(&cwd, &given));
-        let positionals: Vec<Positional> = tests
-            .iter()
-            .map(|test| positional::resolve(&cwd, &root, test))
-            .collect();
-        let mut paths = Vec::new();
-        let mut only_paths = true;
-        for (test, positional) in tests.iter().zip(&positionals) {
-            let Some(path) = &positional.path else {
-                only_paths = false;
-                continue;
-            };
-            let as_given = path_part(test);
-            if normalize_absolute(&cwd.join(as_given)) == *path {
-                paths.push(PathBuf::from(as_given));
-            } else {
-                paths.push(path.clone());
-            }
-        }
+        let positionals = Positionals::resolve(&cwd, &root, &tests);
+        let paths = positionals.project_args(&cwd);
 
         let tool_aye = AyeSettings::load(&root)?;
         let interpreter = python::find(python.as_deref(), &env, &tool_aye, &root, &cwd)?;
@@ -221,7 +203,7 @@ impl RunSettings {
             keyword.as_deref(),
             tags.as_deref(),
             &passthrough,
-            positionals.iter().map(|p| p.selector.as_str()),
+            positionals.selectors(),
             &defaults,
         )?;
         let workers = workers::resolve(workers, &tool_aye, &defaults);
@@ -242,7 +224,6 @@ impl RunSettings {
             root,
             positionals,
             paths,
-            only_paths,
             tool_aye,
             env,
             interpreter,
