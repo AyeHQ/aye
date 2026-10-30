@@ -31,14 +31,16 @@ pub(crate) struct UnittestContext {
 impl UnittestContext {
     pub(crate) fn new(recognizer: &UnittestRecognizer) -> Self {
         let path = |path: &std::path::Path| path.to_string_lossy().into_owned();
-        let (start, top) = &recognizer.starts[0];
+        let configured = &recognizer.starts.configured;
         Self {
-            start_directory: path(start),
-            top_level_directory: path(top),
+            start_directory: path(&configured.start),
+            top_level_directory: path(&configured.top),
             pattern: recognizer.config.pattern.value.clone(),
-            starts: recognizer.starts[1..]
+            starts: recognizer
+                .starts
+                .named
                 .iter()
-                .map(|(start, _)| path(start))
+                .map(|named| path(&named.start))
                 .collect(),
             named: recognizer
                 .named_below_load_tests()

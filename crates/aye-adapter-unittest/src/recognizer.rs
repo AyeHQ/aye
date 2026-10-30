@@ -17,7 +17,7 @@ use aye_python_stdlib::os_path::normalize_absolute;
 use aye_python_stdlib::unittest::valid_module_name;
 
 use crate::context::UnittestContext;
-use crate::discovery::{is_package, may_hold_tests};
+use crate::discovery::{DiscoveryStart, Starts, is_package, may_hold_tests};
 use crate::loader::Loaded;
 use crate::module;
 use crate::project::Modules;
@@ -32,9 +32,8 @@ pub(crate) const NO_STATIC_TESTS: &str =
 pub struct UnittestRecognizer {
     root: PathBuf,
     pub(crate) config: UnittestConfig,
-    /// `(start, top)`: the configured start directory first, then the
-    /// directories named on the command line outside it.
-    pub(crate) starts: Vec<(PathBuf, PathBuf)>,
+    /// Where discovery starts.
+    pub(crate) starts: Starts,
     modules: Modules,
     /// By package directory: whether its `__init__.py` may define
     /// `load_tests`.
@@ -42,7 +41,7 @@ pub struct UnittestRecognizer {
     /// The Python files named on the command line: each is a module alone,
     /// as `python -m unittest path.py` loads it, even below a package that
     /// may define `load_tests`.
-    pub(crate) named: Vec<PathBuf>,
+    pub(crate) named_files: Vec<PathBuf>,
     /// The context, built once.
     context: OnceLock<UnittestContext>,
 }
@@ -51,29 +50,13 @@ impl UnittestRecognizer {
     pub fn new(project: &Project<'_>) -> Result<Self, AdapterError> {
         let root = normalize_absolute(project.root);
         let config = UnittestConfig::load(&root, project.tool_aye)?;
-        let start = normalize_absolute(&config.start);
-        let top = normalize_absolute(&config.top);
-        let mut starts = vec![(start.clone(), top.clone())];
-        for arg in project.args {
-            let path = normalize_absolute(&project.cwd.join(arg));
-            // A directory holding the start directory walks it; one inside
-            // it narrows discovery from it.
-            if !path.is_dir() || start.starts_with(&path) || path.starts_with(&start) {
-                continue;
-            }
-            if starts.iter().any(|(s, _)| path.starts_with(s)) {
-                continue;
-            }
-            starts.retain(|(s, _)| *s == start || !s.starts_with(&path));
-            let own_top = if path.starts_with(&top) {
-                top.clone()
-            } else {
-                path.clone()
-            };
-            starts.push((path, own_top));
-        }
-        let modules = Modules::new(&top, &root);
-        let named = project
+        let configured = DiscoveryStart {
+            start: normalize_absolute(&config.start),
+            top: normalize_absolute(&config.top),
+        };
+        let modules = Modules::new(&configured.top, &root);
+        let starts = Starts::new(configured, project);
+        let named_files = project
             .args
             .iter()
             .map(|arg| normalize_absolute(&project.cwd.join(arg)))
@@ -85,7 +68,7 @@ impl UnittestRecognizer {
             starts,
             modules,
             takes_over: Mutex::new(HashMap::new()),
-            named,
+            named_files,
             context: OnceLock::new(),
         })
     }
@@ -154,7 +137,7 @@ impl Recognizer for UnittestRecognizer {
     /// The command-line paths; else the start directory.
     fn roots(&self, project: &Project<'_>) -> Vec<PathBuf> {
         if project.args.is_empty() {
-            return vec![self.starts[0].0.clone()];
+            return vec![self.starts.configured.start.clone()];
         }
         project
             .args
@@ -168,11 +151,11 @@ impl Recognizer for UnittestRecognizer {
     fn descend(&self, dir: &Path) -> bool {
         let dir = normalize_absolute(dir);
         let mut inside = false;
-        for (start, _) in &self.starts {
-            if start.starts_with(&dir) {
+        for from in self.starts.iter() {
+            if from.start.starts_with(&dir) {
                 return true;
             }
-            inside |= dir.starts_with(start);
+            inside |= dir.starts_with(&from.start);
         }
         inside && is_package(&dir)
     }
@@ -189,7 +172,7 @@ impl Recognizer for UnittestRecognizer {
             return Claim::Tests;
         }
         let abs = normalize_absolute(&self.root.join(rel));
-        let Some((start, top)) = self.start_for(&abs) else {
+        let Some(DiscoveryStart { start, top }) = self.starts.start_for(&abs) else {
             return Claim::Ignore;
         };
         if name == "__init__.py" {
@@ -236,7 +219,7 @@ impl Recognizer for UnittestRecognizer {
         let summary = Arc::new(module::summarize(&abs, file.module, file.lines));
         // A file named on the command line is loaded alone, as `python -m
         // unittest path.py` loads it: no package's `load_tests` decides it.
-        let package = if self.named.contains(&abs) {
+        let package = if self.named_files.contains(&abs) {
             None
         } else {
             self.taken_over_by(&abs)
