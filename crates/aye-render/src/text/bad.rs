@@ -11,9 +11,8 @@ use aye_stream::{Again, HeldSub, Left};
 
 use super::Text;
 use super::limits::{OUTPUT_LINES, SUB_BLOCKS};
-use super::settings::Level;
 use super::stylesheet::{BOLD, DIM, KEY, symbol};
-use crate::{failure, rerun, words};
+use crate::{DetailLevel, failure, rerun, words};
 
 /// A test a failed lifetime kept from running, and its key.
 pub(super) type NotRun = (TestId, String);
@@ -115,9 +114,9 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         blocks: u32,
     ) -> io::Result<()> {
         let level = self.level();
-        let has_output = level == Level::L3 && !result.output.is_empty();
+        let has_output = level == DetailLevel::L3 && !result.output.is_empty();
         let has_rerun =
-            level >= Level::L2 && blocks == 0 && rerun != rerun::rerun(&result.id, None);
+            level >= DetailLevel::L2 && blocks == 0 && rerun != rerun::rerun(&result.id, None);
         if !(has_output || has_rerun) {
             return Ok(());
         }
@@ -152,7 +151,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         let mut blocks = 0;
         for sub in subs {
             let name = format!("{id} › {}", sub.name);
-            let brief = blocks >= SUB_BLOCKS && self.level() < Level::L3;
+            let brief = blocks >= SUB_BLOCKS && self.level() < DetailLevel::L3;
             let fresh = self.bad(&Bad {
                 outcome: sub.outcome,
                 key,
@@ -231,10 +230,14 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// first with its signature when that was shown already. Whether it
     /// was shown on its own.
     pub(super) fn bad(&mut self, bad: &Bad<'_>) -> io::Result<bool> {
-        let level = if bad.brief { Level::L1 } else { self.level() };
+        let level = if bad.brief {
+            DetailLevel::L1
+        } else {
+            self.level()
+        };
         if let Some(first) = bad.failures.first()
             && let Some(signature) = &first.signature
-            && self.level() < Level::L3
+            && self.level() < DetailLevel::L3
         {
             let label = || {
                 let label = match bad.sub {
@@ -252,7 +255,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         if !self.details.iter().any(|key| key == bad.key) {
             self.details.push(bad.key.to_owned());
         }
-        if level == Level::L1 {
+        if level == DetailLevel::L1 {
             self.line_l1(bad)?;
         } else {
             self.block_l2(bad, level)?;

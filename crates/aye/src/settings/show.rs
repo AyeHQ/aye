@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use aye_config::{AyeSettings, OutputFormat};
 use aye_fs::normalize_absolute;
-use aye_render::{ColorChoice, Level};
+use aye_render::{ColorChoice, DetailLevel, Ladder, Level};
 
 use super::output;
 use crate::cli::{ShowArgs, Verbosity};
@@ -57,14 +57,16 @@ impl ShowSettings {
 
     /// How much the output shows: as a run's ([`Verbosity::level`]) when
     /// `-v` or `-q` is given. Without either, `details` (of tests named, or
-    /// `--failed`) come at the detail ladder's second level, which is
-    /// text's `-v` and JSON's `-vv`; the list at a run's default.
+    /// `--failed`) come at the detail ladder's second level, L2, which is
+    /// text's `-v` and JSON's `-vv` ([`Ladder::first_at`]); the list at a
+    /// run's default.
     pub(crate) fn level(&self, details: bool) -> Level {
         if details && self.verbosity.is_unset() {
-            return match self.format {
-                OutputFormat::Text => Level::Verbose,
-                OutputFormat::Json => Level::VeryVerbose,
+            let ladder = match self.format {
+                OutputFormat::Text => Ladder::TEXT,
+                OutputFormat::Json => Ladder::JSON,
             };
+            return ladder.first_at(DetailLevel::L2);
         }
         self.verbosity.level()
     }

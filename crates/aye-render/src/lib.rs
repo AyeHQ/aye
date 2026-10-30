@@ -19,16 +19,19 @@
 //!   `--output json` ([`JsonLines`]) take a [`Level`] (`-v` count minus
 //!   `-q` count, clamped to -1..=3) and show a bad outcome (a failed or
 //!   errored test, a failed sub-outcome, a failed lifetime) at one of
-//!   three levels of detail, the same in both: L1, its line (key, id,
-//!   outcome, phase, where, and why in one line); L2, the detail (the
-//!   pointed code, the structured comparison or the exception's message,
-//!   the hint, the fixture that broke, the setup chain, history, the
-//!   rerun, the duration); L3, everything (every frame, the captured
-//!   output, the innermost frame's locals). Text shows L1 by default, L2
-//!   at `-v`, L3 at `-vv`; JSON lines the summary alone by default (with
-//!   the keys of what failed), L1 lines at `-v`, L2 at `-vv`, L3 at
-//!   `-vvv`. `aye show` takes the same flags with the same meaning. Each
-//!   module's docs give its format exactly.
+//!   three levels of detail ([`DetailLevel`]), the same in both: L1, its
+//!   line (key, id, outcome, phase, where, and why in one line); L2, the
+//!   detail (the pointed code, the structured comparison or the
+//!   exception's message, the hint, the fixture that broke, the setup
+//!   chain, history, the rerun, the duration); L3, everything (every
+//!   frame, the captured output, the innermost frame's locals). Text shows
+//!   L1 by default, L2 at `-v`, L3 at `-vv`; JSON lines the summary alone
+//!   by default (with the keys of what failed), L1 lines at `-v`, L2 at
+//!   `-vv`, L3 at `-vvv`: a table each ([`Ladder::TEXT`],
+//!   [`Ladder::JSON`]), tested against `docs/architecture.md`'s. `aye
+//!   show` takes the same flags with the same meaning, its details at L2
+//!   without them ([`Ladder::first_at`]). Each module's docs give its
+//!   format exactly.
 //! - **Keys** (`aye_stream::Keys`): every test and lifetime is named by its
 //!   key, the same in every format and in `aye show` later.
 //! - **Why, in one line** (`failure::why`), the same in both formats: a
@@ -165,7 +168,7 @@ pub use anstream::ColorChoice;
 pub use github::{GithubAnnotations, github_actions_enabled};
 pub use json::JsonLines;
 pub use junit::{Junit, JunitDuration, JunitFamily, JunitLogging, JunitOptions};
-pub use level::Level;
+pub use level::{DetailLevel, Ladder, Level};
 pub use show::{ShowContext, ShowMode};
 pub use text::{Text, TextOptions, summary_words};
 

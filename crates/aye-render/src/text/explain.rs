@@ -9,15 +9,14 @@ use aye_events::{Assertion, Compare, CompareKind, Failure};
 
 use super::Text;
 use super::limits::{DIFF_LINES, DIFFERENCES, MESSAGE_LINES, SOURCE_LABEL};
-use super::settings::Level;
 use super::stylesheet::{DIM, GREEN, RED, RED_BOLD};
-use crate::{failure, words};
+use crate::{DetailLevel, failure, words};
 
 impl<W: RawStream + AsLockedWrite> Text<W> {
     /// How the failure explains itself: a structured comparison, or the
     /// message, the operands and the explanation, or an exception's
     /// message.
-    pub(super) fn explanation(&mut self, failure: &Failure, level: Level) -> io::Result<()> {
+    pub(super) fn explanation(&mut self, failure: &Failure, level: DetailLevel) -> io::Result<()> {
         let Some(assertion) = &failure.assertion else {
             return self.message(failure, level);
         };
@@ -47,14 +46,14 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     }
 
     /// The message, and up to 10 more lines of it (all at L3).
-    fn message(&mut self, failure: &Failure, level: Level) -> io::Result<()> {
+    fn message(&mut self, failure: &Failure, level: DetailLevel) -> io::Result<()> {
         writeln!(
             self.out,
             "  {RED_BOLD}{}{RED_BOLD:#}",
             words::head(failure::message(failure), self.line_max())
         )?;
         let rest = failure::message_rest(failure);
-        let shown = if level == Level::L3 {
+        let shown = if level == DetailLevel::L3 {
             rest.len()
         } else {
             MESSAGE_LINES.min(rest.len())
@@ -79,7 +78,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     }
 
     /// A compared value; one that spans lines continues under its first.
-    fn operand(&mut self, label: &str, value: &str, level: Level) -> io::Result<()> {
+    fn operand(&mut self, label: &str, value: &str, level: DetailLevel) -> io::Result<()> {
         let mut lines = value.lines();
         let first = lines.next().unwrap_or_default();
         let pad = " ".repeat(label.chars().count() + 5);
@@ -89,7 +88,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             words::head(first, self.line_max())
         )?;
         let rest: Vec<&str> = lines.collect();
-        let shown = if level == Level::L3 {
+        let shown = if level == DetailLevel::L3 {
             rest.len()
         } else {
             DIFF_LINES.min(rest.len())
@@ -101,9 +100,9 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     }
 
     /// The framework's explanation, `-` lines red and `+` lines green.
-    fn diff(&mut self, assertion: &Assertion, level: Level) -> io::Result<()> {
+    fn diff(&mut self, assertion: &Assertion, level: DetailLevel) -> io::Result<()> {
         let diff = failure::explanation(assertion);
-        let shown = if level == Level::L3 {
+        let shown = if level == DetailLevel::L3 {
             diff.len()
         } else {
             DIFF_LINES.min(diff.len())
@@ -130,7 +129,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         &mut self,
         assertion: &Assertion,
         compare: &Compare,
-        level: Level,
+        level: DetailLevel,
     ) -> io::Result<()> {
         let text = compare.kind.is_text();
         let first_at = compare
@@ -166,7 +165,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         } else {
             (Style::new(), Style::new())
         };
-        let shown = if level == Level::L3 {
+        let shown = if level == DetailLevel::L3 {
             compare.differs.len()
         } else {
             DIFFERENCES.min(compare.differs.len())

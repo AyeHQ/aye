@@ -9,7 +9,7 @@ use aye_stream::{Again, FileChange, Keys};
 
 use super::limits::{ID_MAX, PATH_MAX, REASON_MAX, RERUN_MAX};
 use super::schema::{Detail, LifetimeFail, Line, Shown};
-use super::{JsonLines, QUIET, at};
+use super::{JsonLines, at};
 use crate::{ShowContext, ShowMode, failure, rerun, words};
 
 impl<W: Write> JsonLines<W> {
@@ -26,7 +26,7 @@ impl<W: Write> JsonLines<W> {
     /// Before anything else, for `aye show`: a `stale` line, `path` having
     /// changed since the run (or being `gone`). None at `-q`.
     pub fn stale(&mut self, path: &str, change: FileChange) -> io::Result<()> {
-        if self.verbosity <= QUIET {
+        if self.quiet() {
             return Ok(());
         }
         let gone = change == FileChange::Gone;

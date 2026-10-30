@@ -9,7 +9,8 @@
 //!
 //! The [`Level`] (`-v` count minus `-q` count, clamped to -1..=3) says
 //! which lines are written and how much a bad outcome's line holds (its
-//! level of detail, L1 to L3, below), each level adding to the one below:
+//! level of detail, L1 to L3, below, as [`Ladder::JSON`] has it), each
+//! level adding to the one below:
 //! - **-1** (`-q`): the `summary` alone, without `failures` or `more`.
 //! - **0**: the `summary`, with the keys of what failed (`failures`) and
 //!   how to see more (`more`); in a collect-only run, a `case` line per
@@ -142,7 +143,7 @@ use aye_stream::{
     SubOutcomes, Subject, Tally,
 };
 
-use crate::{Level, ShowContext, ShowMode, failure, rerun, words};
+use crate::{DetailLevel, Ladder, Level, ShowContext, ShowMode, failure, rerun, words};
 
 mod detail;
 mod limits;
@@ -157,19 +158,10 @@ use limits::{
 };
 use schema::{Detail, Fail, LifetimeFail, Line};
 
-/// `-q`: the summary alone.
-const QUIET: i8 = -1;
-/// `-v`: a line per bad outcome, at L1.
-const LINES: i8 = 1;
-/// `-vv`: L2, and every diagnostic.
-const DETAIL: i8 = 2;
-/// `-vvv`: L3.
-const ALL: i8 = 3;
-
 pub struct JsonLines<W: Write> {
     out: W,
     /// `-v` count minus `-q` count, clamped to -1..=3.
-    verbosity: i8,
+    verbosity: Level,
     /// From `run_started`, `collection_finished` and each
     /// `worker_started`.
     facts: RunFacts,
@@ -210,7 +202,7 @@ impl<W: Write> JsonLines<W> {
     pub fn new(out: W, level: Level) -> Self {
         Self {
             out,
-            verbosity: level.count(),
+            verbosity: level,
             facts: RunFacts::new(),
             signatures: FirstBySignature::new(),
             blocked: BlockedTests::new(),
@@ -229,19 +221,30 @@ impl<W: Write> JsonLines<W> {
         self.out
     }
 
-    /// Bad outcomes get lines.
-    const fn lines(&self) -> bool {
-        self.verbosity >= LINES
+    /// `-q`: the summary alone.
+    fn quiet(&self) -> bool {
+        self.verbosity == Level::Quiet
     }
 
-    /// Their lines hold L2.
-    const fn detailed(&self) -> bool {
-        self.verbosity >= DETAIL
+    /// How much a bad outcome's line holds ([`Ladder::JSON`]); none below
+    /// `-v`, where the summary names it by key.
+    fn detail_level(&self) -> Option<DetailLevel> {
+        Ladder::JSON.detail(self.verbosity)
+    }
+
+    /// Bad outcomes get lines.
+    fn lines(&self) -> bool {
+        self.detail_level().is_some()
+    }
+
+    /// Their lines hold L2, and every diagnostic has one.
+    fn detailed(&self) -> bool {
+        self.detail_level() >= Some(DetailLevel::L2)
     }
 
     /// Their lines hold L3, and none is grouped with an earlier one.
-    const fn all(&self) -> bool {
-        self.verbosity >= ALL
+    fn all(&self) -> bool {
+        self.detail_level() == Some(DetailLevel::L3)
     }
 
     fn line(&mut self, line: &Line<'_>) -> io::Result<()> {
@@ -519,7 +522,7 @@ impl<W: Write> Consumer for JsonLines<W> {
         {
             return self.summary(*exit_code, counts, *duration, stopped.as_ref());
         }
-        if self.verbosity <= QUIET {
+        if self.quiet() {
             return Ok(());
         }
         let worker = record.envelope.worker;

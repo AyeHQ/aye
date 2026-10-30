@@ -7,9 +7,9 @@ use std::time::Duration;
 use aye_events::{Counts, Event, ExitCode, Record, StopReason};
 use aye_stream::Subject;
 
+use super::JsonLines;
 use super::limits::FAILURES;
 use super::schema::{Line, Summary};
-use super::{JsonLines, QUIET};
 use crate::{ShowMode, words};
 
 impl<W: Write> JsonLines<W> {
@@ -33,10 +33,10 @@ impl<W: Write> JsonLines<W> {
             self.flush_pending()?;
         }
         let extra = self.tally.extra();
-        let failures = if self.verbosity > QUIET {
-            std::mem::take(&mut self.failures)
-        } else {
+        let failures = if self.quiet() {
             Vec::new()
+        } else {
+            std::mem::take(&mut self.failures)
         };
         // Details are what `more` would show.
         let more = (!failures.is_empty() && self.show != Some(ShowMode::Details))

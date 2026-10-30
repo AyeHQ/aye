@@ -10,13 +10,12 @@ use super::Text;
 use super::bad::Bad;
 use super::limits::{LABEL, NOT_RUN, OUTPUT_LINES};
 use super::out::Group;
-use super::settings::Level;
 use super::stylesheet::{DIM, KEY, RED};
-use crate::{failure, words};
+use crate::{DetailLevel, failure, words};
 
 impl<W: RawStream + AsLockedWrite> Text<W> {
     /// L2 and L3: a block.
-    pub(super) fn block_l2(&mut self, bad: &Bad<'_>, level: Level) -> io::Result<()> {
+    pub(super) fn block_l2(&mut self, bad: &Bad<'_>, level: DetailLevel) -> io::Result<()> {
         self.block()?;
         self.head(bad.outcome, bad.key, bad.name, None, true)?;
         self.second_line(bad)?;
@@ -40,9 +39,11 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             .result
             .map(|result| &result.output)
             .filter(|output| !output.is_empty())
-            .filter(|_| level == Level::L3 || first.is_none());
+            .filter(|_| level == DetailLevel::L3 || first.is_none());
         let (frames, locals) = match (level, first) {
-            (Level::L3, Some(failure)) => (failure.frames.as_slice(), failure::locals(failure)),
+            (DetailLevel::L3, Some(failure)) => {
+                (failure.frames.as_slice(), failure::locals(failure))
+            }
             _ => (&[][..], &[][..]),
         };
         if !frames.is_empty() || output.is_some() || !locals.is_empty() {
@@ -137,7 +138,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
 
     /// The rows closing a block: hint, fixture, setup, history, not run,
     /// rerun, more.
-    fn rows(&mut self, bad: &Bad<'_>, level: Level) -> io::Result<()> {
+    fn rows(&mut self, bad: &Bad<'_>, level: DetailLevel) -> io::Result<()> {
         let first = bad.failures.first();
         let mut rows: Vec<(&str, String)> = Vec::new();
         if let Some(hint) = first.and_then(|failure| failure.hint.as_deref()) {
@@ -160,7 +161,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         let any = !rows.is_empty()
             || !bad.not_run.is_empty()
             || bad.rerun.is_some()
-            || level == Level::L2;
+            || level == DetailLevel::L2;
         if !any {
             return Ok(());
         }
@@ -168,7 +169,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         for (label, value) in &rows {
             self.row(label, value)?;
         }
-        let shown = if level == Level::L3 {
+        let shown = if level == DetailLevel::L3 {
             bad.not_run.len()
         } else {
             NOT_RUN.min(bad.not_run.len())
@@ -185,7 +186,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         if let Some(rerun) = &bad.rerun {
             self.row("rerun", rerun)?;
         }
-        if level == Level::L2 {
+        if level == DetailLevel::L2 {
             self.row(
                 "more",
                 &format!(

@@ -85,8 +85,8 @@
 //!
 //! # The levels
 //!
-//! The [`Level`](crate::Level) (`-v` count minus `-q` count, clamped to
-//! -1..=3):
+//! The [`Level`] (`-v` count minus `-q` count, clamped to -1..=3), with
+//! what each shows of a bad outcome in [`Ladder::TEXT`]:
 //! - **-1** (`-q`): the summary line alone, with what never hides: error
 //!   diagnostics, failed workers, why a run stopped early. A collect-only
 //!   run still lists its cases.
@@ -147,7 +147,7 @@ use aye_stream::{
     BlockedTests, Consumer, FirstBySignature, Keys, Repeats, RunFacts, SubOutcomes, Subject, Tally,
 };
 
-use crate::{ColorChoice, ShowContext, ShowMode, rerun, words};
+use crate::{ColorChoice, Level, ShowContext, ShowMode, rerun, words};
 
 mod bad;
 mod block;
@@ -174,7 +174,7 @@ pub use summary::summary_words;
 
 pub struct Text<W: RawStream> {
     out: Out<W>,
-    verbosity: i8,
+    verbosity: Level,
     live: bool,
     /// Locations are OSC 8 hyperlinks: a live terminal, with colour.
     links: bool,
@@ -219,7 +219,7 @@ pub struct Text<W: RawStream> {
 
 impl<W: RawStream + AsLockedWrite> Text<W> {
     pub fn new(out: W, options: TextOptions) -> Self {
-        let verbosity = options.verbosity.count();
+        let verbosity = options.verbosity;
         let stream = AutoStream::new(out, options.color);
         let links = options.live && stream.current_choice() == ColorChoice::AlwaysAnsi;
         Self {
