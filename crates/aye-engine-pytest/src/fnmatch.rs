@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 /// `fnmatch.fnmatch(name, pattern)`: `*`, `?`, `[seq]` and `[!seq]`, no
 /// escapes. Both go through `os.path.normcase` first, which on Windows
 /// folds case and turns `/` into `\`.
-pub fn fnmatch(name: &str, pattern: &str) -> bool {
+pub(crate) fn fnmatch(name: &str, pattern: &str) -> bool {
     if cfg!(windows) {
         return fnmatchcase(&nt_normcase(name), &nt_normcase(pattern));
     }
@@ -32,7 +32,7 @@ fn nt_normcase(s: &str) -> String {
 /// pytest's `fnmatch_ex`: a pattern without a separator matches the file
 /// name; one with a separator matches the whole path, anchored anywhere when
 /// the path is absolute and the pattern is not.
-pub fn fnmatch_ex(pattern: &str, path: &Path) -> bool {
+pub(crate) fn fnmatch_ex(pattern: &str, path: &Path) -> bool {
     let sep = std::path::MAIN_SEPARATOR;
     let pattern = if cfg!(windows) && !pattern.contains(sep) && pattern.contains('/') {
         pattern.replace('/', &sep.to_string())
@@ -57,7 +57,7 @@ pub fn fnmatch_ex(pattern: &str, path: &Path) -> bool {
 
 /// Whether a `python_classes` or `python_functions` option matches `name`:
 /// a prefix, or an `fnmatch` pattern when it holds glob characters.
-pub fn matches_prefix_or_glob(options: &[String], name: &str) -> bool {
+pub(crate) fn matches_prefix_or_glob(options: &[String], name: &str) -> bool {
     options.iter().any(|option| {
         name.starts_with(option.as_str())
             || (option.contains(['*', '?', '[']) && fnmatch(name, option))
@@ -175,7 +175,7 @@ fn is_hidden(name: &str) -> bool {
 
 /// `sorted(glob.iglob(pattern, recursive=True))`, relative to `base`.
 /// Results are spelled as Python spells them (`tests/` for `tests/**`).
-pub fn glob(base: &Path, pattern: &str) -> Vec<String> {
+pub(crate) fn glob(base: &Path, pattern: &str) -> Vec<String> {
     let mut out = iglob(base, pattern, false);
     // `iglob` drops the empty match `**` makes for the base itself.
     if (pattern.is_empty() || pattern.starts_with("**"))

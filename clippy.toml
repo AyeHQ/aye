@@ -1,1 +1,3 @@
 doc-valid-idents = ["JUnit", "GitHub", ".."]
+# A test may say why it skips.
+allow-print-in-tests = true

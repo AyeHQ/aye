@@ -5,7 +5,7 @@
 //! durations are advisory and separate from result caching, which has stricter
 //! invalidation.
 //!
-//! Depends on: aye-events.
+//! Depends on: aye-events, and aye-fs for the state directory.
 //!
 //! Native features (October 2026): the fingerprint that decides whether a
 //! cached result holds carries its own version, so changing its inputs
@@ -22,15 +22,8 @@
 //!   runs saving at once race, and the last one wins. There is no fsync: a
 //!   file damaged by a power loss reads as empty.
 //! - **The directory is marked as a cache** when aye creates it, whichever
-//!   writer comes first (history, or the refinement cache below it, both
-//!   through [`prepare_dir`]): a `.gitignore` holding `*` and a
-//!   `CACHEDIR.TAG` in the outermost directory created, unless that one is
-//!   inside a marked directory already. A directory that already exists is
-//!   left as it is, as pytest does, so pointing history at a directory of
-//!   one's own never hides it from git. The one exception is the unmarked
-//!   state directory aye 0.0.1 left when its refinement cache came first: an
-//!   unmarked directory holding a `cache/refine` directory and nothing but
-//!   aye's own files gets its markers.
+//!   writer comes first: history and the run store create theirs, as the
+//!   refinement cache does, through `aye_fs::prepare_dir`, which says how.
 //! - **Keyed by test id alone** for now. The environment joins the key when
 //!   the matrix lands, under a new `version`.
 //! - **Durations** are a moving average (alpha 0.3, the first run taken as
@@ -97,6 +90,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use aye_events::{Event, Outcome, Previous, Record, TestId, TestResult};
+use aye_fs::{HISTORY_TEMPORARY, StateBucket, atomic_write, prepare_dir};
 use serde::{Deserialize, Serialize};
 
 pub mod runs;
@@ -104,7 +98,7 @@ pub mod runs;
 pub use runs::{Change, RunMeta, RunStore, RunWriter};
 
 /// The history file, inside the directory history is given.
-pub const FILE: &str = "history.json";
+pub const FILE: &str = StateBucket::History.name();
 
 /// The format of the history file. A file of any other version loads as
 /// empty history.
@@ -115,18 +109,6 @@ const ALPHA: f64 = 0.3;
 
 /// How many outcomes a test's `recent` keeps.
 pub const RECENT: usize = 20;
-
-/// Written into a directory history creates.
-const MARKERS: [(&str, &str); 2] = [
-    (".gitignore", "# Created by aye automatically.\n*\n"),
-    (
-        "CACHEDIR.TAG",
-        "Signature: 8a477f597d28d172789f06886806bc55\n\
-         # This file is a cache directory tag created by aye.\n\
-         # For information about cache directory tags, see:\n\
-         #\thttps://bford.info/cachedir/spec.html\n",
-    ),
-];
 
 /// What history knows about one test.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -310,31 +292,22 @@ impl History {
     }
 
     /// Writes `<dir>/history.json` atomically, creating `dir` (see
-    /// [`prepare_dir`]) if needed.
+    /// `aye_fs::prepare_dir`) if needed.
     pub fn save(&self, dir: &Path) -> io::Result<()> {
         prepare_dir(dir)?;
-        let mut builder = tempfile::Builder::new();
-        builder.prefix(".history.").suffix(".tmp");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            builder.permissions(fs::Permissions::from_mode(0o666));
-        }
-        let mut file = builder.tempfile_in(dir)?;
-        let mut out = io::BufWriter::new(file.as_file_mut());
-        serde_json::to_writer(
-            &mut out,
-            &StoredRef {
-                version: VERSION,
-                tests: &self.tests,
-                last_failed: &self.last_failed,
-            },
-        )?;
-        out.write_all(b"\n")?;
-        out.flush()?;
-        drop(out);
-        file.persist(dir.join(FILE)).map_err(|e| e.error)?;
-        Ok(())
+        atomic_write(dir, FILE, HISTORY_TEMPORARY, |file| {
+            let mut out = io::BufWriter::new(file);
+            serde_json::to_writer(
+                &mut out,
+                &StoredRef {
+                    version: VERSION,
+                    tests: &self.tests,
+                    last_failed: &self.last_failed,
+                },
+            )?;
+            out.write_all(b"\n")?;
+            out.flush()
+        })
     }
 
     /// Folds one record of a run's log into the history. Kinds history has
@@ -506,83 +479,16 @@ impl History {
     }
 }
 
-/// Creates `dir` and whatever is missing above it, and marks the outermost
-/// directory it creates as a cache: a `.gitignore` holding `*` and a
-/// `CACHEDIR.TAG`, unless that directory is inside a marked one already. A
-/// directory that exists is left alone (see the crate docs for the one
-/// exception). Whatever else aye keeps beside history should create its
-/// directory through this, so the markers are written whichever writer
-/// creates the directory first.
-pub fn prepare_dir(dir: &Path) -> io::Result<()> {
-    if dir.is_dir() {
-        if is_unmarked_state(dir) {
-            mark(dir)?;
-        }
-        return Ok(());
-    }
-    let outermost = dir
-        .ancestors()
-        .take_while(|ancestor| !ancestor.as_os_str().is_empty() && !ancestor.exists())
-        .last()
-        .unwrap_or(dir)
-        .to_path_buf();
-    fs::create_dir_all(dir)?;
-    let inside_a_cache = outermost
-        .parent()
-        .is_some_and(|parent| parent.join(MARKERS[1].0).is_file());
-    if inside_a_cache {
-        return Ok(());
-    }
-    mark(&outermost)
-}
-
-/// Writes the markers into `dir`, keeping any that exist.
-fn mark(dir: &Path) -> io::Result<()> {
-    for (name, content) in MARKERS {
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(dir.join(name))
-        {
-            Ok(mut file) => file.write_all(content.as_bytes())?,
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(())
-}
-
-/// A state directory aye created without markers: no marker at all, a
-/// `cache/refine` directory (the refinement cache's), and nothing but the
-/// history file, its temporaries, the cache and the run store.
-fn is_unmarked_state(dir: &Path) -> bool {
-    if MARKERS.iter().any(|(name, _)| dir.join(name).exists())
-        || !dir.join("cache").join("refine").is_dir()
-    {
-        return false;
-    }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return false;
-    };
-    entries.into_iter().all(|entry| {
-        entry.is_ok_and(|entry| {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            name == FILE
-                || name == "cache"
-                || name == runs::DIR
-                || (name.starts_with(".history.") && name.ends_with(".tmp"))
-        })
-    })
-}
-
 /// Milliseconds as a duration, saturating.
 fn duration(ms: f64) -> Duration {
     Duration::try_from_secs_f64(ms / 1000.0).unwrap_or(Duration::MAX)
 }
 
 /// Milliseconds on disk keep microseconds, as on the wire.
-#[allow(clippy::trivially_copy_pass_by_ref)] // signature fixed by serde
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "signature fixed by serde"
+)]
 fn micros<S: serde::Serializer>(ms: &f64, s: S) -> Result<S::Ok, S::Error> {
     let rounded = (ms * 1000.0).round() / 1000.0;
     s.serialize_f64(if rounded.is_finite() { rounded } else { *ms })

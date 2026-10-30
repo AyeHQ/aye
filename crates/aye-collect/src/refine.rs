@@ -262,7 +262,7 @@ impl Collector<'_> {
             if init == abs || !init.is_file() {
                 continue;
             }
-            let rel = crate::tree::relative(&init, root);
+            let rel = aye_fs::relative_through_root(&init, root);
             let hash = *memo.entry((init.clone(), recognizer)).or_insert_with(|| {
                 let (source, _) = crate::source::load(&init, &rel);
                 let source = source.filter(|s| !s.is_lossy())?;
@@ -297,7 +297,7 @@ fn fallback(
 /// Refinement results on disk, one JSON file per file and adapter:
 /// `<cache dir>/refine/<adapter>/<key>.json`.
 struct Cache {
-    /// The cache directory, created through `aye_history::prepare_dir` so
+    /// The cache directory, created through `aye_fs::prepare_dir` so
     /// that the state directory holding it is marked as a cache.
     top: PathBuf,
     dir: PathBuf,
@@ -341,7 +341,7 @@ impl Cache {
         }
         Self {
             top: cache_dir.to_path_buf(),
-            dir: cache_dir.join("refine").join(adapter),
+            dir: cache_dir.join(aye_fs::REFINE_CACHE).join(adapter),
             base: hash.finish(),
         }
     }
@@ -391,7 +391,7 @@ impl Cache {
             return;
         };
         let aside = self.dir.join(format!("{key}.{}.tmp", std::process::id()));
-        let written = aye_history::prepare_dir(&self.top)
+        let written = aye_fs::prepare_dir(&self.top)
             .and_then(|()| std::fs::create_dir_all(&self.dir))
             .and_then(|()| std::fs::write(&aside, bytes))
             .and_then(|()| std::fs::rename(&aside, self.path(key)));

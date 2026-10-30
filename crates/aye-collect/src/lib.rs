@@ -9,9 +9,9 @@
 //! is each engine's recognizer. If a framework's name pattern or id algorithm
 //! appears in this crate, the boundary has leaked.
 //!
-//! Depends on: aye-engine, aye-events, aye-config (path normalization),
-//! aye-history (marking the state directory). Must not depend on any
-//! `aye-engine-*`.
+//! Depends on: aye-engine, aye-events, aye-fs (paths, and marking the state
+//! directory), aye-static (the variables it reads by name). Must not depend
+//! on any `aye-engine-*`.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **Stopping and progress.** [`Collector::with_stop`] takes a flag the
@@ -169,7 +169,7 @@
 //!   hook maps, under a name that is neither its distribution's nor in its
 //!   `top_level.txt`, are not in the key. Entries are never pruned. The
 //!   state directory the cache creates is marked as a cache
-//!   (`aye_history::prepare_dir`).
+//!   (`aye_fs::prepare_dir`).
 //! - **Strict mode** turns every warning into an error, recognizers' and
 //!   workers' included; infos stay infos. [`Collection::has_errors`] is what
 //!   fails the run.
@@ -530,7 +530,7 @@ impl<'a> Collector<'a> {
         }
         let all = (0..self.recognizers.len()).fold(0, |all: Mask, i| all | 1 << i);
         for (abs, target) in self.normalize_targets(targets) {
-            let rel = tree::relative(&abs, self.project.root);
+            let rel = aye_fs::relative_through_root(&abs, self.project.root);
             let (code, message) = if abs.is_dir() {
                 if !tree.walk(&abs, all, tick) {
                     return false;
@@ -570,11 +570,11 @@ impl<'a> Collector<'a> {
         let resolved: Vec<(PathBuf, &PathBuf)> = targets
             .iter()
             .map(|target| {
-                let abs = aye_config::absolute(self.project.cwd, target);
+                let abs = aye_fs::absolute(self.project.cwd, target);
                 let abs = if abs.starts_with(root) {
                     abs
                 } else {
-                    aye_config::relative_to(root, &abs).map_or(abs, |rel| root.join(rel))
+                    aye_fs::relative_to(root, &abs).map_or(abs, |rel| root.join(rel))
                 };
                 (abs, target)
             })
@@ -609,7 +609,7 @@ impl<'a> Collector<'a> {
         let mut roots: Vec<(PathBuf, Mask)> = Vec::new();
         for (i, (_, recognizer)) in self.recognizers.iter().enumerate() {
             for root in recognizer.roots(&self.project) {
-                let root = aye_config::absolute(self.project.cwd, &root);
+                let root = aye_fs::absolute(self.project.cwd, &root);
                 match roots.iter_mut().find(|(seen, _)| *seen == root) {
                     Some((_, mask)) => *mask |= 1 << i,
                     None => roots.push((root, 1 << i)),

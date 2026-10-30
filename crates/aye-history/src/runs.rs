@@ -64,7 +64,7 @@ use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 
 /// The store's directory, inside aye's state directory.
-pub const DIR: &str = "runs";
+pub const DIR: &str = aye_fs::StateBucket::Runs.name();
 
 /// The file naming the run that finished last.
 pub const LAST: &str = "last";
@@ -240,7 +240,7 @@ const CHUNK: usize = 1 << 18;
 
 impl RunWriter {
     /// Keeps the run in `dir` (created when the run claims its number, with
-    /// [`crate::prepare_dir`]), and at most `keep` runs there. With `keep`
+    /// `aye_fs::prepare_dir`), and at most `keep` runs there. With `keep`
     /// 0, nothing is written, and the runs stored are deleted.
     pub fn new(dir: impl Into<PathBuf>, keep: usize) -> Self {
         Self {
@@ -369,10 +369,10 @@ impl RunWriter {
 }
 
 /// Claims the next run number in `dir` (created if need be, with
-/// [`crate::prepare_dir`]): 1 + the highest number of the runs there and
+/// `aye_fs::prepare_dir`): 1 + the highest number of the runs there and
 /// of `last`, or the first after it no other run has claimed meanwhile.
 fn claim(dir: &Path) -> io::Result<Claimed> {
-    crate::prepare_dir(dir)?;
+    aye_fs::prepare_dir(dir)?;
     let first = highest(dir).saturating_add(1);
     for number in first..first.saturating_add(CLAIMS) {
         let path = dir.join(format!("{}{LOG}", numbered(number)));
@@ -742,21 +742,12 @@ impl RunStore {
     }
 }
 
-/// Writes `name` in `dir` whole or not at all: a temporary file, renamed
-/// over it (replacing it on Windows too).
+/// Writes `name` in `dir` whole or not at all (`aye_fs::atomic_write`).
 fn replace(dir: &Path, name: &str, content: &[u8]) -> io::Result<()> {
-    let mut builder = tempfile::Builder::new();
-    builder.prefix(TEMPORARY).suffix(".tmp");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        builder.permissions(fs::Permissions::from_mode(0o666));
-    }
-    let mut file = builder.tempfile_in(dir)?;
-    file.write_all(content)?;
-    file.flush()?;
-    file.persist(dir.join(name)).map_err(|e| e.error)?;
-    Ok(())
+    aye_fs::atomic_write(dir, name, TEMPORARY, |file| {
+        file.write_all(content)?;
+        file.flush()
+    })
 }
 
 /// A run's id as the runner makes them (16 hex digits), or anything as

@@ -7,7 +7,8 @@
 //! Owns: presentation. If a renderer needs more, the schema grows; runner state
 //! never passes around it.
 //!
-//! Depends on: aye-events.
+//! Depends on: aye-events, and aye-static for the one variable it reads,
+//! `GITHUB_ACTIONS`.
 //!
 //! Decided (implementation, October 2026):
 //! - **Two formats, one ladder.** `--output text` ([`Text`]) and

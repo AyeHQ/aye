@@ -82,7 +82,7 @@
 //!   path only the root has is taken from the root, so the ids aye prints
 //!   rerun from any directory. One spelled through another name of a
 //!   directory in the project (macOS's `/tmp` is `/private/tmp`) is spelled
-//!   from the root, as collection's ids are (`aye_config::relative_to`).
+//!   from the root, as collection's ids are (`aye_fs::relative_to`).
 //!   Paths mixed with dotted names or keys are collected along with the
 //!   adapters' default roots. Cases are listed in the order of the arguments
 //!   that select them, as pytest orders them (selection and collection do
@@ -252,6 +252,10 @@ use args::{Args, ShowArgs};
 use aye_events::ExitCode;
 use session::Session;
 
+#[expect(
+    clippy::print_stderr,
+    reason = "aye's own messages, outside the event stream"
+)]
 fn main() -> process::ExitCode {
     let mut raw: Vec<std::ffi::OsString> = std::env::args_os().collect();
     // `aye show` shows a stored run, unless `show` is a path: as `config`.

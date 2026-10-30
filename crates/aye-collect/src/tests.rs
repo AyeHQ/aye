@@ -2499,35 +2499,6 @@ fn files_outside_the_root_are_relative_with_parent_parts() {
 }
 
 #[test]
-fn normalize_resolves_dots_lexically() {
-    assert_eq!(
-        aye_config::normalize(Path::new("/a/./b/../c")),
-        PathBuf::from("/a/c")
-    );
-    assert_eq!(
-        aye_config::normalize(Path::new("/../a")),
-        PathBuf::from("/a")
-    );
-    assert_eq!(
-        aye_config::normalize(Path::new("../a/..")),
-        PathBuf::from("..")
-    );
-}
-
-#[test]
-fn relative_paths_use_slashes_and_parent_parts() {
-    let root = Path::new("/repo/project");
-    assert_eq!(
-        tree::relative(Path::new("/repo/project/tests/t.py"), root),
-        "tests/t.py"
-    );
-    assert_eq!(
-        tree::relative(Path::new("/repo/other/t.py"), root),
-        "../other/t.py"
-    );
-}
-
-#[test]
 fn the_parallel_map_keeps_order() {
     let items: Vec<u32> = (0..1000).collect();
     let doubled = parallel::map(&items, |n| n * 2);

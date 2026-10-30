@@ -42,8 +42,9 @@
 //!   `UnitTestCase.collect` (unittest methods sorted by name, parametrize not
 //!   applied). Venvs are detected as pytest does (`pyvenv.cfg` or
 //!   `conda-meta/history`). The crate also depends on `aye-config`, for its
-//!   loaders. [`Pytest::prepare`] always returns a recognizer: pytest is the
-//!   default for Python tests.
+//!   loaders, on `aye-fs` for paths, and on `aye-static` for the variables
+//!   it reads. [`Pytest::prepare`] always returns a recognizer: pytest is
+//!   the default for Python tests.
 //! - **Canonical ids are relative to the aye project root**; pytest's own
 //!   node ids are relative to its rootdir. The two differ only in the file
 //!   part, which the front-end translates using the rootdir in
@@ -467,6 +468,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_engine::{AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile};
 use aye_events::{Certainty, Diagnostic, Severity};
+use aye_fs::normalize_absolute;
+use aye_static::EnvVars;
 
 pub use config::{PytestConfig, split_xdist};
 pub use native::{NAME, Pytest};
@@ -611,21 +614,6 @@ enum Ignored {
     Yes,
 }
 
-/// `os.path.abspath` without touching the file system.
-fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
-        }
-    }
-    out
-}
-
 /// pytest's `_in_venv`.
 fn is_virtualenv(dir: &Path) -> bool {
     dir.join("pyvenv.cfg").is_file() || dir.join("conda-meta").join("history").is_file()
@@ -697,7 +685,7 @@ fn initial_dirs(cwd: &Path, args: &[PathBuf]) -> Vec<PathBuf> {
     };
     let mut anchors = Vec::new();
     for arg in args {
-        let arg = normalize(arg);
+        let arg = normalize_absolute(arg);
         if arg.is_dir() {
             anchors.extend(test_dirs(&arg));
             anchors.push(arg);
@@ -730,9 +718,9 @@ fn module_name(root: &Path, file: &Path) -> Option<String> {
 
 impl PytestRecognizer {
     pub fn new(project: &Project<'_>) -> Result<Self, AdapterError> {
-        let addopts = std::env::var("PYTEST_ADDOPTS").ok();
-        let plugins = std::env::var("PYTEST_PLUGINS").ok();
-        let pythonpath = std::env::var("PYTHONPATH").ok();
+        let addopts = std::env::var(EnvVars::PYTEST_ADDOPTS).ok();
+        let plugins = std::env::var(EnvVars::PYTEST_PLUGINS).ok();
+        let pythonpath = std::env::var(EnvVars::PYTHONPATH).ok();
         Self::with_environment(
             project,
             PytestEnv {
@@ -770,7 +758,7 @@ impl PytestRecognizer {
             .map(|value| {
                 std::env::split_paths(value)
                     .filter(|p| !p.as_os_str().is_empty())
-                    .map(|p| normalize(&project.cwd.join(p)))
+                    .map(|p| normalize_absolute(&project.cwd.join(p)))
                     .collect()
             })
             .unwrap_or_default();
@@ -989,7 +977,7 @@ impl PytestRecognizer {
         let mut dirs: Vec<PathBuf> = Vec::new();
         let mut files: Vec<PathBuf> = Vec::new();
         for arg in &self.collection_args {
-            let arg = normalize(arg);
+            let arg = normalize_absolute(arg);
             if arg.is_dir() {
                 dirs.push(arg);
             } else if arg.is_file() {
@@ -1206,8 +1194,8 @@ impl PytestRecognizer {
              {}\n\
              For more information, visit:\n  \
              https://docs.pytest.org/en/stable/deprecations.html#pytest-plugins-in-non-top-level-conftest-files",
-            normalize(&dir.join("conftest.py")).display(),
-            normalize(&self.config.confcutdir).display(),
+            normalize_absolute(&dir.join("conftest.py")).display(),
+            normalize_absolute(&self.config.confcutdir).display(),
         );
         Some((dir.to_path_buf(), message))
     }
@@ -1441,8 +1429,13 @@ impl PytestRecognizer {
     /// Whether pytest ignores `path` (`collect_ignore`, `--ignore` and
     /// their glob forms).
     fn ignored(&self, path: &Path) -> Ignored {
-        let path = normalize(path);
-        if self.config.ignore.iter().any(|p| normalize(p) == path) {
+        let path = normalize_absolute(path);
+        if self
+            .config
+            .ignore
+            .iter()
+            .any(|p| normalize_absolute(p) == path)
+        {
             return Ignored::Yes;
         }
         let text = path.to_string_lossy();
@@ -1468,7 +1461,7 @@ impl PytestRecognizer {
         if let Some(summary) = nearest(|s| s.collect_ignore.as_ref()) {
             let list = summary.collect_ignore.as_ref().expect("picked");
             for (entry, conditional) in &list.entries {
-                if normalize(&summary.dir.join(entry)) == path {
+                if normalize_absolute(&summary.dir.join(entry)) == path {
                     if !conditional {
                         return Ignored::Yes;
                     }
@@ -1482,7 +1475,7 @@ impl PytestRecognizer {
         if let Some(summary) = nearest(|s| s.collect_ignore_glob.as_ref()) {
             let list = summary.collect_ignore_glob.as_ref().expect("picked");
             for (entry, conditional) in &list.entries {
-                let glob = normalize(&summary.dir.join(entry));
+                let glob = normalize_absolute(&summary.dir.join(entry));
                 if fnmatch::fnmatch(&text, &glob.to_string_lossy()) {
                     if !conditional {
                         return Ignored::Yes;
@@ -1656,14 +1649,14 @@ impl Recognizer for PytestRecognizer {
                     .iter()
                     .map(|entry| {
                         self.pyarg(entry)
-                            .unwrap_or_else(|| normalize(&rootdir.join(entry)))
+                            .unwrap_or_else(|| normalize_absolute(&rootdir.join(entry)))
                     })
                     .collect();
             }
             let mut roots: Vec<PathBuf> = Vec::new();
             for pattern in testpaths {
                 for found in fnmatch::glob(rootdir, pattern) {
-                    let path = normalize(&rootdir.join(found));
+                    let path = normalize_absolute(&rootdir.join(found));
                     if !roots.contains(&path) {
                         roots.push(path);
                     }

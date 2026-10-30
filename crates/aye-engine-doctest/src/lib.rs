@@ -18,7 +18,8 @@
 //!   so plain `pytest --doctest-modules` / `--doctest-glob` is the referee.
 //!   The executor (`python/aye_engine_doctest.py`) imports only the standard
 //!   library and runs on Python 3.10 and later, with or without pytest. The
-//!   crate also depends on `aye-config`, for its loaders and `[tool.aye]`.
+//!   crate also depends on `aye-config`, for its loaders and `[tool.aye]`,
+//!   on `aye-fs` for paths, and on `aye-static` for the variables it reads.
 //!   Per-example re-runs and `--accept` are not implemented yet.
 //! - **Ids.** A module gives one case per `DocTest` with examples, named as
 //!   `DocTestFinder().find(module, module.__name__)` names it, in its order
@@ -321,6 +322,7 @@ use aye_engine::{
     Setting, SourceFile,
 };
 use aye_events::{Case, Certainty, Diagnostic, Severity, Span};
+use aye_static::EnvVars;
 
 pub use config::{DoctestConfig, ImportMode};
 
@@ -438,11 +440,11 @@ impl Env {
     /// The variables, from the process's environment.
     pub fn from_process() -> Self {
         Self {
-            pytest_addopts: std::env::var("PYTEST_ADDOPTS").ok(),
-            python_optimize: std::env::var("PYTHONOPTIMIZE").ok(),
-            ignore_import_mismatch: std::env::var("PY_IGNORE_IMPORTMISMATCH")
+            pytest_addopts: std::env::var(EnvVars::PYTEST_ADDOPTS).ok(),
+            python_optimize: std::env::var(EnvVars::PYTHONOPTIMIZE).ok(),
+            ignore_import_mismatch: std::env::var(EnvVars::PY_IGNORE_IMPORTMISMATCH)
                 .is_ok_and(|v| v == "1"),
-            pytest_plugins: std::env::var("PYTEST_PLUGINS")
+            pytest_plugins: std::env::var(EnvVars::PYTEST_PLUGINS)
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
         }
@@ -819,7 +821,7 @@ impl DoctestRecognizer {
             return project
                 .args
                 .iter()
-                .map(|a| aye_config::absolute(project.cwd, a))
+                .map(|a| aye_fs::absolute(project.cwd, a))
                 .collect();
         }
         if project.cwd == self.config.rootdir && !self.config.testpaths.is_empty() {
@@ -1388,7 +1390,7 @@ impl DoctestRecognizer {
 /// Python's `glob.glob(pattern, recursive=True)` from `base`: the existing
 /// paths matching `pattern`, sorted per directory, `**` matching any depth.
 fn glob(base: &Path, pattern: &str) -> Vec<PathBuf> {
-    let absolute = aye_config::absolute(base, Path::new(pattern));
+    let absolute = aye_fs::absolute(base, Path::new(pattern));
     let has_magic = |s: &str| s.contains(['*', '?', '[']);
     if !has_magic(pattern) {
         return if absolute.exists() {

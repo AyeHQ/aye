@@ -9,7 +9,8 @@
 //! Owns: how tests run, where, and in what order. Does not own: what a test is
 //! or how one executes inside the framework; it calls the engine for that.
 //!
-//! Depends on: aye-engine, aye-events. Must not depend on any `aye-engine-*`.
+//! Depends on: aye-engine, aye-events, aye-static. Must not depend on any
+//! `aye-engine-*`.
 //!
 //! Environments come from `aye-provision` (uv as a subprocess, or paths the
 //! user supplies); the runner requests them per matrix row and per backend,

@@ -81,7 +81,11 @@ impl From<io::Error> for Problem {
     }
 }
 
-pub fn main(args: &ShowArgs) -> ExitCode {
+#[expect(
+    clippy::print_stderr,
+    reason = "aye's own messages, outside the event stream"
+)]
+pub(crate) fn main(args: &ShowArgs) -> ExitCode {
     match show(args) {
         Ok(()) => ExitCode::Ok,
         Err(Problem::Usage(message)) => {
@@ -114,15 +118,15 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
         .iter()
         .map(|test| session::path_part(test))
         .filter(|path| session::is_path_like(&cwd, path))
-        .map(|path| session::normalize(&cwd.join(path)))
+        .map(|path| aye_fs::normalize_absolute(&cwd.join(path)))
         .collect();
-    let root = session::normalize(&aye_config::project_root(&cwd, &given));
+    let root = aye_fs::normalize_absolute(&aye_config::project_root(&cwd, &given));
     let config = AyeConfig::load(&root).map_err(|err| Problem::Usage(err.to_string()))?;
     let format = args
         .output
         .or_else(|| config.settings.output.as_deref()?.parse().ok())
         .unwrap_or(Output::Text);
-    let store = RunStore::new(root.join(session::STATE_DIR).join(aye_history::runs::DIR));
+    let store = RunStore::new(aye_fs::StateDir::for_root(&root).bucket(aye_fs::StateBucket::Runs));
     let keep = config.settings.keep_runs();
     if args.runs {
         return list_runs(&store, format, keep);

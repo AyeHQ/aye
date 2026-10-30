@@ -4,7 +4,7 @@
 //! the order of aye's walk (without the python plugin, pytest doesn't put a
 //! package's `__init__.py` first).
 
-pub struct Suite {
+pub(super) struct Suite {
     pub name: &'static str,
     pub files: &'static [(&'static str, &'static str)],
     /// What pytest 9.1.1 collects, by file in aye's walk order, in pytest's
@@ -14,7 +14,7 @@ pub struct Suite {
     pub refined: &'static [&'static str],
 }
 
-pub const SUITES: &[Suite] = &[
+pub(super) const SUITES: &[Suite] = &[
     // Every kind of object the finder visits, names and order.
     Suite {
         name: "objects",

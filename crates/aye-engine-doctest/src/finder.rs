@@ -25,7 +25,7 @@ use crate::parser;
 
 /// One test the finder makes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Found {
+pub(crate) struct Found {
     /// `pkg.mod.Class.method`.
     pub name: String,
     /// The docstring.
@@ -34,7 +34,7 @@ pub struct Found {
 
 /// What the finder makes of a module.
 #[derive(Debug, Clone, Default)]
-pub struct Finding {
+pub(crate) struct Finding {
     /// Sorted by name, as `DocTestFinder.find` sorts them.
     pub tests: Vec<Found>,
     /// Why the tests can only be known by importing the module.
@@ -945,7 +945,7 @@ fn plain_instances(name: &str, defs: &HashMap<&str, Kind<'_>>, seen: &mut HashSe
 }
 
 /// Reads a module's docstrings.
-pub struct Finder<'f, 'a> {
+pub(crate) struct Finder<'f, 'a> {
     file: &'f SourceFile<'a>,
     /// The file has carriage returns: line endings to fold.
     has_cr: bool,
@@ -957,7 +957,7 @@ pub struct Finder<'f, 'a> {
 }
 
 impl<'f, 'a> Finder<'f, 'a> {
-    pub fn new(file: &'f SourceFile<'a>) -> Self {
+    pub(crate) fn new(file: &'f SourceFile<'a>) -> Self {
         Self {
             file,
             has_cr: file.source.contains('\r'),
@@ -1008,7 +1008,7 @@ impl<'f, 'a> Finder<'f, 'a> {
     }
 
     /// The module's tests, named from `module` (its `__name__`).
-    pub fn find(mut self, module: &str) -> Finding {
+    pub(crate) fn find(mut self, module: &str) -> Finding {
         let body = &self.file.module.body;
         self.read_imports(body);
         let mut tests = Vec::new();
@@ -1691,7 +1691,7 @@ const SKIPPERS: [&str; 2] = ["skip", "importorskip"];
 /// bodies, decorators, default values) or in a module function called by
 /// name from there. `unittest.SkipTest` is no skip there: pytest fails the
 /// directory.
-pub fn may_skip_while_imported(module: &ast::ModModule) -> bool {
+pub(crate) fn may_skip_while_imported(module: &ast::ModModule) -> bool {
     struct AtImport<'a> {
         skips: bool,
         callees: Vec<&'a str>,

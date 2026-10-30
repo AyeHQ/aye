@@ -10,10 +10,10 @@ homepage.workspace = true
 authors.workspace = true
 
 [dependencies]
-aye-config = { workspace = true }
 aye-engine = { workspace = true }
 aye-events = { workspace = true }
-aye-history = { workspace = true }
+aye-fs = { workspace = true }
+aye-static = { workspace = true }
 ruff_python_parser = { workspace = true }
 serde_json = { workspace = true }
 walkdir = { workspace = true }

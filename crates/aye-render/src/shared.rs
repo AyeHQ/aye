@@ -511,7 +511,10 @@ pub(crate) fn seconds(duration: Duration) -> String {
 
 /// Seconds with two decimals, as a number.
 pub(crate) fn secs(duration: Duration) -> f64 {
-    #[allow(clippy::cast_precision_loss)] // durations are far below 2^52 ms
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "durations are far below 2^52 ms"
+    )]
     let ms = millis(duration) as f64;
     (ms / 10.0).round() / 100.0
 }
@@ -865,6 +868,7 @@ impl LifetimeErrors {
     /// The failed lifetimes that kept no test from running, so far.
     pub(crate) fn counts(&self) -> LifetimeCounts {
         let mut counts = LifetimeCounts::default();
+        #[expect(clippy::iter_over_hash_type, reason = "counts, in any order")]
         for (lifetime, phase) in &self.failed {
             if self.blocking.contains(lifetime) {
                 continue;

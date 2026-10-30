@@ -19,7 +19,7 @@ use crate::scope::{
 
 /// A fixture definition, as far as parametrization is concerned.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FixtureDef {
+pub(crate) struct FixtureDef {
     /// The name pytest registers it under.
     pub name: String,
     /// The attribute that holds it in its module: the function's name, or
@@ -76,7 +76,7 @@ impl FixtureDef {
 /// pytest's own fixtures (and those of the plugins it ships), which are
 /// never parametrized: a test may request them without any project file
 /// defining them.
-pub const BUILTIN_FIXTURES: &[&str] = &[
+pub(crate) const BUILTIN_FIXTURES: &[&str] = &[
     "cache",
     "capfd",
     "capfdbinary",
@@ -107,7 +107,7 @@ pub const BUILTIN_FIXTURES: &[&str] = &[
 
 /// `collect_ignore` or `collect_ignore_glob`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct IgnoreList {
+pub(crate) struct IgnoreList {
     /// Entries, and whether each may not be there at runtime.
     pub entries: Vec<(String, bool)>,
     /// Built in a way that cannot be read.
@@ -116,7 +116,7 @@ pub struct IgnoreList {
 
 /// One support module, summarised.
 #[derive(Debug, Clone, Default)]
-pub struct Summary {
+pub(crate) struct Summary {
     pub dir: PathBuf,
     /// Hook implementations defined at module level.
     pub hooks: BTreeSet<String>,
@@ -187,7 +187,7 @@ pub struct Summary {
 /// `append`, `extend`, `+=`, slice assignment, `site.addsitedir`), as far
 /// as aye can tell them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SysPath {
+pub(crate) struct SysPath {
     /// The directories it can tell: built from `__file__` and literals
     /// through `os.path` and `pathlib` (`abspath(join(dirname(__file__),
     /// "src"))`, `Path(__file__).parent / "support"`), absolute.
@@ -233,7 +233,7 @@ impl<'a> SysPathVisitor<'_, 'a> {
         if depth > 8 {
             return None;
         }
-        let normal = |path: PathBuf| Some(crate::normalize(&path));
+        let normal = |path: PathBuf| Some(aye_fs::normalize_absolute(&path));
         match expr {
             Expr::Name(name) if name.id.as_str() == "__file__" => Some(self.file.clone()),
             Expr::StringLiteral(literal) => {
@@ -389,7 +389,7 @@ impl<'a> Visitor<'a> for SysPathVisitor<'_, 'a> {
 /// holds for the files collected after it: those below the conftest, at
 /// least.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct IniChanges {
+pub(crate) struct IniChanges {
     /// `python_files` patterns it adds, as literals: the files they match
     /// are test modules too.
     pub python_files: Vec<String>,
@@ -598,7 +598,7 @@ fn ini_changes<'a>(module: &'a ModModule, lookup: Lookup<'_, 'a>) -> IniChanges 
 
 /// A base class, as a module refers to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BaseRef {
+pub(crate) enum BaseRef {
     /// A class of the same module.
     Local(String),
     /// A dotted path through imports or builtins.
@@ -608,7 +608,7 @@ pub enum BaseRef {
 
 impl Summary {
     /// It loads plugins aye cannot name: anything may be hooked.
-    pub fn hooks_unknown(&self) -> bool {
+    pub(crate) fn hooks_unknown(&self) -> bool {
         self.plugins_unknown || self.registers_unknown
     }
 }
@@ -627,7 +627,7 @@ fn assigns(stmt: &Stmt, name: &str) -> bool {
 
 /// `getfuncargnames`: positional-or-keyword and keyword-only parameters
 /// without defaults, minus `self`/`cls` for methods.
-pub fn funcargnames(def: &StmtFunctionDef, drop_first: bool) -> Vec<String> {
+pub(crate) fn funcargnames(def: &StmtFunctionDef, drop_first: bool) -> Vec<String> {
     let params = &def.parameters;
     let mut names: Vec<String> = params
         .args
@@ -644,7 +644,7 @@ pub fn funcargnames(def: &StmtFunctionDef, drop_first: bool) -> Vec<String> {
 }
 
 /// Parameter names that have defaults.
-pub fn default_argnames(def: &StmtFunctionDef) -> Vec<String> {
+pub(crate) fn default_argnames(def: &StmtFunctionDef) -> Vec<String> {
     let params = &def.parameters;
     params
         .args
@@ -656,7 +656,7 @@ pub fn default_argnames(def: &StmtFunctionDef) -> Vec<String> {
 }
 
 /// A fixture defined by `def`, if its decorators make it one.
-pub fn fixture_def<'a>(
+pub(crate) fn fixture_def<'a>(
     lookup: Lookup<'_, 'a>,
     def: &'a StmtFunctionDef,
     is_method: bool,
@@ -731,7 +731,7 @@ fn is_fixture_decorator(lookup: Lookup<'_, '_>, func: &Expr) -> bool {
 /// it can't see through, unpacking) are `opaque`. `guarded` holds where the
 /// body's statements that may not run start ([`crate::module`]'s
 /// `guarded_by_try`).
-pub fn fixture_of<'a>(
+pub(crate) fn fixture_of<'a>(
     lookup: Lookup<'_, 'a>,
     ns: &Namespace<'a>,
     name: &str,
@@ -960,7 +960,7 @@ fn makes_own_instance<'a>(lookup: Lookup<'_, 'a>, func: &'a Expr, depth: u8) -> 
 /// Hooks pytest calls for the files below their conftest only, that decide
 /// which tests exist or what they are called: a file in their scope can
 /// only be known by importing it.
-pub const REFINING_HOOKS: [&str; 4] = [
+pub(crate) const REFINING_HOOKS: [&str; 4] = [
     "pytest_pycollect_makeitem",
     "pytest_pycollect_makemodule",
     "pytest_ignore_collect",
@@ -1012,7 +1012,7 @@ fn makes_items(source: &str, ns: &Namespace<'_>, hook: &Bound<'_>) -> bool {
 /// conftest is: `pytest_collection` replaces collection,
 /// `pytest_make_parametrize_id` makes ids, `pytest_collection_modifyitems`
 /// may add marks, deselect or (when its module makes items) add tests.
-pub const GLOBAL_HOOKS: [&str; 3] = [
+pub(crate) const GLOBAL_HOOKS: [&str; 3] = [
     "pytest_collection",
     "pytest_make_parametrize_id",
     "pytest_collection_modifyitems",
@@ -1020,15 +1020,16 @@ pub const GLOBAL_HOOKS: [&str; 3] = [
 
 /// Hooks that may add marks to collected tests: ids stay, tags become
 /// uncertain. `pytest_itemcollected` is called below its conftest only.
-pub const MARKING_HOOKS: [&str; 2] = ["pytest_collection_modifyitems", "pytest_itemcollected"];
+pub(crate) const MARKING_HOOKS: [&str; 2] =
+    ["pytest_collection_modifyitems", "pytest_itemcollected"];
 
 impl Summary {
-    pub fn build(dir: &Path, source: &str, module: &ModModule) -> Self {
+    pub(crate) fn build(dir: &Path, source: &str, module: &ModModule) -> Self {
         Self::of_namespace(dir, source, module, &Namespace::build(&module.body))
     }
 
     /// [`Summary::build`] with the module's namespace already built.
-    pub fn of_namespace<'a>(
+    pub(crate) fn of_namespace<'a>(
         dir: &Path,
         source: &str,
         module: &'a ModModule,
@@ -1039,7 +1040,7 @@ impl Summary {
 
     /// [`Summary::of_namespace`] for a test module, whose own fixtures the
     /// recognizer reads itself: only what it imports and loads.
-    pub fn of_test_module<'a>(
+    pub(crate) fn of_test_module<'a>(
         dir: &Path,
         source: &str,
         module: &'a ModModule,
@@ -1569,7 +1570,7 @@ impl<'a> Visitor<'a> for Registrations<'_, 'a> {
 
 /// Every name a module may request as a fixture: its functions'
 /// parameters, and its strings that are identifiers (`usefixtures("db")`).
-pub fn requested_names(module: &ModModule) -> HashSet<String> {
+pub(crate) fn requested_names(module: &ModModule) -> HashSet<String> {
     struct Names(HashSet<String>);
     impl<'a> Visitor<'a> for Names {
         fn visit_stmt(&mut self, stmt: &'a Stmt) {
@@ -1671,7 +1672,7 @@ fn ignore_list<'a>(ns: &Namespace<'a>, lookup: Lookup<'_, 'a>, name: &str) -> Op
 /// is concerned: the fixtures and hooks it defines, and those it imports
 /// from project files.
 #[derive(Debug, Clone, Default)]
-pub struct Exports {
+pub(crate) struct Exports {
     pub fixtures: Vec<FixtureDef>,
     pub hooks: BTreeSet<String>,
     /// Names imported from modules that are not project files: each may be
@@ -1689,7 +1690,7 @@ pub struct Exports {
 
 /// Summaries of support modules, shared across files.
 #[derive(Debug, Default)]
-pub struct Supports {
+pub(crate) struct Supports {
     /// By path and a hash of the source.
     parsed: Mutex<HashMap<(PathBuf, u64), Arc<Summary>>>,
     /// `conftest.py` in a directory, read from disk.
@@ -1726,7 +1727,7 @@ fn parse_file(path: &Path) -> Option<Summary> {
 
 impl Supports {
     /// The summary of a support file handed to the recognizer.
-    pub fn of(&self, file: &SourceFile<'_>) -> Arc<Summary> {
+    pub(crate) fn of(&self, file: &SourceFile<'_>) -> Arc<Summary> {
         let key = (file.abs.to_path_buf(), hash(file.source));
         if let Some(found) = self.parsed.lock().expect("lock").get(&key) {
             return Arc::clone(found);
@@ -1747,7 +1748,7 @@ impl Supports {
     }
 
     /// The summary of `dir/conftest.py`, read from disk, if there is one.
-    pub fn conftest_in(&self, dir: &Path) -> Option<Arc<Summary>> {
+    pub(crate) fn conftest_in(&self, dir: &Path) -> Option<Arc<Summary>> {
         if let Some(found) = self.dirs.lock().expect("lock").get(dir) {
             return found.clone();
         }
@@ -1784,7 +1785,7 @@ impl Supports {
     /// `summary` and the plugin modules it loads through `pytest_plugins`,
     /// transitively. Plugins that are not files of the project (installed
     /// packages) are not seen, like any installed plugin.
-    pub fn expand(&self, summary: &Arc<Summary>, bases: &[PathBuf]) -> Vec<Arc<Summary>> {
+    pub(crate) fn expand(&self, summary: &Arc<Summary>, bases: &[PathBuf]) -> Vec<Arc<Summary>> {
         if summary.plugins.is_empty() && summary.registered.is_empty() {
             return vec![Arc::clone(summary)];
         }
@@ -1836,13 +1837,13 @@ enum Attribute {
 impl Supports {
     /// The summary of a project module, by its dotted name as code in
     /// `dir` imports it (relative names allowed).
-    pub fn module(&self, name: &str, dir: &Path, bases: &[PathBuf]) -> Option<Arc<Summary>> {
+    pub(crate) fn module(&self, name: &str, dir: &Path, bases: &[PathBuf]) -> Option<Arc<Summary>> {
         let path = self.resolve(name, dir, bases)?;
         self.plugin_at(&path)
     }
 
     /// [`package_base`], cached.
-    pub fn package_base(&self, dir: &Path) -> PathBuf {
+    pub(crate) fn package_base(&self, dir: &Path) -> PathBuf {
         if let Some(found) = self.package_bases.lock().expect("lock").get(dir) {
             return found.clone();
         }
@@ -1856,7 +1857,7 @@ impl Supports {
 
     /// Forget the modules looked up so far, and what was read through
     /// them: the places they are looked up in have grown.
-    pub fn forget_resolutions(&self) {
+    pub(crate) fn forget_resolutions(&self) {
         self.resolved.lock().expect("lock").clear();
         self.expanded.lock().expect("lock").clear();
         self.exported.lock().expect("lock").clear();
@@ -1881,7 +1882,7 @@ impl Supports {
     /// What `summary`'s namespace holds, following its imports into project
     /// files. `summary` must be one these caches hold (a conftest's, or a
     /// plugin's): results are kept by its address.
-    pub fn exports(&self, summary: &Arc<Summary>, bases: &[PathBuf]) -> Arc<Exports> {
+    pub(crate) fn exports(&self, summary: &Arc<Summary>, bases: &[PathBuf]) -> Arc<Exports> {
         let key = Arc::as_ptr(summary) as usize;
         if let Some(found) = self.exported.lock().expect("lock").get(&key) {
             return Arc::clone(found);
@@ -1896,7 +1897,7 @@ impl Supports {
 
     /// [`Supports::exports`] for a summary of any lifetime, uncached, with
     /// only the names `wanted` keeps followed through `from … import`.
-    pub fn exports_of(
+    pub(crate) fn exports_of(
         &self,
         summary: &Summary,
         bases: &[PathBuf],
@@ -1984,7 +1985,7 @@ impl Supports {
     /// a unittest case: one of pytest's or unittest's own, or a project class
     /// deriving from one or from a class aye can't follow. Classes from
     /// packages that ship no test cases are not.
-    pub fn may_be_unittest(&self, path: &str, dir: &Path, bases: &[PathBuf]) -> bool {
+    pub(crate) fn may_be_unittest(&self, path: &str, dir: &Path, bases: &[PathBuf]) -> bool {
         let mut visiting = Vec::new();
         self.may_be_unittest_inner(path, dir, bases, &mut visiting)
     }
@@ -1994,7 +1995,7 @@ impl Supports {
     /// class whose bases may make it one, or a name aye can't tell is no
     /// class. Modules are not, nor what installed packages define unless
     /// it is a known unittest base or named like one (`…TestCase`).
-    pub fn project_unittest(&self, path: &str, dir: &Path, bases: &[PathBuf]) -> bool {
+    pub(crate) fn project_unittest(&self, path: &str, dir: &Path, bases: &[PathBuf]) -> bool {
         let mut visiting = Vec::new();
         self.defined_unittest(path, dir, bases, &mut visiting, true)
     }
@@ -2002,7 +2003,7 @@ impl Supports {
     /// Whether some leading part of the dotted `path` (as code in `dir`
     /// imports it), its last aside (the name imported from it), is a
     /// project module.
-    pub fn resolvable(&self, path: &str, dir: &Path, bases: &[PathBuf]) -> bool {
+    pub(crate) fn resolvable(&self, path: &str, dir: &Path, bases: &[PathBuf]) -> bool {
         let level = path.chars().take_while(|c| *c == '.').count();
         let parts: Vec<&str> = path[level..].split('.').collect();
         let dots = &path[..level];
@@ -2108,7 +2109,7 @@ impl Supports {
     /// class or function of a project file whose `__test__` may be true,
     /// directly or through the project classes it inherits from. Names
     /// aye can't read, and installed packages, don't count.
-    pub fn project_test(&self, path: &str, dir: &Path, bases: &[PathBuf]) -> bool {
+    pub(crate) fn project_test(&self, path: &str, dir: &Path, bases: &[PathBuf]) -> bool {
         let mut visiting = Vec::new();
         self.project_name(
             path,
@@ -2121,7 +2122,7 @@ impl Supports {
 
     /// Whether `path` (a dotted path as code in `dir` imports it) names a
     /// function of a project file that may make classes.
-    pub fn project_factory(&self, path: &str, dir: &Path, bases: &[PathBuf]) -> bool {
+    pub(crate) fn project_factory(&self, path: &str, dir: &Path, bases: &[PathBuf]) -> bool {
         let mut visiting = Vec::new();
         self.project_name(
             path,
@@ -2417,7 +2418,7 @@ fn resolve_from(
 
 /// The first part of each module a module imports absolutely, anywhere in
 /// it (`import a.b`, `from a.b import c`): `a`.
-pub fn absolute_imports(module: &ModModule) -> BTreeSet<String> {
+pub(crate) fn absolute_imports(module: &ModModule) -> BTreeSet<String> {
     struct Names(BTreeSet<String>);
     impl<'a> Visitor<'a> for Names {
         fn visit_stmt(&mut self, stmt: &'a Stmt) {
@@ -2448,13 +2449,13 @@ pub fn absolute_imports(module: &ModModule) -> BTreeSet<String> {
 
 /// The file Python imports for the absolute dotted `name` with `dirs` as
 /// `sys.path` (see [`resolve_module`]).
-pub fn find_module(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+pub(crate) fn find_module(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
     resolve_module(name, dirs)
 }
 
 /// Whether some leading part of the absolute dotted `path` is a module
 /// under one of `dirs` (looked up afresh, not cached).
-pub fn found_in(path: &str, dirs: &[PathBuf]) -> bool {
+pub(crate) fn found_in(path: &str, dirs: &[PathBuf]) -> bool {
     if dirs.is_empty() || path.starts_with('.') {
         return false;
     }
@@ -2464,7 +2465,7 @@ pub fn found_in(path: &str, dirs: &[PathBuf]) -> bool {
 
 /// The directory pytest's `prepend` import mode puts on `sys.path` for a
 /// module in `dir`: the first ancestor that is not a package.
-pub fn package_base(dir: &Path) -> PathBuf {
+pub(crate) fn package_base(dir: &Path) -> PathBuf {
     let mut base = dir;
     while base.join("__init__.py").is_file() {
         match base.parent() {

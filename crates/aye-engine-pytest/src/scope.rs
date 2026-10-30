@@ -57,7 +57,7 @@ use crate::ids::{Value, int_literal_decimal};
 
 /// A `__test__` setting: absent, a literal, or computed at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Flag {
+pub(crate) enum Flag {
     Unset,
     Set(bool),
     Computed,
@@ -65,7 +65,7 @@ pub enum Flag {
 
 /// What a name is bound to, as far as the source tells.
 #[derive(Debug, Clone)]
-pub enum Binding<'a> {
+pub(crate) enum Binding<'a> {
     Function(&'a StmtFunctionDef),
     Class(&'a StmtClassDef),
     /// `name = expr`.
@@ -79,7 +79,7 @@ pub enum Binding<'a> {
 
 /// One binding of a name, where it happens.
 #[derive(Debug, Clone)]
-pub struct Bound<'a> {
+pub(crate) struct Bound<'a> {
     pub binding: Binding<'a>,
     /// The statement that binds it.
     pub range: TextRange,
@@ -93,7 +93,7 @@ pub struct Bound<'a> {
 
 /// An operation on a name that may change its value without rebinding it.
 #[derive(Debug, Clone)]
-pub struct NameOp<'a> {
+pub(crate) struct NameOp<'a> {
     pub name: &'a str,
     pub kind: OpKind<'a>,
     pub at: TextSize,
@@ -101,7 +101,7 @@ pub struct NameOp<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub enum OpKind<'a> {
+pub(crate) enum OpKind<'a> {
     Assign(&'a Expr),
     Append(&'a Expr),
     Extend(&'a Expr),
@@ -114,7 +114,7 @@ pub enum OpKind<'a> {
 /// rebound keeps its first position; deleted and bound again, it moves to
 /// the end).
 #[derive(Debug, Default)]
-pub struct Namespace<'a> {
+pub(crate) struct Namespace<'a> {
     slots: Vec<Option<&'a str>>,
     index: FastMap<&'a str, usize>,
     history: FastMap<&'a str, Vec<Bound<'a>>>,
@@ -215,7 +215,7 @@ const MUTATORS: [&str; 14] = [
 
 impl<'a> Namespace<'a> {
     /// The namespace a body builds, with the escape analysis's verdicts.
-    pub fn build(body: &'a [Stmt]) -> Self {
+    pub(crate) fn build(body: &'a [Stmt]) -> Self {
         let mut ns = Self::without_escapes(body);
         let found = Escapes::analyze(&ns, body);
         ns.apply(found);
@@ -256,7 +256,7 @@ impl<'a> Namespace<'a> {
     }
 
     /// Names in namespace order with their final binding.
-    pub fn iter(&self) -> impl Iterator<Item = (&'a str, &Bound<'a>)> + '_ {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&'a str, &Bound<'a>)> + '_ {
         self.slots.iter().flatten().filter_map(|name| {
             let bound = self.history.get(name)?.last()?;
             Some((*name, bound))
@@ -264,19 +264,19 @@ impl<'a> Namespace<'a> {
     }
 
     /// The final binding of `name`.
-    pub fn get(&self, name: &str) -> Option<&Bound<'a>> {
+    pub(crate) fn get(&self, name: &str) -> Option<&Bound<'a>> {
         self.index.get(name)?;
         self.history.get(name)?.last()
     }
 
     /// Every binding of `name`, in source order (including ones a `del`
     /// removed).
-    pub fn bindings(&self, name: &str) -> &[Bound<'a>] {
+    pub(crate) fn bindings(&self, name: &str) -> &[Bound<'a>] {
         self.history.get(name).map_or(&[], Vec::as_slice)
     }
 
     /// `name.__test__ = …` in this namespace.
-    pub fn test_attr(&self, name: &str) -> Flag {
+    pub(crate) fn test_attr(&self, name: &str) -> Flag {
         match self.test_attrs.get(name) {
             None => Flag::Unset,
             Some(Some(value)) => Flag::Set(*value),
@@ -285,49 +285,49 @@ impl<'a> Namespace<'a> {
     }
 
     /// Modules whose attributes code that runs may change (dotted paths).
-    pub fn patched_modules(&self) -> impl Iterator<Item = &String> + '_ {
+    pub(crate) fn patched_modules(&self) -> impl Iterator<Item = &String> + '_ {
         self.escapes.patched.iter()
     }
 
     /// Modules that code that runs imports or looks up by a literal name.
-    pub fn imported_modules(&self) -> &[String] {
+    pub(crate) fn imported_modules(&self) -> &[String] {
         &self.escapes.modules
     }
 
     /// Whether code aye can't follow may get hold of what `name` is bound
     /// to, and set or delete its attributes (see [`Escaped::handed`]).
-    pub fn handed(&self, name: &str) -> bool {
+    pub(crate) fn handed(&self, name: &str) -> bool {
         self.escapes.handed.contains(name)
     }
 
     /// [`Namespace::handed`] for an attribute of any class
     /// (`TestK.test_a` handed on): a method of that name.
-    pub fn attribute_handed(&self, name: &str) -> bool {
+    pub(crate) fn attribute_handed(&self, name: &str) -> bool {
         self.escapes.handed_attributes.contains(name)
     }
 
     /// [`Namespace::handed`] for the class a class statement makes.
-    pub fn class_handed(&self, class: &StmtClassDef) -> bool {
+    pub(crate) fn class_handed(&self, class: &StmtClassDef) -> bool {
         let origin = class.body.first().map_or(class.start(), Ranged::start);
         self.escapes.handed_classes.contains(&origin)
     }
 
     /// Names functions that may run during the import bind or delete
     /// through `global`, each with the value assigned, if any.
-    pub fn global_writes(&self) -> &[(&'a str, Option<&'a Expr>)] {
+    pub(crate) fn global_writes(&self) -> &[(&'a str, Option<&'a Expr>)] {
         &self.escapes.global_writes
     }
 
     /// Take modules other code changes (support files) as changed here:
     /// values that depend on them are no longer evaluated.
-    pub fn assume_patched(&mut self, paths: impl IntoIterator<Item = String>, all: bool) {
+    pub(crate) fn assume_patched(&mut self, paths: impl IntoIterator<Item = String>, all: bool) {
         self.escapes.patched.extend(paths);
         self.escapes.patches_all |= all;
     }
 
     /// Take the module's names as changed by code elsewhere (see
     /// [`crate::module::reached`]).
-    pub fn assume_reached(&mut self) {
+    pub(crate) fn assume_reached(&mut self) {
         self.dynamic = true;
     }
 
@@ -352,7 +352,7 @@ impl<'a> Namespace<'a> {
     }
 
     /// Whether the name's value may change without a rebinding.
-    pub fn is_mutable(&self, name: &str) -> bool {
+    pub(crate) fn is_mutable(&self, name: &str) -> bool {
         self.changed(name)
             || self.escapes.changed.contains(name)
             || self.escapes.attributes.contains(name)
@@ -3360,7 +3360,7 @@ fn builtin_name(name: &str) -> Option<&'static str> {
 
 /// What an expression refers to.
 #[derive(Debug, Clone)]
-pub enum Resolved<'a> {
+pub(crate) enum Resolved<'a> {
     /// A dotted path through imports or builtins (`pytest.mark.slow`,
     /// `builtins.int`). Unbound names resolve to themselves.
     Path(String),
@@ -3373,7 +3373,7 @@ pub enum Resolved<'a> {
 /// class body being run, if any, then the module. (Class bodies do not
 /// nest for lookup.)
 #[derive(Clone, Copy)]
-pub struct Lookup<'s, 'a> {
+pub(crate) struct Lookup<'s, 'a> {
     pub module: &'s Namespace<'a>,
     pub class: Option<&'s Namespace<'a>>,
     pub source: &'a str,
@@ -3383,12 +3383,12 @@ pub struct Lookup<'s, 'a> {
 
 /// Why a value could not be known statically.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Unknown;
+pub(crate) struct Unknown;
 
 /// One element of a statically known sequence: an expression and where to
 /// evaluate it, or a value already known.
 #[derive(Clone)]
-pub enum Elem<'s, 'a> {
+pub(crate) enum Elem<'s, 'a> {
     Expr(&'a Expr, Lookup<'s, 'a>),
     Value(Value),
 }
@@ -3396,7 +3396,7 @@ pub enum Elem<'s, 'a> {
 const DEPTH: u8 = 8;
 
 impl<'s, 'a> Lookup<'s, 'a> {
-    pub fn at(self, at: TextSize) -> Self {
+    pub(crate) fn at(self, at: TextSize) -> Self {
         Self { at, ..self }
     }
 
@@ -3405,7 +3405,7 @@ impl<'s, 'a> Lookup<'s, 'a> {
     }
 
     /// The binding a name has at `self.at`, if it is bound in the file.
-    pub fn binding(&self, name: &str) -> Option<Bound<'a>> {
+    pub(crate) fn binding(&self, name: &str) -> Option<Bound<'a>> {
         for ns in self.scopes() {
             if let Some(bound) = ns.get(name) {
                 return Some(bound.clone());
@@ -3415,12 +3415,12 @@ impl<'s, 'a> Lookup<'s, 'a> {
     }
 
     /// Whether a name may come from a star import.
-    pub fn maybe_star(&self) -> bool {
+    pub(crate) fn maybe_star(&self) -> bool {
         self.scopes().any(|ns| !ns.star_imports.is_empty())
     }
 
     /// Resolve a name or attribute chain.
-    pub fn resolve(&self, expr: &'a Expr) -> Resolved<'a> {
+    pub(crate) fn resolve(&self, expr: &'a Expr) -> Resolved<'a> {
         self.resolve_depth(expr, 0)
     }
 
@@ -3465,7 +3465,7 @@ impl<'s, 'a> Lookup<'s, 'a> {
     }
 
     /// The dotted path of an expression, if it names something imported.
-    pub fn path(&self, expr: &'a Expr) -> Option<String> {
+    pub(crate) fn path(&self, expr: &'a Expr) -> Option<String> {
         match self.resolve(expr) {
             Resolved::Path(path) => Some(path),
             _ => None,
@@ -3496,7 +3496,7 @@ impl<'s, 'a> Lookup<'s, 'a> {
     /// bound unconditionally before this point, last by an assignment, not
     /// deleted since, and never changed (the module's escape analysis finds
     /// nothing that may change it, unless the value can't change).
-    pub fn constant(&self, name: &str) -> Option<(&'a Expr, Lookup<'s, 'a>)> {
+    pub(crate) fn constant(&self, name: &str) -> Option<(&'a Expr, Lookup<'s, 'a>)> {
         for (level, ns) in self.scopes().enumerate() {
             let in_class = level == 0 && self.class.is_some();
             let bindings = ns.bindings(name);
@@ -3623,7 +3623,7 @@ impl<'s, 'a> Lookup<'s, 'a> {
     }
 
     /// Evaluate an expression to a value pytest can make an id from.
-    pub fn value(&self, expr: &'a Expr) -> Result<Value, Unknown> {
+    pub(crate) fn value(&self, expr: &'a Expr) -> Result<Value, Unknown> {
         self.value_depth(expr, 0)
     }
 
@@ -4361,7 +4361,7 @@ impl<'s, 'a> Lookup<'s, 'a> {
     /// The elements of a statically known iterable: list, tuple and dict
     /// literals (keys), strings, `range(...)`, concatenations, and names
     /// bound to those.
-    pub fn sequence(&self, expr: &'a Expr) -> Result<Vec<Elem<'s, 'a>>, Unknown> {
+    pub(crate) fn sequence(&self, expr: &'a Expr) -> Result<Vec<Elem<'s, 'a>>, Unknown> {
         self.sequence_depth(expr, 0)
     }
 
@@ -4507,7 +4507,7 @@ impl<'s, 'a> Lookup<'s, 'a> {
     }
 
     /// A string value, statically.
-    pub fn string(&self, expr: &'a Expr) -> Option<String> {
+    pub(crate) fn string(&self, expr: &'a Expr) -> Option<String> {
         match self.value(expr) {
             Ok(Value::Str(s)) => Some(s),
             _ => None,
@@ -4515,7 +4515,7 @@ impl<'s, 'a> Lookup<'s, 'a> {
     }
 
     /// A boolean value, statically (`True`, `False`, or a constant).
-    pub fn boolean(&self, expr: &'a Expr) -> Option<bool> {
+    pub(crate) fn boolean(&self, expr: &'a Expr) -> Option<bool> {
         match self.value(expr) {
             Ok(Value::Bool(b)) => Some(b),
             _ => None,
@@ -4727,7 +4727,7 @@ impl DictKey {
         } else if f.is_infinite() || f.fract() != 0.0 {
             Some(Self::Float(f.to_bits()))
         } else if f.abs() < LIMIT {
-            #[allow(clippy::cast_possible_truncation, reason = "integral and below 2^126")]
+            #[expect(clippy::cast_possible_truncation, reason = "integral and below 2^126")]
             Some(Self::Int(f as i128))
         } else {
             Some(Self::BigFloat(f.to_bits()))
@@ -5122,7 +5122,7 @@ enum Member {
 
 /// Whether a function body makes it a generator (a `yield` outside nested
 /// functions, lambdas and classes).
-pub fn is_generator(body: &[Stmt]) -> bool {
+pub(crate) fn is_generator(body: &[Stmt]) -> bool {
     use ast::visitor::{Visitor, walk_expr, walk_stmt};
 
     struct Finder(bool);
@@ -5153,7 +5153,7 @@ pub fn is_generator(body: &[Stmt]) -> bool {
 
 /// Whether two bindings sit in different branches of one `if`, `try` or
 /// `match`, so at most one of them runs.
-pub fn exclusive(a: &Bound<'_>, b: &Bound<'_>) -> bool {
+pub(crate) fn exclusive(a: &Bound<'_>, b: &Bound<'_>) -> bool {
     a.branches
         .iter()
         .zip(&b.branches)
@@ -5164,7 +5164,7 @@ pub fn exclusive(a: &Bound<'_>, b: &Bound<'_>) -> bool {
 /// A `pytest.skip` or `pytest.importorskip` call that runs while the module
 /// is imported, in its body or a class body: pytest then skips the whole
 /// module, depending on the environment.
-pub fn import_time_skip<'a>(body: &'a [Stmt], lookup: Lookup<'_, 'a>) -> Option<String> {
+pub(crate) fn import_time_skip<'a>(body: &'a [Stmt], lookup: Lookup<'_, 'a>) -> Option<String> {
     use aye_engine::ast::visitor::{Visitor, walk_expr, walk_stmt};
 
     struct Finder<'s, 'a> {
@@ -5208,7 +5208,7 @@ pub fn import_time_skip<'a>(body: &'a [Stmt], lookup: Lookup<'_, 'a>) -> Option<
 /// division of literals by zero, a `raise` statement (pytest skips the
 /// module for `unittest.SkipTest`), or an `assert` of a false literal.
 /// pytest reports the error as the module's collection error.
-pub fn import_time_raise<'a>(body: &'a [Stmt], lookup: Lookup<'_, 'a>) -> Option<String> {
+pub(crate) fn import_time_raise<'a>(body: &'a [Stmt], lookup: Lookup<'_, 'a>) -> Option<String> {
     use aye_engine::ast::visitor::{Visitor, walk_expr, walk_stmt};
 
     /// Arguments aye reads without names: literals, and displays of them.

@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{self, IsTerminal as _};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -14,6 +14,7 @@ use aye_collect::{Collector, Environment, Options, Prepared};
 use aye_config::AyeConfig;
 use aye_engine::{Adapter, Policy, Project, Refiner};
 use aye_events::{Case, Counts, Diagnostic, Event, ExitCode, Record, SCHEMA_VERSION, Severity};
+use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter};
 use aye_render::{
     ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
@@ -21,32 +22,27 @@ use aye_render::{
 };
 use aye_runner::{Echo, Plan, Runner, RunnerOptions, Stamper, new_run_id};
 use aye_select::Selection;
+use aye_static::EnvVars;
 
 use crate::args::{Args, Color, Maxfail, Output, Passed, Workers, passed, passed_maxfail};
 use crate::busy::Busy;
 use crate::registry;
 
-/// Where aye keeps history and caches, under the project root.
-pub const STATE_DIR: &str = ".aye";
-
-/// What pytest-xdist's `testrun_uid` fixture reads in a worker.
-const TESTRUN_UID: &str = "PYTEST_XDIST_TESTRUNUID";
-
 /// Diagnostic codes the binary acts on. Collection's are in
 /// `aye_collect::codes`; the rest come from adapters and the runner.
 mod codes {
     /// An explicit path doesn't exist, or an id matches no test.
-    pub const NOT_FOUND: &str = "not-found";
+    pub(super) const NOT_FOUND: &str = "not-found";
     /// No adapter collects an explicit file (pytest's "found no collectors").
-    pub const UNCLAIMED: &str = "unclaimed";
+    pub(super) const UNCLAIMED: &str = "unclaimed";
     /// The framework rejected its arguments.
-    pub const USAGE_ERROR: &str = "usage-error";
+    pub(super) const USAGE_ERROR: &str = "usage-error";
     /// The framework's own internal error (pytest's `INTERNALERROR`).
-    pub const INTERNAL_ERROR: &str = "internal-error";
+    pub(super) const INTERNAL_ERROR: &str = "internal-error";
     /// The framework failed to collect a file.
-    pub const COLLECTION_ERROR: &str = "collection-error";
+    pub(super) const COLLECTION_ERROR: &str = "collection-error";
     /// The framework skipped a module or a directory while collecting it.
-    pub const SKIPPED: &str = "skipped";
+    pub(super) const SKIPPED: &str = "skipped";
 }
 
 /// Keys of an adapter's context the binary reads or adds.
@@ -55,16 +51,16 @@ mod keys {
     /// (`path::test[x]`), relative to the root, so the framework reports
     /// one it can't find instead of running its test's other parameters in
     /// its place.
-    pub const REQUESTED_IDS: &str = "requested_ids";
+    pub(super) const REQUESTED_IDS: &str = "requested_ids";
     /// Added by the binary: aye's own options that shape the run (`-c
     /// FILE`), as given, which a test's rerun command repeats before its id
     /// (`aye -c FILE <id>`), so that it reruns from where aye ran as aye ran
     /// it.
-    pub const RERUN_ARGS: &str = "rerun_args";
+    pub(super) const RERUN_ARGS: &str = "rerun_args";
     /// Set by an adapter whose framework drops the tests whose ids start
     /// with one of these (pytest's `--deselect`, relative to the root):
     /// selection drops that adapter's cases and counts them as deselected.
-    pub const DESELECT: &str = "deselect";
+    pub(super) const DESELECT: &str = "deselect";
     /// Added by the binary when a positional argument isn't a path (a
     /// dotted name, a test key): the paths the user's run starts from,
     /// absolute, in the order of the arguments, each once: each path
@@ -74,13 +70,13 @@ mod keys {
     /// framework's default), so an adapter whose framework starts from the
     /// paths it is given (pytest's start-up conftests and initial paths)
     /// starts from these instead.
-    pub const SELECTED_PATHS: &str = "selected_paths";
+    pub(super) const SELECTED_PATHS: &str = "selected_paths";
 }
 
 /// A run's inputs, resolved: everything wrong with the command line or the
 /// configuration fails here, before anything is reported. Selectors that
 /// match nothing are found after collection, and reported in the stream.
-pub struct Session {
+pub(crate) struct Session {
     args: Args,
     cwd: PathBuf,
     root: PathBuf,
@@ -121,7 +117,7 @@ impl Positional {
 }
 
 impl Session {
-    pub fn new(args: Args) -> Result<Self> {
+    pub(crate) fn new(args: Args) -> Result<Self> {
         let cwd = std::env::current_dir().context("cannot read the current directory")?;
         // `.` and `..` are resolved lexically, as pytest's `os.path.abspath`
         // does, before the root is searched for.
@@ -130,9 +126,9 @@ impl Session {
             .iter()
             .map(|test| path_part(test))
             .filter(|path| is_path_like(&cwd, path))
-            .map(|path| normalize(&cwd.join(path)))
+            .map(|path| normalize_absolute(&cwd.join(path)))
             .collect();
-        let root = normalize(&aye_config::project_root(&cwd, &given));
+        let root = normalize_absolute(&aye_config::project_root(&cwd, &given));
         let positionals: Vec<Positional> = args
             .tests
             .iter()
@@ -146,7 +142,7 @@ impl Session {
                 continue;
             };
             let as_given = path_part(test);
-            if normalize(&cwd.join(as_given)) == *path {
+            if normalize_absolute(&cwd.join(as_given)) == *path {
                 paths.push(PathBuf::from(as_given));
             } else {
                 paths.push(path.clone());
@@ -243,41 +239,44 @@ impl Session {
         })
     }
 
-    pub fn root(&self) -> &Path {
+    pub(crate) fn root(&self) -> &Path {
         &self.root
     }
 
-    pub fn python(&self) -> &Path {
+    pub(crate) fn python(&self) -> &Path {
         &self.python
     }
 
-    pub const fn python_source(&self) -> aye_runner::PythonSource {
+    pub(crate) const fn python_source(&self) -> aye_runner::PythonSource {
         self.python_source
     }
 
-    pub const fn workers(&self) -> u32 {
+    pub(crate) const fn workers(&self) -> u32 {
         self.workers
     }
 
-    pub const fn config(&self) -> &AyeConfig {
+    pub(crate) const fn config(&self) -> &AyeConfig {
         &self.config
     }
 
-    pub fn prepared(&self) -> &[Prepared] {
+    pub(crate) fn prepared(&self) -> &[Prepared] {
         &self.prepared
     }
 
     /// The names of the adapters the run uses, in priority order, and why
     /// those.
-    pub fn adapters(&self) -> (Vec<&'static str>, registry::Why) {
+    pub(crate) fn adapters(&self) -> (Vec<&'static str>, registry::Why) {
         (
             self.adapters.iter().map(|a| a.name()).collect(),
             self.adapters_why,
         )
     }
 
-    #[allow(clippy::too_many_lines)] // one run, top to bottom
-    pub fn run(mut self) -> ExitCode {
+    #[expect(
+        clippy::print_stderr,
+        reason = "aye's own messages, outside the event stream"
+    )]
+    pub(crate) fn run(mut self) -> ExitCode {
         let started = Instant::now();
         // A report that can't be written fails before anything runs, not
         // after the whole suite.
@@ -291,8 +290,8 @@ impl Session {
             );
             return ExitCode::UsageError;
         }
-        let state = self.root.join(STATE_DIR);
-        let mut history = History::load(&state);
+        let state = StateDir::for_root(&self.root);
+        let mut history = History::load(state.path());
         let durations = history.durations();
         let last_failed = history.last_failed();
         let mut selection = std::mem::take(&mut self.selection);
@@ -309,7 +308,10 @@ impl Session {
             executors: self.adapters.iter().map(|a| a.executor()).collect(),
             // pytest-xdist's `testrun_uid`, which its workers share: one per
             // run, the run's id.
-            env: vec![(TESTRUN_UID.into(), run_id.clone().into())],
+            env: vec![(
+                EnvVars::PYTEST_XDIST_TESTRUNUID.into(),
+                run_id.clone().into(),
+            )],
             // `-s` output stays off a machine-readable stdout.
             echo: match self.output() {
                 Output::Text => Echo::Stdout,
@@ -331,7 +333,7 @@ impl Session {
         // The run's number in the store (`r81`), which `run_started` says,
         // when the run will be stored.
         let mut writer = RunWriter::new(
-            state.join(aye_history::runs::DIR),
+            state.bucket(StateBucket::Runs),
             self.config.settings.keep_runs(),
         );
         let number = if self.args.collect_only {
@@ -343,7 +345,7 @@ impl Session {
             reporters: self.reporters(junit, &file_failed),
             history: Some(Remember {
                 history: &mut history,
-                dir: state.clone(),
+                dir: state.path().to_path_buf(),
             }),
             store: Keep::new(writer),
             stamper: Stamper::with_run(run_id),
@@ -372,14 +374,14 @@ impl Session {
         };
         // The refinement cache is keyed on what refining depends on: the
         // interpreter and its packages, the arguments after `--`, and the
-        // environment workers inherit (aye's own; `TESTRUN_UID` changes
-        // every run and refinement has no use for it).
+        // environment workers inherit (aye's own; `PYTEST_XDIST_TESTRUNUID`
+        // changes every run and refinement has no use for it).
         let collector = Collector::new(
             project,
             &self.prepared,
             Options {
                 strict: self.args.strict,
-                cache_dir: Some(state.join("cache")),
+                cache_dir: Some(state.bucket(StateBucket::Cache)),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
         )
@@ -707,7 +709,7 @@ impl Session {
 
     /// The output format, at its verbosity (`-v` and `-q`), and where the
     /// format came from, for `aye config`.
-    pub fn output_shown(&self) -> (String, &'static str) {
+    pub(crate) fn output_shown(&self) -> (String, &'static str) {
         let (format, origin) = output(&self.args, &self.config);
         let verbosity = self.args.verbosity();
         let flags = match verbosity {
@@ -737,7 +739,7 @@ impl Session {
                     },
                 )));
                 if aye_render::github_actions_enabled() {
-                    let workspace = std::env::var_os("GITHUB_WORKSPACE").map(PathBuf::from);
+                    let workspace = std::env::var_os(EnvVars::GITHUB_WORKSPACE).map(PathBuf::from);
                     let prefix = repository_prefix(&self.root, workspace.as_deref());
                     tee.push(Stdout::new(
                         GithubAnnotations::new(io::stdout()).with_path_prefix(prefix),
@@ -820,12 +822,12 @@ impl Here<'_> {
         let (path, rest) = id
             .split_once("::")
             .map_or((id, None), |(p, r)| (p, Some(r)));
-        let from_cwd = normalize(&self.cwd.join(path));
-        let from_root = normalize(&self.root.join(path));
+        let from_cwd = normalize_absolute(&self.cwd.join(path));
+        let from_root = normalize_absolute(&self.root.join(path));
         if from_cwd == from_root || !from_cwd.exists() {
             return None;
         }
-        let mut local = relative(&from_root, self.cwd);
+        let mut local = relative_below_root(&from_root, self.cwd);
         if let Some(rest) = rest {
             local.push_str("::");
             local.push_str(rest);
@@ -1027,7 +1029,7 @@ impl Reach {
         if positionals.iter().all(|p| p.path.is_some()) {
             return None;
         }
-        let at_root = |relative: &str| normalize(&root.join(relative));
+        let at_root = |relative: &str| normalize_absolute(&root.join(relative));
         let mut paths = Vec::new();
         let mut words = Vec::new();
         let mut selected: Vec<PathBuf> = Vec::new();
@@ -1071,7 +1073,7 @@ impl Reach {
     /// the run starts from (as `pytest <those paths>` loads it first), or
     /// some argument named nothing. Everything else is the run's.
     fn keeps(&self, root: &Path, diagnostic: &Diagnostic) -> bool {
-        let at = || normalize(&root.join(&diagnostic.path));
+        let at = || normalize_absolute(&root.join(&diagnostic.path));
         match (diagnostic.severity, diagnostic.code.as_str()) {
             (Severity::Info, codes::SKIPPED) => {
                 let at = at();
@@ -1227,6 +1229,10 @@ impl Stream<'_> {
     /// this run). Then every reporter gets every record: one that fails
     /// (stdout, a closed pipe) stops writing, and the others carry on.
     /// Then history folds it, and the run store keeps it.
+    #[expect(
+        clippy::print_stderr,
+        reason = "aye's own messages, outside the event stream"
+    )]
     fn deliver_to(
         reporters: &mut Tee<'_>,
         history: &mut Option<Remember<'_>>,
@@ -1251,6 +1257,10 @@ impl Stream<'_> {
         store.record(record);
     }
 
+    #[expect(
+        clippy::print_stderr,
+        reason = "aye's own messages, outside the event stream"
+    )]
     fn finish(
         mut self,
         code: ExitCode,
@@ -1367,6 +1377,10 @@ impl<R: Reporter> Reporter for File<R> {
         self.inner.report(record)
     }
 
+    #[expect(
+        clippy::print_stderr,
+        reason = "aye's own messages, outside the event stream"
+    )]
     fn finish(&mut self) -> io::Result<()> {
         if let Err(err) = self.inner.finish() {
             eprintln!("aye: error: {err}");
@@ -1396,6 +1410,10 @@ impl Remember<'_> {
         }
     }
 
+    #[expect(
+        clippy::print_stderr,
+        reason = "aye's own messages, outside the event stream"
+    )]
     fn save(&self) {
         if self.history.changed()
             && let Err(err) = self.history.save(&self.dir)
@@ -1492,7 +1510,7 @@ fn session_files(
     for case in cases {
         let path = case.id.path();
         let reached = within.is_none_or(|(paths, root)| {
-            let file = normalize(&root.join(path));
+            let file = normalize_absolute(&root.join(path));
             paths.iter().any(|start| file.starts_with(start))
         });
         if reached && seen.insert((case.adapter.as_str(), path)) {
@@ -1573,7 +1591,7 @@ fn with_requested(mut context: serde_json::Value, requested: &[String]) -> serde
 /// See [`Session::junit`].
 fn junit_path(cwd: &Path, given: Option<&Path>, prepared: &[Prepared]) -> Option<PathBuf> {
     let path = match given {
-        Some(given) => expand_path(&given.to_string_lossy()),
+        Some(given) => aye_fs::expand_path(&given.to_string_lossy(), |name| std::env::var_os(name)),
         None => context_strings(prepared, "junitxml")
             .into_iter()
             .next()
@@ -1776,52 +1794,6 @@ fn pick(given: Option<&str>, framework: Passed) -> Pick {
     }
 }
 
-/// `os.path.expanduser(os.path.expandvars(path))`, as pytest reads a
-/// report's path: `$NAME` and `${NAME}` become the variable's value when it
-/// is set, then a leading `~` becomes the home directory (`~user` is left
-/// as it is).
-fn expand_path(path: &str) -> PathBuf {
-    let mut out = String::with_capacity(path.len());
-    let mut rest = path;
-    while let Some(at) = rest.find('$') {
-        out.push_str(&rest[..at]);
-        let after = &rest[at + 1..];
-        let word = |s: &str| {
-            s.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .unwrap_or(s.len())
-        };
-        // The name, and how long the reference is after the `$`.
-        let reference = match after.strip_prefix('{') {
-            Some(braced) => braced.find('}').map(|end| (&braced[..end], end + 2)),
-            None => Some(word(after))
-                .filter(|end| *end > 0)
-                .map(|end| (&after[..end], end)),
-        };
-        let Some((name, len)) = reference else {
-            out.push('$');
-            rest = after;
-            continue;
-        };
-        match std::env::var(name) {
-            Ok(value) if !name.is_empty() => out.push_str(&value),
-            _ => out.push_str(&rest[at..=at + len]),
-        }
-        rest = &after[len..];
-    }
-    out.push_str(rest);
-    let separators = ['/', std::path::MAIN_SEPARATOR];
-    if let Some(tail) = out.strip_prefix('~')
-        && (tail.is_empty() || tail.starts_with(separators))
-        && let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
-    {
-        let home = home.to_string_lossy();
-        let home = home.trim_end_matches(separators);
-        let expanded = format!("{home}{tail}");
-        return PathBuf::from(if expanded.is_empty() { "/" } else { &expanded });
-    }
-    PathBuf::from(out)
-}
-
 /// The output format, and where it came from: `--output`, else
 /// `[tool.aye] output`, else text. aye-config accepts only the values in
 /// `aye_config::OUTPUTS`, each of which parses.
@@ -1876,12 +1848,12 @@ pub(crate) fn resolve(cwd: &Path, root: &Path, arg: &str) -> Positional {
         .split_once("::")
         .map_or((arg, None), |(p, r)| (p, Some(r)));
     let from_root = || {
-        let at_root = normalize(&root.join(path));
+        let at_root = normalize_absolute(&root.join(path));
         (Path::new(path).is_relative() && at_root.starts_with(root) && at_root.exists())
             .then_some(at_root)
     };
     let absolute = if is_path_like(cwd, path) {
-        let from_cwd = normalize(&cwd.join(path));
+        let from_cwd = normalize_absolute(&cwd.join(path));
         if from_cwd.exists() {
             from_cwd
         } else {
@@ -1910,69 +1882,6 @@ pub(crate) fn resolve(cwd: &Path, root: &Path, arg: &str) -> Positional {
         path: Some(absolute),
         id: rest.is_some(),
     }
-}
-
-/// Remove `.` and `..` without touching the filesystem.
-pub(crate) fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
-}
-
-/// `path` relative to the root as collection's ids spell it: also when it
-/// is spelled through another name of a directory in the project (macOS's
-/// `/tmp` is `/private/tmp`), by [`aye_config::relative_to`]; else
-/// [`relative`], climbing out with `..`.
-fn root_relative(path: &Path, root: &Path) -> String {
-    aye_config::relative_to(root, path).map_or_else(|| relative(path, root), |rest| slashed(&rest))
-}
-
-/// A relative path's components joined with `/`.
-fn slashed(path: &Path) -> String {
-    path.components()
-        .filter(|c| !matches!(c, Component::RootDir | Component::Prefix(_)))
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-/// `path` relative to `base` with `/` separators, climbing out with `..`
-/// when it lies elsewhere; absolute when they share nothing. Both are
-/// absolute and normalized.
-fn relative(path: &Path, base: &Path) -> String {
-    if let Ok(rest) = path.strip_prefix(base) {
-        return slashed(rest);
-    }
-    let shared = path
-        .components()
-        .zip(base.components())
-        .take_while(|(a, b)| a == b)
-        .count();
-    let anchored = path
-        .components()
-        .take(shared)
-        .any(|c| matches!(c, Component::Normal(_)));
-    if !anchored {
-        return path.to_string_lossy().replace('\\', "/");
-    }
-    let path_parts: Vec<Component> = path.components().collect();
-    let up = base.components().count() - shared;
-    std::iter::repeat_n("..".to_string(), up)
-        .chain(
-            path_parts[shared..]
-                .iter()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned()),
-        )
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 /// Where the project root lies in the repository, for GitHub annotations:
@@ -2072,6 +1981,11 @@ const COLLECTING_GRACE: Duration = Duration::from_millis(1500);
 /// Ctrl-C (or SIGTERM, SIGHUP): before the run, stop collection (`stop` the
 /// collector watches), and exit anyway if that takes too long; during the
 /// run (`running`), stop it cleanly.
+#[expect(clippy::print_stderr, reason = "says why aye stopped")]
+#[expect(
+    clippy::exit,
+    reason = "a second signal, or a collection that doesn't stop in time, ends aye at once"
+)]
 fn install_interrupt(
     stop: aye_runner::StopHandle,
     collecting: Arc<AtomicBool>,

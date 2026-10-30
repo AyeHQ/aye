@@ -21,6 +21,7 @@ use aye_events::{
     BatchId, Case, Counts, Diagnostic, EnvironmentId, Event, Failure, LifetimeId, Outcome, Record,
     Severity, TestId, TestResult, WorkerId,
 };
+use aye_static::EnvVars;
 
 use crate::schedule::{self, Assigned, Queue};
 use crate::worker::{Echo, Incoming, Killer, Registry, Worker, WorkerSpec, is_reply, lock, spawn};
@@ -870,10 +871,16 @@ fn refined_by(worker: &Worker, stopped: &dyn Fn() -> bool) -> Result<Refined, Un
 /// `AYE_WORKER`, and with several lanes pytest-xdist's, so that per-worker
 /// resources are reused.
 fn lane_env(lane: WorkerId, lanes: u32) -> Vec<(OsString, OsString)> {
-    let mut env = vec![("AYE_WORKER".into(), lane.to_string().into())];
+    let mut env = vec![(EnvVars::AYE_WORKER.into(), lane.to_string().into())];
     if lanes > 1 {
-        env.push(("PYTEST_XDIST_WORKER".into(), format!("gw{lane}").into()));
-        env.push(("PYTEST_XDIST_WORKER_COUNT".into(), lanes.to_string().into()));
+        env.push((
+            EnvVars::PYTEST_XDIST_WORKER.into(),
+            format!("gw{lane}").into(),
+        ));
+        env.push((
+            EnvVars::PYTEST_XDIST_WORKER_COUNT.into(),
+            lanes.to_string().into(),
+        ));
     }
     env
 }
@@ -1318,6 +1325,10 @@ impl Shared<'_> {
     fn halt(&self) {
         self.killing.store(true, Ordering::SeqCst);
         self.queue.halt();
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "signals every busy worker; which goes first is not observable"
+        )]
         for busy in lock(&self.busy).values() {
             busy.killer.kill();
         }
@@ -1332,6 +1343,10 @@ impl Shared<'_> {
     fn wind_down(&self) {
         self.killing.store(true, Ordering::SeqCst);
         self.queue.halt();
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "signals every busy worker; which goes first is not observable"
+        )]
         for busy in lock(&self.busy).values_mut() {
             if busy.stopping == Stopping::No {
                 busy.stopping = Stopping::Interrupted;
@@ -1343,6 +1358,10 @@ impl Shared<'_> {
     /// Kill the workers [`Shared::wind_down`] interrupted that are still
     /// busy.
     fn kill_interrupted(&self) {
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "signals every busy worker; which goes first is not observable"
+        )]
         for busy in lock(&self.busy).values() {
             if busy.stopping == Stopping::Interrupted {
                 busy.killer.kill();

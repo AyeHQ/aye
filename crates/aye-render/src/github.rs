@@ -17,6 +17,8 @@ use aye_events::{
     Diagnostic, Event, Failure, LifetimeId, Outcome, Phase, Record, Severity, TestId, TestResult,
 };
 
+use aye_static::EnvVars;
+
 use crate::{Reporter, shared};
 
 /// Failure annotations written per run.
@@ -28,7 +30,7 @@ const WORKER_LINES: usize = 10;
 
 /// Whether this process runs as a GitHub Actions step.
 pub fn github_actions_enabled() -> bool {
-    is_github_actions(std::env::var_os("GITHUB_ACTIONS").as_deref())
+    is_github_actions(std::env::var_os(EnvVars::GITHUB_ACTIONS).as_deref())
 }
 
 fn is_github_actions(value: Option<&std::ffi::OsStr>) -> bool {

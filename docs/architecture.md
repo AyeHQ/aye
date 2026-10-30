@@ -119,21 +119,25 @@ argv ─▶ aye: args, Session
 
 ## Crates
 
-Runner crates never depend on an `aye-engine-*` crate. Only the binary links
-the adapters. Each crate's `lib.rs` states its responsibility, boundaries and
-decisions.
+The leaf crates (`aye-index`, `aye-static`, `aye-fs`) depend on no aye
+crate. Runner crates never depend on an `aye-engine-*` crate. Only the binary
+links the adapters. Each crate's `lib.rs` states its responsibility,
+boundaries and decisions.
 
 | Crate | Responsibility |
 |---|---|
+| `aye-index` | Index newtypes (`newtype_index!`) and the collections they index, `IndexVec` and `IndexSlice`. Depends on no aye crate. |
+| `aye-static` | `EnvVars`, every environment variable aye reads by name or sets, in Rust or in the Python it sends to workers, with what each does; `ProcessEnv`, the environment as aye read it, looked up as `os.environ` does. Depends on no aye crate. |
+| `aye-fs` | Lexical path algebra (`normpath` and `normalize_absolute`, both of aye's normalizers, named; `absolute`, `relative_to`, `common_ancestor`, the two relativizers, paths shown with `/`, `expand_path` over a lookup it is given) and the state directory: `StateDir` (`.aye`) and its buckets (`history.json`, `runs`, `cache`), `prepare_dir` with the `.gitignore` and `CACHEDIR.TAG` markers, `atomic_write`. Depends on no aye crate. |
 | `aye` | The binary: the CLI, the run (`session.rs`), `aye config`, `aye show` (`show.rs`), and the adapter registry (`registry.rs`: pytest, unittest and doctest, and which of them a project runs). |
 | `aye-events` | The wire types: events, the envelope, outcomes, failures, cases, exit codes, `SCHEMA_VERSION`. Depends on serde only. |
 | `aye-engine` | The contract between the runner and any adapter: the `Adapter`, `Recognizer` and `Refiner` traits, the worker protocol types, service names, `PROTOCOL_VERSION`, and aye's engine (`python/aye_engine.py`). |
-| `aye-config` | The project root, `[tool.aye]`, and generic TOML and INI loaders that remember each value's origin. |
+| `aye-config` | The project root, `[tool.aye]`, and generic TOML and INI loaders that remember each value's origin. Paths come from `aye-fs`. |
 | `aye-collect` | Discovery: the walk, parsing with Ruff's parser, recognizers, merging, refinement and its cache, diagnostics, strict mode. Knows no framework's rules. |
 | `aye-select` | Selection by path, id, dotted name, key, keyword expression, tag expression and last failed, with three-valued logic. |
 | `aye-runner` | Interpreter discovery, the spawn path, the transport, scheduling, `maxfail`, crash recovery, the log's stamping, and the worker (`python/aye_worker.py`). |
 | `aye-render` | Renderers: text, JSON lines (at each verbosity, up to the raw events), JUnit XML, GitHub annotations; test keys (`Keys`), what the summaries count beside the tests (`Tally`), and what `aye show` asks of them (`ShowMode`, `ShowContext`). |
-| `aye-history` | `.aye/history.json`: durations, outcomes (the last, and the recent ones, with when a bad streak began) and last failed, folded from the stream; and the run store, `.aye/runs` (`runs.rs`): each run's number (`r81`), log, gzip-compressed, its summary, `last`, retention. |
+| `aye-history` | `.aye/history.json`: durations, outcomes (the last, and the recent ones, with when a bad streak began) and last failed, folded from the stream; and the run store, `.aye/runs` (`runs.rs`): each run's number (`r81`), log, gzip-compressed, its summary, `last`, retention. Both are written through `aye-fs`. |
 | `aye-provision` | Design only, for the Python matrix (Step 5): environments from uv or paths you supply. Today interpreter discovery in `aye-runner` stands in for it. |
 | `aye-engine-pytest` | The pytest adapter: pytest's config discovery, the static recognizer (for claims and `--co --no-refine`), and, embedded, aye's own `pytest` module (`python/native/aye_pytest_shim.py`), the pytest front-end (`aye_pytest_frontend.py`) and its executor (`aye_pytest_native.py`), on aye's engine (`aye-engine`'s `aye_model.py`, `aye_native_engine.py`, `aye_rewrite.py`). |
 | `aye-engine-unittest` | The unittest adapter: `[tool.aye.unittest]`, discovery as `python -m unittest discover` does it, the static recognizer, and a native executor (`python/aye_engine_unittest.py`). |

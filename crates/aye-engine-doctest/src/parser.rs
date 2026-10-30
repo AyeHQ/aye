@@ -9,7 +9,7 @@
 
 /// The option names `doctest` knows (`OPTIONFLAGS_BY_NAME`), plus the three
 /// pytest registers before it parses anything.
-pub const KNOWN_OPTIONS: [&str; 16] = [
+pub(crate) const KNOWN_OPTIONS: [&str; 16] = [
     "DONT_ACCEPT_TRUE_FOR_1",
     "DONT_ACCEPT_BLANKLINE",
     "NORMALIZE_WHITESPACE",
@@ -30,13 +30,13 @@ pub const KNOWN_OPTIONS: [&str; 16] = [
 ];
 
 /// Whether `name` is an option flag doctest (or pytest) defines.
-pub fn known_option(name: &str) -> bool {
+pub(crate) fn known_option(name: &str) -> bool {
     KNOWN_OPTIONS.contains(&name)
 }
 
 /// What parsing found.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Parsed {
+pub(crate) struct Parsed {
     /// Examples (`>>>` sources that aren't blank or a comment).
     pub examples: usize,
     /// Why `DocTestParser.parse` raises `ValueError`, when it does.
@@ -47,13 +47,13 @@ pub struct Parsed {
 }
 
 /// `str.isspace()`, which is also what `\s` matches in a `str` pattern.
-pub fn is_space(c: char) -> bool {
+pub(crate) fn is_space(c: char) -> bool {
     c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }
 
 /// `str.expandtabs()` with the default tab size: the column restarts after
 /// `\n` and `\r`.
-pub fn expand_tabs(text: &str) -> String {
+pub(crate) fn expand_tabs(text: &str) -> String {
     if !text.contains('\t') {
         return text.to_string();
     }
@@ -82,7 +82,7 @@ pub fn expand_tabs(text: &str) -> String {
 /// A docstring as Python 3.13 and later store it: the compiler expands its
 /// tabs, strips the first line's leading spaces and removes the common
 /// indentation of the other lines (`_PyCompile_CleanDoc`).
-pub fn clean_doc(doc: &str) -> String {
+pub(crate) fn clean_doc(doc: &str) -> String {
     let doc = expand_tabs(doc);
     let mut lines = doc.split('\n');
     let first = lines.next().unwrap_or_default();
@@ -111,7 +111,7 @@ pub fn clean_doc(doc: &str) -> String {
 
 /// Universal newlines: `\r\n` and `\r` become `\n`, as Python's tokenizer
 /// and text files read in text mode give them.
-pub fn universal_newlines(text: &str) -> String {
+pub(crate) fn universal_newlines(text: &str) -> String {
     if !text.contains('\r') {
         return text.to_string();
     }
@@ -216,7 +216,7 @@ fn directives(source: &str) -> Vec<String> {
 
 /// `DocTestParser.parse` (through `get_examples`), on `text` as doctest
 /// receives it.
-pub fn parse(text: &str) -> Parsed {
+pub(crate) fn parse(text: &str) -> Parsed {
     let text = expand_tabs(text);
     let mut lines: Vec<Vec<char>> = text.split('\n').map(|l| l.chars().collect()).collect();
     let strip = min_indent(&lines);
@@ -334,14 +334,14 @@ fn check_example(
 /// 3.12) and as the 3.13 compiler cleans it. Parsing either may raise, and
 /// they might disagree on whether there are examples.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Docstring {
+pub(crate) struct Docstring {
     pub examples: bool,
     /// Why the docstring's examples can't be known without Python.
     pub unsure: Option<String>,
 }
 
 /// [`Docstring`] of a docstring's value (universal newlines applied).
-pub fn docstring(value: &str) -> Docstring {
+pub(crate) fn docstring(value: &str) -> Docstring {
     if !value.contains(">>>") {
         return Docstring::default();
     }
@@ -367,7 +367,7 @@ pub fn docstring(value: &str) -> Docstring {
 }
 
 /// [`Docstring`] of a text file's content (universal newlines applied).
-pub fn text_file(text: &str) -> Docstring {
+pub(crate) fn text_file(text: &str) -> Docstring {
     if !text.contains(">>>") {
         return Docstring::default();
     }

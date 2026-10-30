@@ -48,6 +48,7 @@ use serde_json::{Value, json};
 /// a result (`record.py` clears the same).
 const CLEARED: [&str; 2] = ["PYTEST_ADDOPTS", "AYE_EXAMPLE_FAIL"];
 
+#[expect(clippy::print_stderr, reason = "a test says why it skips")]
 fn python() -> Option<PathBuf> {
     let candidate = std::env::var_os("AYE_TEST_PYTHON").map_or_else(
         || {
@@ -148,6 +149,7 @@ impl Project {
 
     /// Whether the project can be compared here: a packaged crate has no
     /// `examples/` beside it.
+    #[expect(clippy::print_stderr, reason = "a test says why it skips")]
     fn present(self) -> bool {
         if matches!(self, Self::Example(_)) && !examples_dir().is_dir() {
             eprintln!("skipping: no examples/ beside the crate");
