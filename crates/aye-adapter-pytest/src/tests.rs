@@ -2372,3 +2372,40 @@ fn parametrize_arguments_pytest_refuses_are_refined() {
         assert_eq!(refined.len(), refused.len());
     }
 }
+
+/// pytest collects a class's tests along its MRO, reversed (Left's `test_b`
+/// after Right's `test_c`), and bases that don't linearize leave the module
+/// to refinement.
+#[test]
+fn mros_are_linearized_as_python_does() {
+    let both = recognize(
+        "class Base:\n    def test_a(self):\n        pass\n\nclass Left(Base):\n    def test_b(self):\n        pass\n\nclass Right(Base):\n    def test_b(self):\n        pass\n\n    def test_c(self):\n        pass\n\nclass TestBoth(Left, Right):\n    pass\n",
+    );
+    assert!(both.refine.is_none());
+    let cases: Vec<(&str, Option<u32>)> = both
+        .cases
+        .iter()
+        .map(|case| {
+            assert_eq!(case.certainty, Certainty::Exact);
+            (case.id.as_str(), case.span.as_ref().and_then(|s| s.line))
+        })
+        .collect();
+    assert_eq!(
+        cases,
+        [
+            ("test_x.py::TestBoth::test_a", Some(2)),
+            ("test_x.py::TestBoth::test_c", Some(13)),
+            ("test_x.py::TestBoth::test_b", Some(6)),
+        ]
+    );
+    let bad = recognize(
+        "class X:\n    pass\n\nclass Y:\n    pass\n\nclass XY(X, Y):\n    pass\n\nclass YX(Y, X):\n    pass\n\nclass TestZ(XY, YX):\n    def test_z(self):\n        pass\n",
+    );
+    assert_eq!(
+        bad.refine.as_ref().map(ToString::to_string).as_deref(),
+        Some("TestZ has an inconsistent MRO")
+    );
+    assert_eq!(bad.cases.len(), 1);
+    assert_eq!(bad.cases[0].id.as_str(), "test_x.py::TestZ::test_z");
+    assert_eq!(bad.cases[0].certainty, Certainty::Partial);
+}

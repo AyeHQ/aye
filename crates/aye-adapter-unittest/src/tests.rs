@@ -978,3 +978,46 @@ fn the_context_is_pinned_byte_for_byte() {
         pinned[..]
     );
 }
+
+/// Inherited tests are looked up along the class's MRO, Left before Right,
+/// and bases that don't linearize leave the module to refinement.
+#[test]
+fn mros_are_linearized_as_python_does() {
+    let dir = scratch(&[
+        (
+            "test_mro.py",
+            "import unittest\n\nclass Base(unittest.TestCase):\n    def test_a(self):\n        pass\n\nclass Left(Base):\n    def test_b(self):\n        pass\n\nclass Right(Base):\n    def test_b(self):\n        pass\n\n    def test_c(self):\n        pass\n\nclass Both(Left, Right):\n    pass\n",
+        ),
+        (
+            "test_bad.py",
+            "import unittest\n\nclass X(unittest.TestCase):\n    pass\n\nclass Y(unittest.TestCase):\n    pass\n\nclass XY(X, Y):\n    pass\n\nclass YX(Y, X):\n    pass\n\nclass Z(XY, YX):\n    def test_z(self):\n        pass\n",
+        ),
+    ]);
+    let found = collect(dir.path(), &[]);
+    assert_eq!(found[0].0, "test_bad.py");
+    assert_eq!(
+        found[0]
+            .1
+            .refine
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("Z has an inconsistent MRO; Python refuses to make it")
+    );
+    let both: Vec<(&str, Option<u32>)> = found[1]
+        .1
+        .cases
+        .iter()
+        .filter(|case| case.id.as_str().starts_with("test_mro.py::Both::"))
+        .map(|case| (case.id.as_str(), case.span.as_ref().and_then(|s| s.line)))
+        .collect();
+    assert_eq!(
+        both,
+        [
+            ("test_mro.py::Both::test_a", Some(4)),
+            ("test_mro.py::Both::test_b", Some(8)),
+            ("test_mro.py::Both::test_c", Some(15)),
+        ]
+    );
+    assert_eq!(exact(&found).len(), 9);
+}
