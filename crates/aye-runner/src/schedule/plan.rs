@@ -623,6 +623,17 @@ mod tests {
     }
 
     #[test]
+    fn a_free_cases_file_is_kept_apart_from_an_affinity_key_that_reads_alike() {
+        // `c.py::t`'s lifetime is keyed `b.py`, as a file's lifetime is.
+        let mut keyed = free("c.py::t");
+        keyed.affinity = vec!["b.py".into()];
+        let cases = [keyed, free("b.py::t")];
+        let batches = plan(&cases, &HashMap::new(), &HashSet::new(), 2, &none());
+        let got: Vec<Vec<&str>> = batches.iter().map(ids).collect();
+        assert_eq!(got, [vec!["c.py::t"], vec!["b.py::t"]]);
+    }
+
+    #[test]
     fn nothing_to_run_is_no_batches() {
         assert_eq!(
             plan(&[], &HashMap::new(), &HashSet::new(), 4, &none()).len(),
