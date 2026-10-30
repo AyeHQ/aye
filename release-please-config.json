@@ -33,17 +33,17 @@
         {
           "type": "toml",
           "path": "Cargo.lock",
-          "jsonpath": "$.package[?(@.name == 'aye-engine-doctest')].version"
+          "jsonpath": "$.package[?(@.name == 'aye-adapter-doctest')].version"
         },
         {
           "type": "toml",
           "path": "Cargo.lock",
-          "jsonpath": "$.package[?(@.name == 'aye-engine-pytest')].version"
+          "jsonpath": "$.package[?(@.name == 'aye-adapter-pytest')].version"
         },
         {
           "type": "toml",
           "path": "Cargo.lock",
-          "jsonpath": "$.package[?(@.name == 'aye-engine-unittest')].version"
+          "jsonpath": "$.package[?(@.name == 'aye-adapter-unittest')].version"
         },
         {
           "type": "toml",
@@ -89,6 +89,26 @@
           "type": "toml",
           "path": "Cargo.lock",
           "jsonpath": "$.package[?(@.name == 'aye-fs')].version"
+        },
+        {
+          "type": "toml",
+          "path": "Cargo.lock",
+          "jsonpath": "$.package[?(@.name == 'aye-protocol')].version"
+        },
+        {
+          "type": "toml",
+          "path": "Cargo.lock",
+          "jsonpath": "$.package[?(@.name == 'aye-adapter')].version"
+        },
+        {
+          "type": "toml",
+          "path": "Cargo.lock",
+          "jsonpath": "$.package[?(@.name == 'aye-stream')].version"
+        },
+        {
+          "type": "toml",
+          "path": "Cargo.lock",
+          "jsonpath": "$.package[?(@.name == 'aye-test')].version"
         }
       ]
     }

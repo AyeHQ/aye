@@ -22,12 +22,13 @@
 //! module but the framework or the pure standard library, or any value
 //! naming a module of the project or an installed one, turns the cache off.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use aye_engine::ast::visitor::{self, Visitor};
-use aye_engine::ast::{self, Expr, Stmt};
+use aye_adapter::ast::visitor::{self, Visitor};
+use aye_adapter::ast::{self, Expr, Stmt};
+use aye_provision::InstalledModules;
 
 /// Standard-library modules whose import can't reach outside the key: no
 /// filesystem walks, processes, network, clock or randomness of their own.
@@ -253,8 +254,8 @@ pub(crate) struct Scope<'a> {
     /// files.
     pub seen: &'a Mutex<HashMap<PathBuf, bool>>,
     /// The top-level modules installed outside the standard library
-    /// ([`crate::Environment`]'s `installed_modules`).
-    pub installed: &'a HashSet<String>,
+    /// (the environment's [`InstalledModules`]).
+    pub installed: &'a InstalledModules,
 }
 
 impl Scope<'_> {

@@ -9,52 +9,51 @@
 //! finishes, so repeats can be counted, and capped: GitHub shows only the
 //! first few of a step anyway.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::{self, Write};
 
 use aye_events::{
     Diagnostic, Event, Failure, LifetimeId, Outcome, Phase, Record, Severity, TestId, TestResult,
+    WorkerIndex,
+};
+use aye_stream::{
+    Again, BlockedTests, Consumer, DefinitionLines, FirstBySignature, Repeats, SeenDiagnostics,
+    SubOutcomes,
 };
 
-use aye_static::EnvVars;
+use crate::{failure, words};
 
-use crate::{Reporter, shared};
+mod command;
+
+use command::command;
 
 /// Failure annotations written per run.
 const ANNOTATIONS: usize = 50;
+
 /// Explanation lines in an annotation.
 const DIFF_LINES: usize = 10;
+
 /// Lines of a worker's error in an annotation.
 const WORKER_LINES: usize = 10;
-
-/// Whether this process runs as a GitHub Actions step.
-pub fn github_actions_enabled() -> bool {
-    is_github_actions(std::env::var_os(EnvVars::GITHUB_ACTIONS).as_deref())
-}
-
-fn is_github_actions(value: Option<&std::ffi::OsStr>) -> bool {
-    value.is_some_and(|value| value == "true")
-}
 
 pub struct GithubAnnotations<W: Write> {
     out: W,
     prefix: String,
     /// The 1-based line each collected test is defined on.
-    lines: HashMap<String, u32>,
+    lines: DefinitionLines,
     annotations: Vec<Annotation>,
     /// Index of the annotation for each failure signature.
-    signatures: HashMap<String, usize>,
-    /// Index of the annotation for each failed lifetime.
-    lifetimes: HashMap<LifetimeId, usize>,
-    /// Per lifetime: the first test it kept from running, and how many.
-    blocked: BTreeMap<LifetimeId, (TestId, u32)>,
-    /// The failures of each running test's bad sub-outcomes.
-    subs: HashMap<TestId, Vec<Failure>>,
+    signatures: FirstBySignature<usize>,
+    /// The tests each lifetime kept from running (the first names where an
+    /// annotation goes, and each is counted), and the lifetimes annotated,
+    /// each once.
+    blocked: BlockedTests<TestId>,
+    /// Each running test's bad sub-outcomes.
+    subs: SubOutcomes,
     written: bool,
     /// Error diagnostics annotated, so that one every batch repeats is
     /// annotated once.
-    errors: HashSet<(String, String, String)>,
+    errors: SeenDiagnostics,
 }
 
 struct Annotation {
@@ -73,14 +72,13 @@ impl<W: Write> GithubAnnotations<W> {
         Self {
             out,
             prefix: String::new(),
-            lines: HashMap::new(),
+            lines: DefinitionLines::new(),
             annotations: Vec::new(),
-            signatures: HashMap::new(),
-            lifetimes: HashMap::new(),
-            blocked: BTreeMap::new(),
-            subs: HashMap::new(),
+            signatures: FirstBySignature::new(),
+            blocked: BlockedTests::new(),
+            subs: SubOutcomes::new(),
             written: false,
-            errors: HashSet::new(),
+            errors: SeenDiagnostics::new(),
         }
     }
 
@@ -110,61 +108,49 @@ impl<W: Write> GithubAnnotations<W> {
     /// project frame, else the test's definition.
     fn locate(&self, failure: Option<&Failure>, id: &TestId) -> (Option<String>, Option<u32>) {
         if let Some((path, line)) = failure
-            .and_then(shared::origin)
-            .filter(|(path, _)| shared::is_project_path(path))
+            .and_then(failure::origin)
+            .filter(|(path, _)| path.is_project())
         {
-            return (Some(path.to_owned()), Some(line));
+            return (Some(path.as_str().to_owned()), Some(line));
         }
-        let line = self
-            .lines
-            .get(id.as_str())
-            .or_else(|| self.lines.get(id.without_params()))
-            .copied();
-        (Some(id.path().to_owned()), line)
+        (Some(id.path().as_str().to_owned()), self.lines.line(id))
     }
 
     fn test(&mut self, result: &TestResult) {
-        let subs = self.subs.remove(&result.id);
+        let subs = self.subs.take(&result.id);
         if !result.outcome.is_bad() {
             return;
         }
         if let Some(lifetime) = &result.cause {
-            self.blocked
-                .entry(lifetime.clone())
-                .or_insert_with(|| (result.id.clone(), 0))
-                .1 += 1;
+            self.blocked.hold(lifetime, result.id.clone());
             return;
         }
         // What its bad sub-outcomes were annotated with isn't annotated
         // again: the unittest and doctest adapters fail the test with
         // their failures.
-        let failure = match &subs {
-            Some(subs) => match result
-                .failures
-                .iter()
-                .find(|failure| !shared::repeats_subs(failure, subs))
-            {
-                Some(own) => Some(own),
-                None => return,
-            },
-            None => result.failure(),
-        };
-        self.annotate(result.id.0.clone(), &result.id, failure, result.outcome);
+        let failure = aye_stream::own_failures(result, &subs, Repeats::SameOrBare).next();
+        if failure.is_none() && !subs.is_empty() {
+            return;
+        }
+        self.annotate(
+            result.id.as_str().to_owned(),
+            &result.id,
+            failure,
+            result.outcome,
+        );
     }
 
-    /// A bad sub-outcome (a failed subtest or doctest example), annotated
-    /// where it failed and named after it.
+    /// A bad sub-outcome (a failed subtest or doctest example), `record`,
+    /// annotated where it failed and named after it.
     fn sub_outcome(
         &mut self,
+        record: &Record,
         id: &TestId,
         name: &str,
         outcome: Outcome,
         failure: Option<&Failure>,
     ) {
-        let subs = self.subs.entry(id.clone()).or_default();
-        if let Some(failure) = failure {
-            subs.push(failure.clone());
-        }
+        self.subs.hold(record);
         self.annotate(format!("{id} › {name}"), id, failure, outcome);
     }
 
@@ -177,19 +163,16 @@ impl<W: Write> GithubAnnotations<W> {
         failure: Option<&Failure>,
         outcome: Outcome,
     ) {
-        let signature = failure
-            .map(|failure| failure.signature.as_str())
-            .filter(|signature| !signature.is_empty());
-        if let Some(&at) = signature.and_then(|signature| self.signatures.get(signature)) {
+        let signature = failure.and_then(|failure| failure.signature.as_ref());
+        let next = self.annotations.len();
+        if let Some(&at) =
+            signature.and_then(|signature| self.signatures.first_or_keep(signature, || next))
+        {
             self.annotations[at].repeats += 1;
             return;
         }
         let (file, line) = self.locate(failure, id);
         let message = failure.map_or_else(|| outcome.as_str().to_owned(), message);
-        if let Some(signature) = signature {
-            self.signatures
-                .insert(signature.to_owned(), self.annotations.len());
-        }
         self.annotations.push(Annotation {
             title,
             file,
@@ -201,23 +184,21 @@ impl<W: Write> GithubAnnotations<W> {
     }
 
     fn lifetime(&mut self, lifetime: &LifetimeId, failure: &Failure) {
-        if self.lifetimes.contains_key(lifetime) {
+        if !self.blocked.failed(lifetime, failure, Again::Never) {
             return;
         }
-        let (file, line) = match self.blocked.get(lifetime) {
-            Some((first, _)) => self.locate(Some(failure), first),
-            None => shared::origin(failure)
-                .filter(|(path, _)| shared::is_project_path(path))
+        let (file, line) = match self.blocked.held(lifetime).first() {
+            Some(first) => self.locate(Some(failure), first),
+            None => failure::origin(failure)
+                .filter(|(path, _)| path.is_project())
                 .map_or((None, None), |(path, line)| {
-                    (Some(path.to_owned()), Some(line))
+                    (Some(path.as_str().to_owned()), Some(line))
                 }),
         };
         let phase = match failure.phase {
             Some(Phase::Teardown) => "teardown",
             _ => "setup",
         };
-        self.lifetimes
-            .insert(lifetime.clone(), self.annotations.len());
         self.annotations.push(Annotation {
             title: format!("{phase} of {lifetime}"),
             file,
@@ -229,29 +210,28 @@ impl<W: Write> GithubAnnotations<W> {
     }
 
     fn diagnostic(&mut self, diagnostic: &Diagnostic) -> io::Result<()> {
-        if diagnostic.severity != Severity::Error
-            || !self.errors.insert((
-                diagnostic.code.clone(),
-                diagnostic.path.clone(),
-                diagnostic.message.clone(),
-            ))
-        {
+        if diagnostic.severity != Severity::Error || !self.errors.first(diagnostic) {
             return Ok(());
         }
         let line = diagnostic.span.as_ref().and_then(|span| span.line);
         // A diagnostic about no file in particular (pytest rejecting its
         // arguments) is annotated on none.
-        let file = (!diagnostic.path.is_empty()).then(|| self.file(&diagnostic.path));
-        let command = command(file.as_deref(), line, &diagnostic.code, &diagnostic.message);
+        let file = (!diagnostic.path.is_nowhere()).then(|| self.file(diagnostic.path.as_str()));
+        let command = command(
+            file.as_deref(),
+            line,
+            diagnostic.code.as_str(),
+            &diagnostic.message,
+        );
         writeln!(self.out, "{command}")
     }
 
-    fn worker_error(&mut self, worker: Option<u32>, error: &str) -> io::Result<()> {
+    fn worker_error(&mut self, worker: Option<WorkerIndex>, error: &str) -> io::Result<()> {
         let title = worker.map_or_else(
             || "a worker failed".to_owned(),
             |w| format!("worker {w} failed"),
         );
-        let tail = shared::last_lines(error, WORKER_LINES).lines.join("\n");
+        let tail = words::last_lines(error, WORKER_LINES).lines.join("\n");
         writeln!(self.out, "{}", command(None, None, &title, &tail))
     }
 
@@ -262,11 +242,13 @@ impl<W: Write> GithubAnnotations<W> {
         self.written = true;
         let mut annotations = std::mem::take(&mut self.annotations);
         // Tests blocked by a lifetime that never reported its failure.
-        for (lifetime, (first, _)) in &self.blocked {
-            if !self.lifetimes.contains_key(lifetime) {
+        for (lifetime, blocked) in self.blocked.by_lifetime() {
+            if let Some(first) = blocked.first()
+                && !self.blocked.has_failed(lifetime)
+            {
                 annotations.push(Annotation {
                     title: format!("setup of {lifetime}"),
-                    file: Some(first.path().to_owned()),
+                    file: Some(first.path().as_str().to_owned()),
                     line: None,
                     message: format!("setup of {lifetime} failed"),
                     repeats: 0,
@@ -280,18 +262,19 @@ impl<W: Write> GithubAnnotations<W> {
                 let _ = write!(
                     message,
                     "\n{} failed the same way",
-                    shared::plural(annotation.repeats, "more test", "more tests")
+                    words::plural(annotation.repeats, "more test", "more tests")
                 );
             }
-            if let Some((_, count)) = annotation
+            if let Some(count) = annotation
                 .lifetime
                 .as_ref()
-                .and_then(|lifetime| self.blocked.get(lifetime))
+                .map(|lifetime| self.blocked.held(lifetime).len())
+                .filter(|count| *count > 0)
             {
                 let _ = write!(
                     message,
                     "\n{} not run",
-                    shared::plural(*count, "test", "tests")
+                    words::plural(count, "test", "tests")
                 );
             }
             let file = annotation.file.as_deref().map(|file| self.file(file));
@@ -307,7 +290,7 @@ impl<W: Write> GithubAnnotations<W> {
             let more = annotations.len() - ANNOTATIONS;
             let message = format!(
                 "{} not annotated; see the log",
-                shared::plural(more, "more failure", "more failures")
+                words::plural(more, "more failure", "more failures")
             );
             writeln!(self.out, "{}", command(None, None, "aye", &message))?;
         }
@@ -318,13 +301,13 @@ impl<W: Write> GithubAnnotations<W> {
 /// The annotation's text: the message, with the rest of a message that
 /// spans lines, then the start of the explanation.
 fn message(failure: &Failure) -> String {
-    let mut message = shared::message(failure).to_owned();
+    let mut message = failure::message(failure).to_owned();
     let explanation = failure
         .assertion
         .as_ref()
-        .map(shared::explanation)
+        .map(failure::explanation)
         .unwrap_or_default();
-    for line in shared::message_rest(failure)
+    for line in failure::message_rest(failure)
         .into_iter()
         .chain(explanation)
         .take(DIFF_LINES)
@@ -335,39 +318,10 @@ fn message(failure: &Failure) -> String {
     message
 }
 
-/// `::error file=…,line=…,title=…::message`.
-fn command(file: Option<&str>, line: Option<u32>, title: &str, message: &str) -> String {
-    let mut properties = Vec::new();
-    if let Some(file) = file {
-        properties.push(format!("file={}", property(file)));
-        if let Some(line) = line.filter(|line| *line > 0) {
-            properties.push(format!("line={line}"));
-        }
-    }
-    properties.push(format!("title={}", property(title)));
-    format!("::error {}::{}", properties.join(","), data(message))
-}
-
-fn data(value: &str) -> String {
-    value
-        .replace('%', "%25")
-        .replace('\r', "%0D")
-        .replace('\n', "%0A")
-}
-
-fn property(value: &str) -> String {
-    data(value).replace(':', "%3A").replace(',', "%2C")
-}
-
-impl<W: Write> Reporter for GithubAnnotations<W> {
-    fn report(&mut self, record: &Record) -> io::Result<()> {
+impl<W: Write> Consumer for GithubAnnotations<W> {
+    fn consume(&mut self, record: &Record) -> io::Result<()> {
+        self.lines.note(record);
         match &record.event {
-            Event::CaseCollected(case) => {
-                if let Some(line) = case.span.as_ref().and_then(|span| span.line) {
-                    self.lines.insert(case.id.0.clone(), line);
-                }
-                Ok(())
-            }
             Event::Diagnostic(diagnostic) => self.diagnostic(diagnostic),
             Event::LifetimeFinished {
                 lifetime,
@@ -384,7 +338,7 @@ impl<W: Write> Reporter for GithubAnnotations<W> {
                 failure,
                 ..
             } if outcome.is_bad() => {
-                self.sub_outcome(id, name, *outcome, failure.as_ref());
+                self.sub_outcome(record, id, name, *outcome, failure.as_ref());
                 Ok(())
             }
             Event::TestFinished(result) => {
@@ -401,36 +355,5 @@ impl<W: Write> Reporter for GithubAnnotations<W> {
 
     fn finish(&mut self) -> io::Result<()> {
         self.write()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn enabled_only_when_github_says_so() {
-        assert!(is_github_actions(Some("true".as_ref())));
-        assert!(!is_github_actions(Some("false".as_ref())));
-        assert!(!is_github_actions(Some("".as_ref())));
-        assert!(!is_github_actions(None));
-    }
-
-    #[test]
-    fn commands_escape_like_the_actions_toolkit() {
-        assert_eq!(
-            command(
-                Some("tests/a,b.py"),
-                Some(3),
-                "tests/a,b.py::test_x[50%]",
-                "100% broken\r\nsecond: line"
-            ),
-            "::error file=tests/a%2Cb.py,line=3,title=tests/a%2Cb.py%3A%3Atest_x[50%25]::100%25 broken%0D%0Asecond: line"
-        );
-        assert_eq!(command(None, Some(3), "aye", "m"), "::error title=aye::m");
-        assert_eq!(
-            command(Some("t.py"), Some(0), "x", "m"),
-            "::error file=t.py,title=x::m"
-        );
     }
 }
