@@ -1302,4 +1302,157 @@ mod tests {
             pinned[..]
         );
     }
+
+    /// Projects the pin of the native context's `ini` reads: their files,
+    /// the arguments after `--`, and `-c`.
+    #[allow(clippy::type_complexity)]
+    const INI_PROJECTS: &[(&[(&str, &str)], &[&str], Option<&str>)] = &[
+        (
+            &[(
+                "pytest.ini",
+                "[pytest]\naddopts = -ra\nmarkers =\n    slow: slow\ntimeout = 5\n",
+            )],
+            &[],
+            None,
+        ),
+        (&[("pytest.ini", "[other]\nx = 1\n")], &[], None),
+        (
+            &[(
+                "tox.ini",
+                "[pytest]\npython_files = check_*.py\nxfail_strict = yes\n",
+            )],
+            &["-o", "xfail_strict=no", "--strict-markers"],
+            None,
+        ),
+        (
+            &[(
+                "setup.cfg",
+                "[tool:pytest]\naddopts = --doctest-modules\nfilterwarnings =\n    error\n",
+            )],
+            &[],
+            None,
+        ),
+        (
+            &[(
+                "pytest.toml",
+                "[pytest]\naddopts = [\"-ra\"]\nstrict = true\ntimeout = 5\nratio = 1.5\nwhen = 1979-05-27\n[pytest.sub]\nkey = \"v\"\n",
+            )],
+            &[],
+            None,
+        ),
+        (
+            &[(
+                "pyproject.toml",
+                "[tool.pytest]\naddopts = [\"-ra\"]\ncollect_imported_tests = false\nminversion = \"9.0\"\n",
+            )],
+            &[],
+            None,
+        ),
+        (
+            &[(
+                "pyproject.toml",
+                "[tool.pytest.ini_options]\naddopts = \"-ra\"\nxfail_strict = true\ntimeout = 5\nratio = 1.0\nbig = 1e10\nmarkers = [\"slow\", 1, true, 2.5]\nwhen = 1979-05-27\n",
+            )],
+            &[],
+            None,
+        ),
+        (
+            &[("pyproject.toml", "[tool.pytest]\nini_options = 1\n")],
+            &[],
+            None,
+        ),
+        (
+            &[("pyproject.toml", "[project]\nname = \"x\"\n")],
+            &[],
+            None,
+        ),
+        (
+            &[("ci/custom.ini", "[pytest]\npython_classes = Check\n")],
+            &[],
+            Some("ci/custom.ini"),
+        ),
+        (
+            &[("ci/custom.cfg", "[tool:pytest]\npython_classes = Check\n")],
+            &[],
+            Some("ci/custom.cfg"),
+        ),
+        (
+            &[(
+                "ci/other.toml",
+                "[tool.pytest.ini_options]\nmarkers = [\"a\"]\n",
+            )],
+            &[],
+            Some("ci/other.toml"),
+        ),
+        (
+            &[("ci/notes.txt", "[pytest]\nx = 1\n")],
+            &[],
+            Some("ci/notes.txt"),
+        ),
+        (
+            &[("pytest.ini", "[pytest]\nx = 1\n"), ("ci/pytest.ini", "")],
+            &["-c", "ci/pytest.ini"],
+            None,
+        ),
+        (
+            &[("pytest.ini", "[pytest]\nx = 1\n"), ("elsewhere/keep", "")],
+            &["--rootdir=elsewhere", "-o", "y=2"],
+            None,
+        ),
+        (&[], &[], None),
+    ];
+
+    /// The native context's `ini` for each of [`INI_PROJECTS`], as JSON.
+    fn native_inis() -> Vec<String> {
+        INI_PROJECTS
+            .iter()
+            .map(|(files, framework_args, config_file)| {
+                let dir = tempfile::tempdir().unwrap();
+                let root = dir.path();
+                for (rel, body) in *files {
+                    write(root, rel, body);
+                }
+                let framework_args = strings(framework_args);
+                let project = Project {
+                    framework_args: &framework_args,
+                    config_file: config_file.map(Path::new),
+                    ..Project::new(root, root)
+                };
+                let recognizer = NativeRecognizer::new(
+                    PytestRecognizer::with_env(&project, None).unwrap(),
+                    false,
+                );
+                recognizer.context().into_value()["native"]["ini"].to_string()
+            })
+            .collect()
+    }
+
+    /// The native context's `ini` for each of [`INI_PROJECTS`], recorded
+    /// while its reader read the configuration file a second time.
+    const NATIVE_INIS: &[&str] = &[
+        r#"{"addopts":"-ra","markers":"slow: slow","timeout":"5"}"#,
+        "{}",
+        r#"{"python_files":"check_*.py","strict_markers":"true","xfail_strict":"no"}"#,
+        r#"{"addopts":"--doctest-modules","filterwarnings":"error"}"#,
+        r#"{"addopts":["-ra"],"ratio":1.5,"strict":true,"sub":{"key":"v"},"timeout":5,"when":"1979-05-27"}"#,
+        r#"{"addopts":["-ra"],"collect_imported_tests":false,"minversion":"9.0"}"#,
+        r#"{"addopts":"-ra","big":"10000000000.0","markers":["slow","1","True","2.5"],"ratio":"1.0","timeout":"5","when":"1979-05-27","xfail_strict":"True"}"#,
+        "{}",
+        "{}",
+        r#"{"python_classes":"Check"}"#,
+        r#"{"python_classes":"Check"}"#,
+        r#"{"markers":["a"]}"#,
+        "{}",
+        "{}",
+        r#"{"x":"1","y":"2"}"#,
+        "{}",
+    ];
+
+    /// The raw ini values the front-end's `getini` coerces are the
+    /// configuration file's, as read, then `-o` and the `--strict…` flags
+    /// of the front-end's arguments, as they always were.
+    #[test]
+    fn the_native_ini_holds_the_files_values_as_it_always_has() {
+        assert_eq!(native_inis(), NATIVE_INIS);
+    }
 }
