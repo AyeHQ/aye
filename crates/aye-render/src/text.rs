@@ -16,7 +16,7 @@
 //! ```
 //! The key and the id (with ` (setup)` after it for a setup failure the
 //! second line doesn't name), then the one line saying why (see
-//! [`failure::why`]) and where: `at <path>:<line>`, the innermost project
+//! [`failure::why`](crate::failure::why)) and where: `at <path>:<line>`, the innermost project
 //! frame, cyan, and on a live terminal with colour an OSC 8 hyperlink to
 //! the file. A failure whose signature an earlier one had says `same as
 //! <key>` instead (and its own why after ` · ` when its message differs).
@@ -86,7 +86,7 @@
 //! # The levels
 //!
 //! The [`Level`] (`-v` count minus `-q` count, clamped to -1..=3), with
-//! what each shows of a bad outcome in [`Ladder::TEXT`]:
+//! what each shows of a bad outcome in [`Ladder::TEXT`](crate::Ladder::TEXT):
 //! - **-1** (`-q`): the summary line alone, with what never hides: error
 //!   diagnostics, failed workers, why a run stopped early. A collect-only
 //!   run still lists its cases.

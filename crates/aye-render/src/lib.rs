@@ -8,12 +8,20 @@
 //! layout and limits. If a renderer needs more, the schema grows; runner
 //! state never passes around it. What the renderers derive from the log
 //! alike (keys, the tally, held sub-outcomes and blocked tests, the first of
-//! each signature, definition lines, the run's facts) are aye-stream's
-//! folds, and each renderer is an `aye_stream::Consumer`.
+//! each signature, the diagnostics seen, definition lines, the run's facts)
+//! are aye-stream's folds, and each renderer is an `aye_stream::Consumer`.
+//! Each format is a module and a tree by concept (`text/`, `json/`,
+//! `junit/`, `github/`), its specification in its module's docs; what they
+//! say of a failure alike is `failure`, with the adapters' text rules, each
+//! documented where it is read and kept so that a log 0.0.1 stored reads
+//! the same; the words they share are [`words`], public for the times `aye
+//! show` says, which the binary's printer reuses; the rerun command is
+//! `rerun`; how much each level shows is [`Level`], [`DetailLevel`] and
+//! [`Ladder`]; what a renderer is fed is [`RenderMode`].
 //!
-//! Depends on: aye-stream and aye-events. It reads no environment: the
-//! binary says what it found there (whether to annotate for GitHub, the
-//! colour choice, a live terminal).
+//! Depends on: aye-stream and aye-events. It reads no variable itself: the
+//! binary says whether to annotate for GitHub, and `anstream` reads
+//! `NO_COLOR` and `CLICOLOR_FORCE` under [`ColorChoice::Auto`].
 //!
 //! Decided (implementation, October 2026):
 //! - **Two formats, one ladder.** `--output text` ([`Text`]) and

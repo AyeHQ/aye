@@ -1,7 +1,7 @@
 //! What text, JSON lines, JUnit and GitHub say of a failure alike: why it
-//! went bad, in one line ([`why`]); which operand was expected
+//! went bad, in one line ([`why()`]); which operand was expected
 //! ([`whole`], [`entries`]); its message and the rest of it, and its
-//! explanation ([`message`], [`message_rest`], [`explanation`]); the
+//! explanation ([`message()`], [`message_rest`], [`explanation()`]); the
 //! resource that failed ([`resource_name`]); where it is shown and its
 //! frames ([`origin`], [`frame_items`]); and where it happened.
 //!
@@ -10,7 +10,7 @@
 //! ([`message_rest`]), unittest's `first != second : msg` and the doctest
 //! adapter's `<source>: expected …` ([`own_message`]), pytest's advice
 //! about its `-v` flags ([`diff_lines`]), a doctest's lone hunk header
-//! ([`explanation`]), and the fixture pytest makes for `setup_module`
+//! ([`explanation()`]), and the fixture pytest makes for `setup_module`
 //! ([`resource_name`]). They stay in the renderers for 0.1.0, so that a
 //! log 0.0.1 stored reads the same.
 

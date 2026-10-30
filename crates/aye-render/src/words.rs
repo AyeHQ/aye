@@ -1,9 +1,8 @@
-//! The words the renderers share: text cut to a length ([`head`],
-//! [`tail`], [`last_lines`]), counts of things ([`plural`]), durations
-//! ([`spaced`], [`seconds`]), a test's history ([`history`]), an outcome's
-//! and a phase's names ([`outcome_words`], [`phase`]), and the times `aye
-//! show` says, which the binary's printer reuses ([`utc`], [`rfc3339`],
-//! [`ago`]).
+//! The words the renderers share: text cut to a length (`head`, `tail`,
+//! `last_lines`), counts of things (`plural`), durations (`spaced`,
+//! `seconds`), a test's history (`history`), an outcome's and a phase's
+//! names (`outcome_words`, `phase`), and the times `aye show` says, which
+//! the binary's printer reuses ([`utc`], [`rfc3339`], [`ago`]).
 
 mod duration;
 mod history;
