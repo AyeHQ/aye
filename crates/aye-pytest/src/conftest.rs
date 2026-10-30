@@ -1,17 +1,77 @@
-//! pytest's conftests, as the doctest adapter needs them: which ones pytest
-//! has imported by the time it collects a file (the executor imports them
-//! too, for their side effects), which define hooks that may mark doctest
-//! items, and which `conftest.py`, collected as a doctest module, pytest
-//! finds already imported under the name `conftest` from another file (its
-//! "import file mismatch").
+//! pytest's conftests: which directories' conftests pytest loads (within
+//! its confcutdir) and which it loads before `pytest_configure` (its
+//! initial conftests), as each adapter reads them; and, as the doctest
+//! adapter needs them, which ones pytest has imported by the time it
+//! collects a file (the executor imports them too, for their side effects),
+//! which define hooks that may mark doctest items, and which `conftest.py`,
+//! collected as a doctest module, pytest finds already imported under the
+//! name `conftest` from another file (its "import file mismatch").
+//!
+//! The two adapters' initial conftests differ: the pytest adapter's
+//! [`initial_dirs`] are directories, with their `test*` subdirectories in
+//! the order the filesystem lists them, matched case-insensitively on
+//! Windows; the doctest adapter's [`Conftests::initial`] are the conftest
+//! files themselves, with `test*` directories sorted by name and matched
+//! case-sensitively.
 
 use std::path::{Path, PathBuf};
 
 use aye_python_stdlib::identifier::is_ascii_identifier;
+use aye_python_stdlib::os_path::normalize_absolute;
 
 /// Hooks that may add marks to doctest items: `-k` and `-m` can't be
 /// evaluated on the source alone where one is in scope.
 pub const MARKING_HOOKS: [&str; 2] = ["pytest_collection_modifyitems", "pytest_itemcollected"];
+
+/// pytest's `_is_in_confcutdir`: a directory strictly above the confcutdir
+/// does not load its conftest.
+pub fn in_confcutdir(confcutdir: &Path, dir: &Path) -> bool {
+    !(confcutdir.starts_with(dir) && confcutdir != dir)
+}
+
+/// The directories pytest loads conftests for before `pytest_configure`
+/// (`_set_initial_conftests`): each existing collection argument's (its
+/// own, for a directory, and its `test*` subdirectories; its parent, for a
+/// file), or else the current directory's. A conftest in one of them or
+/// above is "initial".
+pub fn initial_dirs(cwd: &Path, args: &[PathBuf]) -> Vec<PathBuf> {
+    let test_dirs = |dir: &Path| -> Vec<PathBuf> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        entries
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                // `Path.glob("test*")`: case-insensitive on Windows only.
+                if cfg!(windows) {
+                    name.to_lowercase().starts_with("test")
+                } else {
+                    name.starts_with("test")
+                }
+            })
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect()
+    };
+    let mut anchors = Vec::new();
+    for arg in args {
+        let arg = normalize_absolute(arg);
+        if arg.is_dir() {
+            anchors.extend(test_dirs(&arg));
+            anchors.push(arg);
+        } else if arg.exists()
+            && let Some(parent) = arg.parent()
+        {
+            anchors.push(parent.to_path_buf());
+        }
+    }
+    if anchors.is_empty() {
+        anchors.push(cwd.to_path_buf());
+        anchors.extend(test_dirs(cwd));
+    }
+    anchors
+}
 
 /// pytest's conftest rules for one run.
 #[derive(Debug, Clone)]

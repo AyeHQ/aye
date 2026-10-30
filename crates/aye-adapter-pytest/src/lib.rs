@@ -481,6 +481,8 @@ use aye_config::ValueSource;
 use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 use aye_protocol::AdapterContext;
 use aye_pytest::config;
+use aye_pytest::conftest::{in_confcutdir, initial_dirs};
+use aye_pytest::pathlib::{compute_module_name, resolve_package_path};
 use aye_python_semantic::framework::Framework;
 use aye_python_semantic::module_resolver::{absolute_imports, find_module, found_in};
 use aye_python_semantic::namespace::Namespace;
@@ -664,81 +666,6 @@ fn plugin_bases(config: &PytestConfig, root: &Path) -> Vec<PathBuf> {
         new
     });
     bases
-}
-
-/// pytest's `resolve_package_path`: the last directory upward from `file`
-/// that is still a package with an identifier for a name.
-fn package_path(file: &Path) -> Option<PathBuf> {
-    let mut found = None;
-    for dir in file.ancestors().skip(1) {
-        let name = dir
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_default();
-        if !dir.join("__init__.py").is_file() || !is_identifier(&name) {
-            break;
-        }
-        found = Some(dir.to_path_buf());
-    }
-    found
-}
-
-/// The directories pytest loads conftests for before `pytest_configure`
-/// (`_set_initial_conftests`): each existing collection argument's (its
-/// own, for a directory, and its `test*` subdirectories; its parent, for a
-/// file), or else the current directory's. A conftest in one of them or
-/// above is "initial".
-fn initial_dirs(cwd: &Path, args: &[PathBuf]) -> Vec<PathBuf> {
-    let test_dirs = |dir: &Path| -> Vec<PathBuf> {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return Vec::new();
-        };
-        entries
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                // `Path.glob("test*")`: case-insensitive on Windows only.
-                if cfg!(windows) {
-                    name.to_lowercase().starts_with("test")
-                } else {
-                    name.starts_with("test")
-                }
-            })
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir())
-            .collect()
-    };
-    let mut anchors = Vec::new();
-    for arg in args {
-        let arg = normalize_absolute(arg);
-        if arg.is_dir() {
-            anchors.extend(test_dirs(&arg));
-            anchors.push(arg);
-        } else if arg.exists()
-            && let Some(parent) = arg.parent()
-        {
-            anchors.push(parent.to_path_buf());
-        }
-    }
-    if anchors.is_empty() {
-        anchors.push(cwd.to_path_buf());
-        anchors.extend(test_dirs(cwd));
-    }
-    anchors
-}
-
-/// pytest's `compute_module_name`: `file`'s dotted name from `root`.
-fn module_name(root: &Path, file: &Path) -> Option<String> {
-    let rel = file.with_extension("");
-    let rel = rel.strip_prefix(root).ok()?;
-    let mut names: Vec<String> = rel
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .collect();
-    if names.last().is_some_and(|n| n == "__init__") {
-        names.pop();
-    }
-    (!names.is_empty()).then(|| names.join("."))
 }
 
 impl PytestRecognizer {
@@ -1409,8 +1336,8 @@ impl PytestRecognizer {
         if self.config.consider_namespace_packages {
             return AffinityKey::import(&stem);
         }
-        let packaged = package_path(file)
-            .and_then(|package| module_name(package.parent().unwrap_or(&package), file));
+        let packaged = resolve_package_path(file)
+            .and_then(|package| compute_module_name(package.parent().unwrap_or(&package), file));
         let name = match (packaged, self.config.import_mode) {
             (Some(name), _) => name,
             (None, config::ImportMode::Importlib) => {
@@ -1641,12 +1568,6 @@ fn add_sys_path(out: &mut SysPath, summary: &Summary) {
         }
     }
     out.unknown |= summary.sys_path.unknown;
-}
-
-/// pytest's `_is_in_confcutdir`: a directory strictly above the confcutdir
-/// does not load its conftest.
-fn in_confcutdir(confcutdir: &Path, dir: &Path) -> bool {
-    !(confcutdir.starts_with(dir) && confcutdir != dir)
 }
 
 impl Recognizer for PytestRecognizer {

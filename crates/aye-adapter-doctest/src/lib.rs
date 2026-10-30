@@ -331,9 +331,9 @@ use aye_events::{
 };
 use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
 use aye_pytest::conftest;
+use aye_pytest::pathlib::resolve_pkg_root_and_module_name;
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
 use aye_python_stdlib::glob;
-use aye_python_stdlib::identifier::is_ascii_identifier;
 use aye_python_stdlib::os_path;
 use aye_static::{EnvVars, ProcessEnv};
 
@@ -556,58 +556,6 @@ fn quoted_names(source: &str, out: &mut std::collections::HashSet<String>) {
 /// pytest's `_in_venv`.
 fn is_virtualenv(dir: &Path) -> bool {
     dir.join("pyvenv.cfg").is_file() || dir.join("conda-meta").join("history").is_file()
-}
-
-/// `str.isidentifier()` for the ASCII names it is asked about here, and
-/// `None` for any other name (Python's rules for those are Unicode's).
-fn ascii_identifier(name: &str) -> Option<bool> {
-    if !name.is_ascii() {
-        return None;
-    }
-    Some(is_ascii_identifier(name))
-}
-
-/// The name pytest's `prepend` import mode imports a file under, and the
-/// directory it puts on `sys.path`: pytest's `resolve_pkg_root_and_module_name`.
-/// `Err` holds why the name can't be known statically.
-pub fn module_name(file: &Path) -> Result<(String, PathBuf), String> {
-    let mut package: Option<&Path> = None;
-    for dir in file.ancestors().skip(1) {
-        if !dir.join("__init__.py").is_file() {
-            break;
-        }
-        let name = dir
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        match ascii_identifier(&name) {
-            Some(true) => package = Some(dir),
-            Some(false) => break,
-            None => return Err(format!("the package name {name:?} is not ASCII")),
-        }
-    }
-    let stem = file
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    if stem.contains('.') {
-        return Err(format!("the file name {stem:?} holds a dot"));
-    }
-    let Some(package) = package else {
-        let dir = file.parent().unwrap_or(file).to_path_buf();
-        return Ok((stem, dir));
-    };
-    let base = package.parent().unwrap_or(package);
-    let rel = file.with_extension("");
-    let rel = rel.strip_prefix(base).unwrap_or(&rel);
-    let mut names: Vec<String> = rel
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .collect();
-    if names.last().is_some_and(|n| n == "__init__") {
-        names.pop();
-    }
-    Ok((names.join("."), base.to_path_buf()))
 }
 
 /// Why a module with no doctest aye can see is refined.
@@ -1173,7 +1121,7 @@ impl DoctestRecognizer {
         if self.config.consider_namespace_packages {
             reasons.push("consider_namespace_packages: the import names the module".into());
         }
-        let (name, pkg_root) = match module_name(file.abs) {
+        let (name, pkg_root) = match resolve_pkg_root_and_module_name(file.abs) {
             Ok(found) => found,
             Err(why) => {
                 reasons.push(why);

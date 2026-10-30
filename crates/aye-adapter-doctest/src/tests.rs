@@ -291,44 +291,6 @@ fn fnmatch_answers_are_pinned() {
     });
 }
 
-// ---------------------------------------------------------------- names
-
-#[test]
-fn module_names_follow_pytests_prepend_mode() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    write(root, "src/app/__init__.py", "");
-    write(root, "src/app/core/__init__.py", "");
-    write(root, "src/app/core/models.py", "");
-    write(root, "scripts/tool.py", "");
-    write(root, "my-dir/__init__.py", "");
-    write(root, "my-dir/inner.py", "");
-    write(root, "loose/foo.bar.py", "");
-    let name = |rel: &str| module_name(&root.join(rel));
-    assert_eq!(
-        name("src/app/core/models.py").unwrap(),
-        ("app.core.models".to_string(), root.join("src"))
-    );
-    assert_eq!(
-        name("src/app/__init__.py").unwrap(),
-        ("app".to_string(), root.join("src"))
-    );
-    assert_eq!(
-        name("scripts/tool.py").unwrap(),
-        ("tool".to_string(), root.join("scripts"))
-    );
-    // `my-dir` isn't an identifier: no package.
-    assert_eq!(
-        name("my-dir/inner.py").unwrap(),
-        ("inner".to_string(), root.join("my-dir"))
-    );
-    assert_eq!(
-        name("my-dir/__init__.py").unwrap(),
-        ("__init__".to_string(), root.join("my-dir"))
-    );
-    assert!(name("loose/foo.bar.py").is_err());
-}
-
 // ---------------------------------------------------------------- the finder
 
 #[test]
