@@ -1,0 +1,101 @@
+---
+source: crates/aye/tests/snapshots.rs
+info:
+  program: aye
+  args:
+    - "--python"
+    - "[PYTHON]"
+    - "-vvv"
+  env:
+    COLUMNS: "120"
+    NO_COLOR: "1"
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+---
+success: true
+exit_code: 0
+----- stdout -----
+aye · doctest · python [VERSION] · 15 tests · 1 worker
+collected 15 tests in [TIME]
+
+worker 0 started (pid [PID], [PYTHON])
+batch 0 started on worker 0 (doctest, 15 tests)
+✓ passed  docs/test_failure.txt::test_failure.txt › line 9: >>> import os  [TIME]
+✓ passed  docs/test_failure.txt::test_failure.txt › line 10: >>> from decimal import Decimal  [TIME]
+✓ passed  docs/test_failure.txt::test_failure.txt › line 11: >>> from shop import Cart, Product  [TIME]
+✓ passed  docs/test_failure.txt::test_failure.txt › line 12: >>> apples = 4 if os.environ.get("AYE_EXAMPLE_FAIL") == "1" else 3  [TIME]
+✓ passed  docs/test_failure.txt::test_failure.txt › line 13: >>> cart = Cart()  [TIME]
+✓ passed  docs/test_failure.txt::test_failure.txt › line 14: >>> cart.add(Product("apple", "Apple", Decimal("0.50")), apples)  [TIME]
+✓ passed  docs/test_failure.txt::test_failure.txt › line 15: >>> cart.total()  [TIME]
+✓ passed  docs/test_failure.txt::test_failure.txt  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt › line 8: >>> from decimal import Decimal  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt › line 9: >>> from shop import AmountOff, Cart, PercentOff, Product  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt › line 13: >>> apple = Product("apple", "Apple", Decimal("0.50"))  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt › line 14: >>> coffee = Product("coffee", "Coffee", Decimal("8.99"))  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt › line 15: >>> cart = Cart()  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt › line 16: >>> cart.add(apple, 3)  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt › line 17: >>> cart.add(coffee)  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt › line 18: >>> len(cart), cart.subtotal()  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt › line 23: >>> cart.apply(PercentOff(10))  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt › line 24: >>> cart.discount()  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt › line 30: >>> cart.apply(AmountOff(Decimal("5.00"), minimum=Decimal("25.00")))  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt › line 31: >>> cart.discount()  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt › line 33: >>> cart.add(coffee, 2)  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt › line 34: >>> cart.discount()  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt › line 39: >>> cart.print_receipt()  [TIME]
+✓ passed  docs/test_usage.txt::test_usage.txt  [TIME]
+✓ passed  shop/__init__.py::shop › line 3: >>> from decimal import Decimal  [TIME]
+✓ passed  shop/__init__.py::shop › line 4: >>> from shop import Cart, PercentOff, Product  [TIME]
+✓ passed  shop/__init__.py::shop › line 5: >>> cart = Cart()  [TIME]
+✓ passed  shop/__init__.py::shop › line 6: >>> cart.add(Product("coffee", "Coffee", Decimal("8.99")), 2)  [TIME]
+✓ passed  shop/__init__.py::shop › line 7: >>> cart.apply(PercentOff(10))  [TIME]
+✓ passed  shop/__init__.py::shop › line 8: >>> cart.total()  [TIME]
+✓ passed  shop/__init__.py::shop  [TIME]
+✓ passed  shop/cart.py::shop.cart › line 6: >>> cart = Cart()  [TIME]
+✓ passed  shop/cart.py::shop.cart › line 7: >>> cart.add(Product("apple", "Apple", Decimal("0.50")), 3)  [TIME]
+✓ passed  shop/cart.py::shop.cart › line 8: >>> cart.total()  [TIME]
+✓ passed  shop/cart.py::shop.cart  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart › line 34: >>> cart = Cart()  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart › line 35: >>> len(cart), cart.total()  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.add › line 49: >>> cart = Cart()  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.add › line 50: >>> apple = Product("apple", "Apple", Decimal("0.50"))  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.add › line 51: >>> cart.add(apple, 2)  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.add › line 52: >>> cart.add(apple)  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.add › line 53: >>> len(cart)  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.add › line 55: >>> cart.add(apple, 0)  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.add  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.print_receipt › line 96: >>> cart = Cart()  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.print_receipt › line 97: >>> cart.add(Product("apple", "Apple", Decimal("0.50")), 3)  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.print_receipt › line 98: >>> cart.apply(PercentOff(10))  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.print_receipt › line 99: >>> cart.print_receipt()  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.print_receipt  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.summary › line 85: >>> cart = Cart()  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.summary › line 86: >>> cart.add(Product("coffee", "Coffee", Decimal("8.99")), 2)  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.summary › line 87: >>> cart.apply(PercentOff(10))  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.summary › line 88: >>> cart.summary()  # doctest: +ELLIPSIS  [TIME]
+✓ passed  shop/cart.py::shop.cart.Cart.summary  [TIME]
+✓ passed  shop/cart.py::shop.cart.Product › line 22: >>> Product("apple", "Apple", Decimal("0.50"))  [TIME]
+✓ passed  shop/cart.py::shop.cart.Product  [TIME]
+✓ passed  shop/pricing.py::shop.pricing › line 6: >>> money("2.675")  [TIME]
+✓ passed  shop/pricing.py::shop.pricing  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.AmountOff › line 64: >>> five_off = AmountOff(Decimal("5.00"), minimum=Decimal("25.00"))  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.AmountOff › line 65: >>> five_off.amount_off(Decimal("30.00")), five_off.amount_off(Decimal("24.99"))  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.AmountOff  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.AmountOff.amount_off › line 75: >>> AmountOff(Decimal("5.00")).amount_off(Decimal("3.20"))  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.AmountOff.amount_off  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.PercentOff › line 42: >>> welcome = PercentOff(10)  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.PercentOff › line 43: >>> welcome  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.PercentOff › line 45: >>> welcome.amount_off(Decimal("20.00"))  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.PercentOff  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.PercentOff.amount_off › line 54: >>> PercentOff(10).amount_off(Decimal("10.49"))  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.PercentOff.amount_off  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.money › line 19: >>> money(3)  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.money › line 21: >>> money("0.125"), money("-0.125")  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.money › line 28: >>> money(0.1)  [TIME]
+✓ passed  shop/pricing.py::shop.pricing.money  [TIME]
+batch 0 finished (status 0)
+worker 0 finished (exit status 0)
+
+✓ 15 passed   [TIME]
+
+----- stderr -----

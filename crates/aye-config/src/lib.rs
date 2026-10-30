@@ -16,7 +16,12 @@
 //!   `pyproject.toml`; failing that, one holding `.git`; failing that, the
 //!   starting directory. Test ids are relative to it. Frameworks keep their
 //!   own notion of a root (pytest's rootdir) and translate. Paths are made
-//!   absolute lexically, as `aye_fs` decides.
+//!   absolute lexically, as `aye_fs` decides. Where two spellings of one
+//!   directory share more than the filesystem's root (both under Linux's
+//!   `/tmp`), their common ancestor stays lexical, as pytest's
+//!   `get_common_ancestor` keeps it, but when no project holds it the root
+//!   is searched for from the resolved one ([`project_root`]), so one
+//!   command finds one root on every platform.
 //! - **`[tool.aye]` rejects unknown keys and values**, so a typo is an error
 //!   rather than a setting that silently does nothing: `output` must be
 //!   `text` or `json`, in any case as on the command line (it is kept in
@@ -137,12 +142,39 @@ pub fn find_upward(start: &Path, names: &[&str]) -> Option<PathBuf> {
 /// first, so `<root>/tests/..` gives `<root>`.
 pub fn find_root(start: &Path) -> PathBuf {
     let start = aye_fs::normpath(start);
-    for marker in ["pyproject.toml", ".git"] {
-        if let Some(dir) = upward(&start).find(|d| d.join(marker).exists()) {
-            return dir.to_path_buf();
-        }
+    marked(&start).unwrap_or(start)
+}
+
+/// aye's project root for `paths` given in `cwd`: [`find_root`] from their
+/// common ancestor. When nothing above that ancestor marks a project, but
+/// the paths, resolved, share a directory inside it (one directory spelled
+/// two ways under a shared `/tmp`, as on Linux), the search starts from
+/// that directory instead, so the root doesn't depend on how much two
+/// spellings happen to share.
+pub fn project_root(cwd: &Path, paths: &[PathBuf]) -> PathBuf {
+    let ancestor = aye_fs::normpath(&aye_fs::common_ancestor(cwd, paths));
+    if let Some(root) = marked(&ancestor) {
+        return root;
     }
-    start
+    if let Some(resolved) = aye_fs::resolved_common_ancestor(cwd, paths)
+        && let Ok(real) = fs::canonicalize(&ancestor)
+        && resolved != real
+        && resolved.starts_with(&real)
+        && let Some(root) = marked(&resolved)
+    {
+        return root;
+    }
+    ancestor
+}
+
+/// The nearest directory from `start` upward holding a `pyproject.toml`,
+/// failing that a `.git`.
+fn marked(start: &Path) -> Option<PathBuf> {
+    ["pyproject.toml", ".git"].into_iter().find_map(|marker| {
+        upward(start)
+            .find(|d| d.join(marker).exists())
+            .map(Path::to_path_buf)
+    })
 }
 
 // ---------------------------------------------------------------- loaders
@@ -515,6 +547,35 @@ mod tests {
         assert_eq!(find_root(&sub.join("..")), root);
         assert_eq!(find_root(&root.join("other/../sub/..")), root);
         assert_eq!(aye_fs::common_ancestor(&sub.join("../sub"), &[]), sub);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_directory_spelled_two_ways_has_one_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = fs::canonicalize(dir.path()).unwrap();
+        write(&real, "proj/pyproject.toml", "");
+        write(&real, "proj/tests/test_a.py", "");
+        write(&real, "proj/tests/test_b.py", "");
+        // A second spelling of `proj`, as macOS's /tmp is /private/tmp.
+        let alias_dir = tempfile::tempdir().unwrap();
+        let alias = alias_dir.path().join("alias");
+        std::os::unix::fs::symlink(real.join("proj"), &alias).unwrap();
+        let cwd = real.join("proj");
+        let paths = [
+            alias.join("tests/test_a.py"),
+            PathBuf::from("tests/test_b.py"),
+        ];
+        // Whether the common ancestor is the resolved one (macOS's
+        // /private/var against /var) or a lexical one above both (Linux's
+        // /tmp), the root is the project's.
+        assert_eq!(project_root(&cwd, &paths), real.join("proj"));
+        // A symlinked directory inside the project keeps its own name.
+        std::os::unix::fs::symlink(real.join("proj/tests"), real.join("proj/linked")).unwrap();
+        assert_eq!(
+            project_root(&cwd, &[PathBuf::from("linked"), PathBuf::from("tests")]),
+            real.join("proj")
+        );
     }
 
     #[test]

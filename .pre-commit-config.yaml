@@ -6,6 +6,9 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
+        # Snapshots hold the binary's output as it prints it, trailing
+        # spaces included (clap's help has some).
+        exclude: ^crates/aye/tests/snapshots/
       - id: end-of-file-fixer
       - id: check-merge-conflict
       - id: check-added-large-files

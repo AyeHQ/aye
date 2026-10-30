@@ -89,9 +89,42 @@ fn resolve_existing(path: &Path) -> Option<PathBuf> {
 /// the crate docs); so is the result.
 pub fn common_ancestor(cwd: &Path, paths: &[PathBuf]) -> PathBuf {
     let cwd = normpath(cwd);
-    let dirs: Vec<PathBuf> = paths
+    let dirs = existing_dirs(&cwd, paths);
+    let Some(lexical) = deepest_common(&dirs) else {
+        return cwd;
+    };
+    if lexical.parent().is_none() && dirs.len() > 1 {
+        // Nothing in common but the filesystem's root: perhaps one directory
+        // spelled two ways.
+        if let Some(common) = resolved_common(&dirs)
+            && common.parent().is_some()
+        {
+            return common;
+        }
+    }
+    lexical
+}
+
+/// The deepest directory containing every existing path in `paths`, as
+/// [`common_ancestor`] finds it but with each resolved on the filesystem;
+/// `None` when fewer than two exist or one does not resolve. For the
+/// project root, which looks here when two spellings of one directory share
+/// more than the filesystem's root.
+pub fn resolved_common_ancestor(cwd: &Path, paths: &[PathBuf]) -> Option<PathBuf> {
+    let dirs = existing_dirs(&normpath(cwd), paths);
+    if dirs.len() > 1 {
+        resolved_common(&dirs)
+    } else {
+        None
+    }
+}
+
+/// The existing paths of `paths` made absolute against `cwd` (already
+/// normalized), files as their parent directory.
+fn existing_dirs(cwd: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
+    paths
         .iter()
-        .map(|p| absolute(&cwd, p))
+        .map(|p| absolute(cwd, p))
         .filter(|p| p.exists())
         .map(|p| {
             if p.is_file() {
@@ -100,22 +133,14 @@ pub fn common_ancestor(cwd: &Path, paths: &[PathBuf]) -> PathBuf {
                 p
             }
         })
-        .collect();
-    let Some(lexical) = deepest_common(&dirs) else {
-        return cwd;
-    };
-    if lexical.parent().is_none() && dirs.len() > 1 {
-        // Nothing in common but the filesystem's root: perhaps one directory
-        // spelled two ways.
-        let resolved: Option<Vec<PathBuf>> =
-            dirs.iter().map(|d| fs::canonicalize(d).ok()).collect();
-        if let Some(common) = resolved.as_deref().and_then(deepest_common)
-            && common.parent().is_some()
-        {
-            return common;
-        }
-    }
-    lexical
+        .collect()
+}
+
+/// The deepest common ancestor of `dirs` resolved on the filesystem;
+/// `None` when one of them does not resolve.
+fn resolved_common(dirs: &[PathBuf]) -> Option<PathBuf> {
+    let resolved: Option<Vec<PathBuf>> = dirs.iter().map(|d| fs::canonicalize(d).ok()).collect();
+    deepest_common(&resolved?)
 }
 
 /// The deepest common ancestor of absolute paths, by whole components.

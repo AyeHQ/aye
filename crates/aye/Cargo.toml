@@ -37,6 +37,9 @@ aye-select = { workspace = true }
 aye-static = { workspace = true }
 
 [dev-dependencies]
+insta = { workspace = true }
+insta-cmd = { workspace = true }
+ruff_python_parser = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]
