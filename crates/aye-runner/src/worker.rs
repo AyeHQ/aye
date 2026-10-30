@@ -18,7 +18,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -28,6 +28,8 @@ use aye_protocol::{ModuleSet, PROTOCOL_VERSION, Reply, Request, Runtime, Service
 use aye_static::EnvVars;
 
 use crate::WORKER_SOURCE;
+use crate::stop::Registry;
+use crate::sync::lock;
 
 /// How long a worker may take to exit after `shutdown` before it is killed.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
@@ -186,9 +188,9 @@ pub enum Incoming {
 /// process group is only ever signalled while its pid can't have been
 /// reused: until it is reaped, a dead worker's pid stays taken.
 #[derive(Debug)]
-struct Proc {
-    child: Child,
-    reaped: bool,
+pub(crate) struct Proc {
+    pub(crate) child: Child,
+    pub(crate) reaped: bool,
 }
 
 impl Proc {
@@ -202,7 +204,7 @@ impl Proc {
 
     /// Kill the worker and its process group, unless it was reaped already
     /// (it exited by itself; what its tests left running is theirs).
-    fn kill(&mut self) {
+    pub(crate) fn kill(&mut self) {
         if !self.reaped {
             kill_groups(&[self.child.id()]);
             let _ = self.child.kill();
@@ -244,60 +246,13 @@ impl Killer {
     }
 }
 
-/// A runner's live workers, so that all of them can be killed at once from
-/// any thread (the binary's second Ctrl-C).
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Registry(Arc<Mutex<Live>>);
-
-#[derive(Debug, Default)]
-struct Live {
-    workers: Vec<Weak<Mutex<Proc>>>,
-    /// [`Registry::kill_all`] ran: workers that join later are killed at
-    /// once.
-    killed: bool,
-}
-
-impl Registry {
-    fn join(&self, proc: &Arc<Mutex<Proc>>) {
-        let mut live = lock(&self.0);
-        live.workers.retain(|worker| worker.strong_count() > 0);
-        if live.killed {
-            lock(proc).kill();
-        } else {
-            live.workers.push(Arc::downgrade(proc));
-        }
-    }
-
-    /// Kill every live worker with its process group, in one go, and every
-    /// worker that starts from now on.
-    pub(crate) fn kill_all(&self) {
-        let mut live = lock(&self.0);
-        live.killed = true;
-        let workers: Vec<Arc<Mutex<Proc>>> =
-            live.workers.iter().filter_map(Weak::upgrade).collect();
-        // Held until each is signalled, so that none is reaped meanwhile.
-        let mut procs: Vec<MutexGuard<'_, Proc>> = workers.iter().map(|w| lock(w)).collect();
-        let pids: Vec<u32> = procs
-            .iter()
-            .filter(|proc| !proc.reaped)
-            .map(|proc| proc.child.id())
-            .collect();
-        kill_groups(&pids);
-        for proc in &mut procs {
-            if !proc.reaped {
-                let _ = proc.child.kill();
-            }
-        }
-    }
-}
-
 /// Kill each worker's process group: the worker and whatever its tests
 /// started that stayed in the group (a worker leads its own, see
 /// [`own_process_group`]). std can only signal a single process and the
 /// workspace forbids the unsafe code `killpg` takes, so the shell's `kill`
 /// sends the signals. On Windows, `taskkill /T` ends each worker's process
 /// tree. The worker itself is killed directly as well, in case this fails.
-fn kill_groups(pids: &[u32]) {
+pub(crate) fn kill_groups(pids: &[u32]) {
     if pids.is_empty() {
         return;
     }
@@ -900,11 +855,6 @@ impl fmt::Display for Incoming {
             Self::Eof => f.write_str("end of stream"),
         }
     }
-}
-
-/// Lock, ignoring poisoning: a panicked reader thread leaves valid data.
-pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

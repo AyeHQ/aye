@@ -53,7 +53,7 @@ use std::time::Duration;
 
 use aye_events::{AdapterName, AffinityKey, BatchIndex, Case, TestId, WorkerIndex};
 
-use crate::worker::lock;
+use crate::sync::lock;
 
 /// Assumed duration of a test with no history.
 pub const DEFAULT_WEIGHT: Duration = Duration::from_millis(10);

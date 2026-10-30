@@ -222,12 +222,20 @@
 //!   whose session ended runs no other batch: a batch that comes back to
 //!   its lane (a crashed one's) gets a new worker.
 
+mod env;
+mod options;
 mod run;
 mod schedule;
+mod stop;
+mod summary;
+mod sync;
 mod worker;
 
-pub use run::{BatchEnd, BatchSummary, Crash, Plan, RunSummary, Runner, RunnerOptions, StopHandle};
+pub use options::{Plan, RunnerOptions};
+pub use run::Runner;
 pub use schedule::DEFAULT_WEIGHT;
+pub use stop::StopHandle;
+pub use summary::{BatchEnd, BatchSummary, Crash, RunSummary};
 pub use worker::{
     Echo, Exit, Incoming, Killer, SpawnError, Worker, WorkerSpec, describe, parse_line, spawn,
 };

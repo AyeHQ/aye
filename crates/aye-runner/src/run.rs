@@ -3,27 +3,29 @@
 //! that [list the session](aye_protocol::SessionMode::ListsSession).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::ffi::OsString;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use aye_events::{
-    AdapterName, BatchIndex, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, Event,
-    Failure, FrameworkStatus, LifetimeId, Outcome, ProjectPath, Record, Severity, Stamper,
-    StopReason, TestId, TestResult, WorkerIndex,
+    AdapterName, BatchIndex, Diagnostic, DiagnosticCode, DiagnosticPath, Event, Failure,
+    FrameworkStatus, LifetimeId, Outcome, ProjectPath, Record, Severity, Stamper, StopReason,
+    TestId, TestResult, WorkerIndex,
 };
 use aye_protocol::{
-    AdapterContext, Batch, BatchContext, ListingDigest, ModuleSet, Policy, RefineError,
-    RefineRequest, Refined, Refiner, Reply, Request, Runtime, WorkerLine,
+    Batch, ListingDigest, Policy, RefineError, RefineRequest, Refined, Refiner, Reply, Request,
+    Runtime, WorkerLine,
 };
-use aye_static::EnvVars;
 
+use crate::env::lane_env;
+use crate::options::{Plan, RunnerOptions};
 use crate::schedule::{self, Assigned, Queue};
-use crate::worker::{Echo, Incoming, Killer, Registry, Worker, WorkerSpec, is_reply, lock, spawn};
+use crate::stop::StopHandle;
+use crate::summary::{BatchEnd, BatchSummary, Crash, RunSummary};
+use crate::sync::lock;
+use crate::worker::{Incoming, Killer, Worker, WorkerSpec, is_reply, spawn};
 
 /// How often a run checks its [`StopHandle`] while nothing else happens.
 const POLL: Duration = Duration::from_millis(50);
@@ -34,208 +36,6 @@ const INTERRUPT_GRACE: Duration = Duration::from_secs(10);
 
 /// By file, a digest of its tests' ids in order ([`Refined::digests`]).
 type Digests = BTreeMap<ProjectPath, ListingDigest>;
-
-/// What a [`Runner`] needs to start workers.
-#[derive(Debug, Clone, Default)]
-pub struct RunnerOptions {
-    /// The interpreter workers run.
-    pub python: PathBuf,
-    /// The project root, absolute.
-    pub root: PathBuf,
-    /// The directory workers start in: where aye was started.
-    pub cwd: PathBuf,
-    /// Workers to run at most (0 counts as 1); never more than there are
-    /// batches.
-    pub workers: u32,
-    /// What every worker installs after aye's engine, whatever its
-    /// runtimes ([`WorkerSpec::prelude`]).
-    pub prelude: ModuleSet,
-    /// Every adapter's runtime face. Workers get only those the cases at
-    /// hand need.
-    pub runtimes: Vec<Runtime>,
-    /// Environment variables for every worker.
-    pub env: Vec<(OsString, OsString)>,
-    /// Where workers' output is echoed when the plan doesn't capture it
-    /// (`-s`): stdout beside a text report, stderr beside a machine-readable
-    /// one.
-    pub echo: Echo,
-    /// No run follows refinement (`--co`): no worker starts for the other
-    /// lanes while one refines for an executor that lists the session.
-    pub collect_only: bool,
-}
-
-/// What to run.
-#[derive(Debug, Clone)]
-pub struct Plan {
-    /// In the order they should run within a batch.
-    pub cases: Vec<Case>,
-    /// For every batch. `capture: false` also echoes workers' output live,
-    /// where [`RunnerOptions::echo`] says; `maxfail` 0 is no limit.
-    pub policy: Policy,
-    /// Sent with each batch, per adapter (the recognizer's `context()`),
-    /// with the keys below added ([`Plan::context`]).
-    pub contexts: BTreeMap<AdapterName, AdapterContext>,
-    /// Added to every batch's context: [`BatchContext::requested_ids`].
-    pub requested_ids: Vec<TestId>,
-    /// Added to every batch's context: [`BatchContext::rerun_args`].
-    pub rerun_args: Vec<String>,
-    /// Added to every batch's context: [`BatchContext::selected_paths`].
-    pub selected_paths: Vec<String>,
-    /// Historical durations, for balancing.
-    pub durations: HashMap<TestId, Duration>,
-    /// Tests to run first (`--ff`: last run's failures): the batches holding
-    /// them are handed out first, and they run first within their batch.
-    pub first: HashSet<TestId>,
-    /// By adapter, every file collection claimed for its tests (selected or
-    /// not), in collection order: what each worker of an adapter whose
-    /// executor lists the session lists before its first batch.
-    pub session_files: BTreeMap<AdapterName, Vec<ProjectPath>>,
-}
-
-impl Default for Plan {
-    /// Nothing to run, capturing output.
-    fn default() -> Self {
-        Self {
-            cases: Vec::new(),
-            policy: Policy {
-                capture: true,
-                ..Policy::default()
-            },
-            contexts: BTreeMap::new(),
-            requested_ids: Vec::new(),
-            rerun_args: Vec::new(),
-            selected_paths: Vec::new(),
-            durations: HashMap::new(),
-            first: HashSet::new(),
-            session_files: BTreeMap::new(),
-        }
-    }
-}
-
-impl Plan {
-    /// The context of `adapter`'s batches: its recognizer's, with the keys
-    /// the binary adds (the runner adds [`BatchContext::ran_ids`] to a
-    /// batch it re-queues), as a lane's listing before its first batch
-    /// gets it too.
-    pub fn context(&self, adapter: &AdapterName) -> BatchContext {
-        BatchContext {
-            adapter: self.contexts.get(adapter).cloned().unwrap_or_default(),
-            requested_ids: self.requested_ids.clone(),
-            rerun_args: self.rerun_args.clone(),
-            selected_paths: self.selected_paths.clone(),
-            ran_ids: Vec::new(),
-        }
-    }
-}
-
-/// What happened, beyond the records themselves.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct RunSummary {
-    /// Every batch handed to a worker, by id: in hand-out order.
-    pub batches: Vec<BatchSummary>,
-    /// A fold over the delivered `test_finished` records.
-    pub counts: Counts,
-    /// Cases in the plan.
-    pub requested: u32,
-    /// `test_finished` records delivered. A case collected without its
-    /// parameters finishes as several tests, so this may exceed `requested`.
-    pub finished: u32,
-    /// Something failed outside any test: a worker that could not start, a
-    /// worker that died between tests, an adapter that raised, a protocol
-    /// error, a case no executor handles, a batch the framework ended with
-    /// an internal error (pytest's status 3).
-    pub internal_error: bool,
-    /// A batch ended with the framework's status for failed tests
-    /// (pytest's 1) although none of its tests failed and it reported no
-    /// error: a conftest or plugin failed the session after the fact
-    /// (`session.exitstatus`, pytest-cov's `--cov-fail-under`). pytest
-    /// exits 1 then. Not counted once the run has halted.
-    pub framework_failed: bool,
-    /// `maxfail` was reached and the rest abandoned.
-    pub stopped_early: bool,
-    /// The run was interrupted: by the [`StopHandle`], or by the framework
-    /// stopping a batch other than for an internal error (see
-    /// [`StopReason::Framework`]).
-    pub interrupted: bool,
-    /// Why the run stopped before every requested test ran, if it did: the
-    /// first reason that came up.
-    pub stopped: Option<StopReason>,
-    /// Requested ids none of whose tests started: the rest of each batch the
-    /// run's stop cut short, and every batch never handed out (the run
-    /// stopped, or no worker could start). Tests the framework deselects at
-    /// runtime aren't in it.
-    pub not_run: Vec<TestId>,
-    pub crashes: Vec<Crash>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BatchSummary {
-    pub id: BatchIndex,
-    pub adapter: AdapterName,
-    pub worker: WorkerIndex,
-    pub cases: u32,
-    /// The framework's own status, from `batch_done`.
-    pub status: Option<FrameworkStatus>,
-    pub end: BatchEnd,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BatchEnd {
-    /// The worker answered `batch_done`.
-    Done,
-    /// The adapter raised outside any test.
-    Failed,
-    /// The worker died.
-    Crashed,
-    /// The run stopped (`maxfail` or the stop handle) and interrupted or
-    /// killed the worker.
-    Stopped,
-}
-
-/// A worker that died before finishing its batch.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Crash {
-    pub worker: WorkerIndex,
-    pub batch: BatchIndex,
-    /// The test that was running, if any.
-    pub test: Option<TestId>,
-    /// `exit status 3`, `killed by signal 11 (SIGSEGV)`.
-    pub reason: String,
-    /// The end of the worker's stderr.
-    pub stderr: String,
-}
-
-/// Stops a run from another thread (the binary's signal handler). Sticky: a
-/// runner whose handle was used starts no more runs or workers.
-#[derive(Debug, Clone, Default)]
-pub struct StopHandle {
-    stopped: Arc<AtomicBool>,
-    /// Every live worker of the runner: its runs' lanes, handshakes and
-    /// refinements.
-    workers: Registry,
-}
-
-impl StopHandle {
-    /// Stop the run: no more batches are handed out, running workers are
-    /// killed with their process groups, and the run returns with what it
-    /// has (within 50ms).
-    pub fn stop(&self) {
-        self.stopped.store(true, Ordering::SeqCst);
-    }
-
-    /// Stop, and kill every live worker of the runner with its whole
-    /// process group (the processes its tests started) right now, from this
-    /// thread: for a caller about to exit (a second Ctrl-C). Workers that
-    /// start later are killed at once.
-    pub fn kill(&self) {
-        self.stop();
-        self.workers.kill_all();
-    }
-
-    pub fn is_stopped(&self) -> bool {
-        self.stopped.load(Ordering::SeqCst)
-    }
-}
 
 /// Runs plans on workers, and refines files on them.
 #[derive(Debug)]
@@ -763,24 +563,6 @@ fn refined_by(worker: &Worker, stopped: &dyn Fn() -> bool) -> Result<Refined, Un
             Some(_) | None => {}
         }
     }
-}
-
-/// The environment variables of lane `lane`'s workers among `lanes`:
-/// `AYE_WORKER`, and with several lanes pytest-xdist's, so that per-worker
-/// resources are reused.
-fn lane_env(lane: WorkerIndex, lanes: u32) -> Vec<(OsString, OsString)> {
-    let mut env = vec![(EnvVars::AYE_WORKER.into(), lane.to_string().into())];
-    if lanes > 1 {
-        env.push((
-            EnvVars::PYTEST_XDIST_WORKER.into(),
-            lane.xdist_name().into(),
-        ));
-        env.push((
-            EnvVars::PYTEST_XDIST_WORKER_COUNT.into(),
-            lanes.to_string().into(),
-        ));
-    }
-    env
 }
 
 /// The lanes' listings of the session: the first lane's, by adapter, which
@@ -1936,7 +1718,7 @@ impl Shared<'_> {
     /// An id that stands for several tests (one without its parameters, or
     /// whose parameters the framework makes under other ids now: pytest's
     /// stand-ins) may have started some of them: it is re-queued whole,
-    /// with the ids of the tests that ran ([`BatchContext::ran_ids`]), so
+    /// with the ids of the tests that ran ([`BatchContext::ran_ids`](aye_protocol::BatchContext::ran_ids)), so
     /// that the adapter runs only the rest, and none twice.
     fn crashed(
         &self,
@@ -2190,6 +1972,8 @@ fn shorten(line: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use aye_events::Case;
+
     use super::*;
 
     #[test]
