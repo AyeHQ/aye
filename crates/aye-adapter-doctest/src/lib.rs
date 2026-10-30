@@ -309,15 +309,16 @@
 //!   file mismatch" statically (see "Static recognition"), so a batch never
 //!   asks for it.
 
-mod config;
 mod conftests;
 mod context;
 mod finder;
 mod mismatch;
 mod module;
+mod options;
 mod parser;
 mod project_scan;
 mod recognizer;
+mod settings;
 mod text;
 
 #[cfg(test)]
@@ -330,8 +331,8 @@ use aye_pytest::names;
 use aye_python_stdlib::fnmatch::SetTranslation;
 
 pub use aye_pytest::env::DoctestEnv;
-pub use config::{DoctestConfig, ImportMode};
 pub use recognizer::DoctestRecognizer;
+pub use settings::{DoctestConfig, ImportMode};
 
 /// The doctest adapter's executor module.
 pub const MODULE: ModuleSource = ModuleSource::embedded(
