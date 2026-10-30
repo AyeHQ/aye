@@ -156,7 +156,9 @@ fn last(dir: &Path) -> String {
 
 /// The keys of the run stored as `run`, as the run printed them.
 fn keys(dir: &Path, run: &str) -> Keys {
-    let records = aye_history::RunStore::new(runs_dir(dir)).log(run).unwrap();
+    let records = aye_history::RunStore::new(runs_dir(dir))
+        .log(&run.into())
+        .unwrap();
     Keys::of(&records)
 }
 

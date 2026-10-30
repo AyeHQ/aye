@@ -118,7 +118,7 @@ fn a_run_is_kept_whole_with_its_summary_and_as_last() {
     let raw = fs::read(dir.join("r1.jsonl.gz")).unwrap();
     assert_eq!(&raw[..2], [0x1f, 0x8b]);
     let store = RunStore::new(&dir);
-    assert_eq!(store.log("r1").unwrap(), records);
+    assert_eq!(store.log(&stored("r1")).unwrap(), records);
     // The summary, and `last`.
     let meta = store.last().unwrap();
     assert_eq!(meta.run, "r1");
@@ -154,7 +154,7 @@ fn runs_are_numbered_after_the_highest_number_stored_and_last() {
     );
     // A run's number is the store's, whatever id its records carry.
     assert_eq!(
-        RunStore::new(&dir).log("r8").unwrap()[0]
+        RunStore::new(&dir).log(&stored("r8")).unwrap()[0]
             .envelope
             .run
             .as_ref()
@@ -237,8 +237,14 @@ fn a_number_another_run_holds_is_skipped() {
     }
     assert_eq!(other.finish().unwrap(), Some(stored("r2")));
     let store = RunStore::new(&dir);
-    assert_eq!(store.log("r3").unwrap(), run("b", project.path(), OUTCOMES));
-    assert_eq!(store.log("r2").unwrap(), run("c", project.path(), OUTCOMES));
+    assert_eq!(
+        store.log(&stored("r3")).unwrap(),
+        run("b", project.path(), OUTCOMES)
+    );
+    assert_eq!(
+        store.log(&stored("r2")).unwrap(),
+        run("c", project.path(), OUTCOMES)
+    );
     // The highest number goes on, though `last` is r2.
     assert_eq!(
         keep(&dir, 10, &run("d", project.path(), OUTCOMES)).as_deref(),
@@ -334,7 +340,7 @@ fn each_file_with_a_test_has_its_digest_and_changes_are_told() {
     let project = project();
     let dir = project.path().join(".aye/runs");
     keep(&dir, 10, &run("aaaa", project.path(), OUTCOMES));
-    let meta = RunStore::new(&dir).meta("r1").unwrap();
+    let meta = RunStore::new(&dir).meta(&stored("r1")).unwrap();
     assert_eq!(
         meta.files.keys().collect::<Vec<_>>(),
         ["tests/test_a.py", "tests/test_b.py"]
@@ -444,10 +450,7 @@ fn two_runs_at_once_each_keep_their_own_log() {
     let store = RunStore::new(&dir);
     assert_eq!(store.runs().len(), 2);
     for (id, stored) in &ids {
-        assert_eq!(
-            store.log(&stored.to_string()).unwrap(),
-            run(id, &root, OUTCOMES)
-        );
+        assert_eq!(store.log(stored).unwrap(), run(id, &root, OUTCOMES));
     }
     // `last` is the one that finished last.
     assert_eq!(store.last().unwrap().run, ids["slow"]);
@@ -476,12 +479,12 @@ fn a_log_cut_short_reads_as_far_as_it_goes() {
     let whole = fs::read(&path).unwrap();
     fs::write(&path, &whole[..whole.len() - 20]).unwrap();
     let store = RunStore::new(&dir);
-    let read = store.log(&id).unwrap();
+    let read = store.log(&stored(&id)).unwrap();
     assert!(!read.is_empty() && read.len() <= records.len());
     assert_eq!(read[..], records[..read.len()]);
     // As stored: as many whole lines.
     let mut copied = Vec::new();
-    store.copy_log(&id, &mut copied).unwrap();
+    store.copy_log(&stored(&id), &mut copied).unwrap();
     let copied = String::from_utf8(copied).unwrap();
     assert!(copied.ends_with('\n'));
     assert_eq!(copied.lines().count(), read.len());
@@ -494,7 +497,9 @@ fn the_log_is_copied_as_stored() {
     let records = run("cccc", project.path(), OUTCOMES);
     let id = keep(&dir, 10, &records).unwrap();
     let mut copied = Vec::new();
-    RunStore::new(&dir).copy_log(&id, &mut copied).unwrap();
+    RunStore::new(&dir)
+        .copy_log(&stored(&id), &mut copied)
+        .unwrap();
     let mut expected = Vec::new();
     for record in &records {
         serde_json::to_writer(&mut expected, record).unwrap();
@@ -505,8 +510,8 @@ fn the_log_is_copied_as_stored() {
         String::from_utf8(expected).unwrap()
     );
     let store = RunStore::new(&dir);
-    assert!(store.copy_log("../x", &mut Vec::new()).is_err());
-    assert!(store.copy_log("r9", &mut Vec::new()).is_err());
+    assert!(store.copy_log(&stored("../x"), &mut Vec::new()).is_err());
+    assert!(store.copy_log(&stored("r9"), &mut Vec::new()).is_err());
 }
 
 #[test]
@@ -538,7 +543,7 @@ fn what_runs_that_never_completed_left_goes_once_a_day_old() {
     // Neither is a run.
     let store = RunStore::new(&dir);
     assert_eq!(store.runs().len(), 2);
-    assert!(store.meta("r6").is_none());
+    assert!(store.meta(&stored("r6")).is_none());
 }
 
 #[test]
@@ -551,8 +556,8 @@ fn whatever_id_the_records_carry_nothing_is_written_outside_the_store() {
     );
     assert!(!project.path().join(".aye/evil.jsonl.gz").exists());
     let store = RunStore::new(&dir);
-    assert!(store.log("../x").is_err());
-    assert!(store.meta("../x").is_none());
+    assert!(store.log(&stored("../x")).is_err());
+    assert!(store.meta(&stored("../x")).is_none());
     // A `last` naming something else is no run.
     fs::write(dir.join(LAST), "../../etc/passwd\n").unwrap();
     assert_eq!(store.last().unwrap().run, "r1");
@@ -620,7 +625,7 @@ fn a_failed_claim_is_said_only_when_a_run_to_keep_starts() {
     let again = records[0].clone();
     records.insert(2, again);
     assert_eq!(keep(&runs, 10, &records).as_deref(), Some("r1"));
-    assert_eq!(RunStore::new(&runs).log("r1").unwrap(), records);
+    assert_eq!(RunStore::new(&runs).log(&stored("r1")).unwrap(), records);
 }
 
 /// A run of `outcomes` whose log also holds `events`, before its
@@ -846,12 +851,21 @@ fn what_the_summary_counts_beside_the_tests_is_kept() {
         ("skipped_modules".to_owned(), 2),
     ]);
     writer.finish().unwrap();
-    assert_eq!(RunStore::new(&dir).meta("r1").unwrap().extra, extra);
+    assert_eq!(
+        RunStore::new(&dir).meta(&stored("r1")).unwrap().extra,
+        extra
+    );
     // Left out when there is none, and read as none when absent.
     keep(&dir, 10, &run("gggg", project.path(), OUTCOMES));
     let text = fs::read_to_string(dir.join("r2.json")).unwrap();
     assert!(!text.contains("extra"), "{text}");
-    assert!(RunStore::new(&dir).meta("r2").unwrap().extra.is_empty());
+    assert!(
+        RunStore::new(&dir)
+            .meta(&stored("r2"))
+            .unwrap()
+            .extra
+            .is_empty()
+    );
 }
 
 #[test]

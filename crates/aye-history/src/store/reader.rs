@@ -53,7 +53,7 @@ impl RunStore {
             .filter_map(|entry| {
                 let name = entry.file_name();
                 let id = name.to_str()?.strip_suffix(META)?;
-                is_run_id(id).then(|| self.meta(id))?
+                is_run_id(id).then(|| self.meta_named(id))?
             })
             .collect();
         let last = self.named_last();
@@ -117,7 +117,13 @@ impl RunStore {
     }
 
     /// The summary of the run `id`, when it is kept.
-    pub fn meta(&self, id: &str) -> Option<RunMeta> {
+    pub fn meta(&self, id: &StoredRunId) -> Option<RunMeta> {
+        self.meta_named(&id.to_string())
+    }
+
+    /// The summary named after `id`, a run's id as its files spell it, when
+    /// `id` is one and the summary is that run's.
+    fn meta_named(&self, id: &str) -> Option<RunMeta> {
         if !is_run_id(id) {
             return None;
         }
@@ -137,14 +143,8 @@ impl RunStore {
 
     /// The log of the run `id`, record by record. A line that doesn't read
     /// as a record (the end of a log cut short) is skipped.
-    pub fn log(&self, id: &str) -> io::Result<Vec<Record>> {
-        if !is_run_id(id) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("{id:?} is not a run's id"),
-            ));
-        }
-        let file = fs::File::open(self.dir.join(format!("{id}{LOG}")))?;
+    pub fn log(&self, id: &StoredRunId) -> io::Result<Vec<Record>> {
+        let file = self.open_log(id)?;
         let reader = BufReader::with_capacity(1 << 16, GzDecoder::new(file));
         let mut records = Vec::new();
         for line in reader.lines() {
@@ -164,14 +164,8 @@ impl RunStore {
     /// Writes the log of the run `id` to `out` as stored: every whole line,
     /// one record each, as the run wrote it. A log cut short ends with its
     /// last whole line.
-    pub fn copy_log(&self, id: &str, out: &mut impl Write) -> io::Result<()> {
-        if !is_run_id(id) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("{id:?} is not a run's id"),
-            ));
-        }
-        let file = fs::File::open(self.dir.join(format!("{id}{LOG}")))?;
+    pub fn copy_log(&self, id: &StoredRunId, out: &mut impl Write) -> io::Result<()> {
+        let file = self.open_log(id)?;
         let mut reader = BufReader::with_capacity(1 << 16, GzDecoder::new(file));
         let mut line = Vec::new();
         loop {
@@ -185,5 +179,18 @@ impl RunStore {
                 Err(e) => return Err(e),
             }
         }
+    }
+
+    /// The log of the run `id`, opened, when `id` is as harmless in a file
+    /// name as a run's id.
+    fn open_log(&self, id: &StoredRunId) -> io::Result<fs::File> {
+        let id = id.to_string();
+        if !is_run_id(&id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{id:?} is not a run's id"),
+            ));
+        }
+        fs::File::open(self.dir.join(format!("{id}{LOG}")))
     }
 }

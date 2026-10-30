@@ -39,7 +39,7 @@ fn run(python: &Path) -> (tempfile::TempDir, BTreeMap<String, TestResult>) {
     let store = aye_history::RunStore::new(runs_dir(dir.path()));
     let last = store.last().expect("a stored run");
     let results = store
-        .log(&last.run.to_string())
+        .log(&last.run)
         .unwrap()
         .into_iter()
         .filter_map(|record| match record.event {

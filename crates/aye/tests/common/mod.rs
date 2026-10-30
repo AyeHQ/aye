@@ -31,7 +31,7 @@ pub(crate) fn kept(root: &Path, before: &HashSet<String>) -> Option<Vec<Value>> 
         .runs()
         .into_iter()
         .find(|meta| !before.contains(&meta.run.to_string()))?;
-    let log = store.log(&meta.run.to_string()).unwrap();
+    let log = store.log(&meta.run).unwrap();
     Some(
         log.iter()
             .map(|record| serde_json::to_value(record).unwrap())

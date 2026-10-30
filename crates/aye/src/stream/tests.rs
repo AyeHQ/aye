@@ -134,7 +134,7 @@ fn the_run_store_keeps_every_record_of_the_stream() {
         BTreeMap::from([("teardown_error".to_owned(), 1)])
     );
     let kinds: Vec<&str> = store
-        .log(&meta.run.to_string())
+        .log(&meta.run)
         .unwrap()
         .iter()
         .map(|record| record.event.kind())
@@ -263,7 +263,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     ];
     assert_eq!(said(&seen.lock().unwrap()), expected);
     let store = aye_history::RunStore::new(&runs);
-    let log = store.log("r1").unwrap();
+    let log = store.log(&"r1".into()).unwrap();
     assert_eq!(said(&log), expected);
     assert!(
         matches!(log[0].event, Event::RunStarted { run, .. } if run == RunNumber::new(1)),

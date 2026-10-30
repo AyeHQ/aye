@@ -48,7 +48,10 @@ fn every_run_is_kept_numbered_with_its_history() {
     assert_eq!(records.last().unwrap()["event"], "run_finished");
     assert_eq!(
         records.len(),
-        aye_history::RunStore::new(&runs).log("r3").unwrap().len()
+        aye_history::RunStore::new(&runs)
+            .log(&"r3".into())
+            .unwrap()
+            .len()
     );
     // Bad outcomes carry how the test ended before: failed since r1. The
     // others carry nothing.

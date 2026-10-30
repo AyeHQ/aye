@@ -78,7 +78,7 @@ fn a_run_is_picked_by_its_number_or_the_start_of_an_old_id() {
     }
     // A run stored before runs were numbered.
     let old = "fedcba9876543210";
-    let mut meta = RunStore::new(&runs).meta("r1").unwrap();
+    let mut meta = RunStore::new(&runs).meta(&"r1".into()).unwrap();
     meta.run = old.into();
     meta.finished_ms = 1;
     std::fs::write(

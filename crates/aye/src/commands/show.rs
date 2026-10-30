@@ -99,7 +99,7 @@ pub(crate) fn show(args: &ShowArgs, printer: Printer) -> Result<(), AyeError> {
     if args.log {
         let mut out = io::BufWriter::new(printer.stdout().lock());
         return match store
-            .copy_log(&meta.run.to_string(), &mut out)
+            .copy_log(&meta.run, &mut out)
             .and_then(|()| out.flush())
         {
             Err(err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
@@ -116,7 +116,7 @@ pub(crate) fn show(args: &ShowArgs, printer: Printer) -> Result<(), AyeError> {
             other => Ok(other?),
         };
     }
-    let records = store.log(&meta.run.to_string()).map_err(unreadable)?;
+    let records = store.log(&meta.run).map_err(unreadable)?;
     let index = RunIndex::of(&records);
     let keys = Keys::of(&records);
 

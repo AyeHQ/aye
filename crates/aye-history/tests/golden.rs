@@ -91,14 +91,14 @@ fn a_store_0_0_1_left_is_read() {
     let last = store.last().unwrap();
     assert_eq!(last.number(), RunNumber::new(1));
     assert_eq!(last.root, "/private/tmp/aye-fixtures/rootdir");
-    let records = store.log("r1").unwrap();
+    let records = store.log(&"r1".into()).unwrap();
     assert_eq!(records.len(), 11);
     assert!(matches!(
         records[0].event,
         Event::RunStarted { run: Some(run), .. } if run.get() == 1
     ));
     let mut copied = Vec::new();
-    store.copy_log("r1", &mut copied).unwrap();
+    store.copy_log(&"r1".into(), &mut copied).unwrap();
     let copied = String::from_utf8(copied).unwrap();
     assert_eq!(copied.lines().count(), records.len());
     for line in copied.lines() {
