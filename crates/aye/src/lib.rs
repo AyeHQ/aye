@@ -2,8 +2,9 @@
 //! (`cli.rs`: which command, and its arguments as clap reads them), the
 //! environment aye started in, once (`environment.rs`), resolves the
 //! command's settings from them and `[tool.aye]`, once and in the order that
-//! decides which usage error wins (`settings.rs`), and runs the command
-//! (`commands.rs`): a run (`commands/run.rs`, in the steps of
+//! decides which usage error wins (`settings.rs`, with the positional
+//! arguments, each a path, an id or a word: `positional.rs`), and runs the
+//! command (`commands.rs`): a run (`commands/run.rs`, in the steps of
 //! architecture.md's "A run", whose exit code `commands/run/exit.rs`
 //! decides), `aye config` (`commands/config.rs`) or `aye show`
 //! (`commands/show.rs`). A run's records go through its event stream
@@ -19,7 +20,8 @@
 //! `aye-runner`, presentation in `aye-render`. Linking an adapter here is
 //! the only place an adapter is depended on.
 //!
-//! Depends on: every runner crate and every `aye-adapter-*` crate.
+//! Depends on: every runner crate and every `aye-adapter-*` crate. Its
+//! end-to-end tests (`tests/`) run the binary, through aye-test.
 //!
 //! What each part decided (implementation, October 2026) is said by the
 //! module that does it.
