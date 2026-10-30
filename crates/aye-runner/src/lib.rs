@@ -1,10 +1,12 @@
 //! How tests run, on workers, as batches:
 //! - the workers (`worker/`): the one spawn path, from a [`WorkerSpec`]
-//!   (`spec.rs`) through the handshake ([`spawn`]: `handshake.rs`), the
-//!   protocol stream (`transport.rs`), the process and its group, killed
-//!   or interrupted from any thread (`process.rs`), how a worker ended
-//!   (`exit.rs`), its stderr and what of it goes into a crash report
-//!   (`stderr.rs`, `crash_report.rs`), every grace period and poll
+//!   (`spec.rs`) through the handshake ([`spawn`]: `handshake.rs`), a
+//!   worker's states as types (a [`LaunchedWorker`], which takes no request,
+//!   until the handshake makes it a [`Worker`], which shuts down into its
+//!   [`Exit`]), the protocol stream (`transport.rs`), the process and its
+//!   group, killed or interrupted from any thread (`process.rs`), how a
+//!   worker ended (`exit.rs`), its stderr and what of it goes into a crash
+//!   report (`stderr.rs`, `crash_report.rs`), every grace period and poll
 //!   (`timeouts.rs`); and the embedded worker (`python/aye_worker.py`),
 //!   which hosts whichever adapters' executors it is sent;
 //! - scheduling (`schedule/`): a plan's cases grouped by their outermost
@@ -13,20 +15,24 @@
 //!   plan, a crash's retry, a session's close), the lanes it may run on and
 //!   whether it runs first (`batch.rs`), handed out as lanes ask
 //!   (`queue.rs`);
-//! - the run (`run/`): [`Runner::run`]'s lanes, each of which gets its
-//!   worker ready and pulls batches (`lane.rs`), runs them (`batch.rs`) and
-//!   recovers from its worker's crashes (`crash.rs`); `maxfail` across the
-//!   lanes and how the run stops them (`maxfail.rs`); and the log thread,
-//!   which the lanes tell what happens (`message.rs`), and which stamps and
-//!   delivers the records, keeps the summary and moves the run's `RunPhase`
-//!   on as it stops (`log.rs`);
+//! - the run (`run/`): [`Runner::run`]'s lanes, each a `Lane` whose workers
+//!   are each a `LaneWorker` (its adapter, whether its session ended,
+//!   whether it was announced), which gets its worker ready and pulls
+//!   batches (`lane.rs`), runs them (`batch.rs`) and recovers from its
+//!   worker's crashes (`crash.rs`); `maxfail` across the lanes, a
+//!   `MaxfailBudget` of which each batch gets a `Share`, and how the run
+//!   stops them (`maxfail.rs`); and the log thread, which the lanes tell
+//!   what happens (`message.rs`), and which stamps and delivers the
+//!   records, keeps the summary and moves the run's `RunPhase` on as it
+//!   stops (`log.rs`);
 //! - what a runner is given ([`RunnerOptions`], with each adapter's runtime
 //!   found by its name, and the [`Plan`]: `options.rs`) and what a run
 //!   reports beside its records ([`RunSummary`]: `summary.rs`); the
 //!   [`StopHandle`] and the live workers it kills (`stop.rs`); a lane's
-//!   environment variables (`env.rs`); refinement on workers, [`Runner`] as
-//!   collection's [`aye_protocol::Refiner`] (`refine.rs`), and the workers the
-//!   session listing keeps from it or starts beside it (`listing.rs`).
+//!   environment, a `LaneEnv` (`env.rs`); refinement on workers, [`Runner`]
+//!   as collection's [`aye_protocol::Refiner`] (`refine.rs`), and the
+//!   workers the session listing keeps from it or starts beside it, each
+//!   with the `LaneEnv` it was given (`listing.rs`).
 //!
 //! Later: the warm daemon and fork-per-run; backends the spawn path is
 //! wrapped in (sandboxed, container, remote), capability routing, and the

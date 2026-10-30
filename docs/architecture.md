@@ -143,7 +143,7 @@ boundaries and decisions.
 | `aye-config` | The project root, `[tool.aye]` as written (`AyeOptions`) and resolved (`AyeSettings`), its values, typed and shared with the command line where it takes the same one (`WorkerCount`, `OutputFormat`, `Timeout`, `KeepRuns`, `AdapterList`), where a resolved value came from (`ValueSource`, and `Sourced` values, equal by their values) and how `aye config` shows it (in a table's row, `pyproject.toml [tool.aye]`, or beside a setting's name, `[tool.aye] output`), and generic TOML and INI loaders. Paths come from `aye-fs`, adapters' names from `aye-events`. |
 | `aye-collect` | Discovery: what a run collects from (`Targets`: the paths given, the recognizers' roots, or both), the walk into a table of files (each a `FileId`, with what each recognizer, an `AdapterId` in priority order, claims of it, as a `RecognizerSet`), parsing with Ruff's parser, recognizers, refinement and its cache (`refine/cache.rs`: an entry per file and adapter, read only for a file whose `Cacheability` allows it; `refine/key.rs`: its key, typed part by part: the run's inputs, with `aye-provision`'s `EnvironmentFingerprint`, through which alone it reads the interpreter, then the adapter's and the file's), merging, collection's own diagnostics (`CollectDiagnostic`), strict mode, and the files of each adapter's session (`Collection::session_files`, within the `StartPaths` a run starts from). Knows no framework's rules. Depends on `aye-adapter`, `aye-events`, `aye-fs`, `aye-index`, `aye-protocol` and `aye-provision`. |
 | `aye-select` | Selection, in three-valued logic (`Truth`: what static analysis can't decide is `Unknown`, and kept): the positional arguments (`Selector`, each at its `SelectorIndex`, read as a path, an id, a dotted name or a key, and what a word reaches of what collection skipped, `Selector::reaches`, by a `DottedReading`, selection's or the binary's, each named), pytest's `-k`/`-m` language, the command line's `-k` and `-m` and each adapter's own `-k`, `-m` and `--deselect` (`AdapterSelection`), applied to the cases into what is kept (`Selected`: each `SelectedCase` with what of it runs, `RunAs`); last failed (`LastFailed`, each `FailedEntry` a test, or a path that failed to collect); and the order a run's cases run in (`Order`: the arguments', or under `--ff` what failed last time first). Which `-k` and `-m` count for an adapter's cases is the binary's policy, which reads the framework's arguments. Depends on `aye-events` and `aye-index`. |
-| `aye-runner` | The workers (`worker/`: the one spawn path, of the interpreter it is given, and the handshake: aye's engine, the binary's prelude, then the runtime's modules; the transport; the process and its group; how a worker ended, its stderr and crash reports; every grace period and poll), scheduling (`schedule/`: the plan's cases grouped by `GroupKey`, their outermost affinity key or their file, and weighed by history, each batch a `BatchSpec`, with its `BatchOrigin`, `Pin` and `Priority`, and the queue that hands them out), the run (`run/`: lanes, batches, crash recovery, `maxfail` across lanes, and the log thread, which stamps the log with `aye-events`' `Stamper` and says where the run is, a `RunPhase`), each adapter's runtime found by its name (`Runtimes`), refinement on workers and the session listing's workers, and the worker (`python/aye_worker.py`). |
+| `aye-runner` | The workers (`worker/`: the one spawn path, of the interpreter it is given, and the handshake: aye's engine, the binary's prelude, then the runtime's modules; a worker's states as types, a `LaunchedWorker`, which takes no request, until the handshake makes it a `Worker`; the transport; the process and its group; how a worker ended, its stderr and crash reports; every grace period and poll), scheduling (`schedule/`: the plan's cases grouped by `GroupKey`, their outermost affinity key or their file, and weighed by history, each batch a `BatchSpec`, with its `BatchOrigin`, `Pin` and `Priority`, and the queue that hands them out), the run (`run/`: lanes, each a `Lane` whose workers are each a `LaneWorker`, with its adapter, its `SessionState` and whether it was `Announced`; batches; crash recovery; `maxfail` across lanes, a `MaxfailBudget` of which each batch gets a `Share`; and the log thread, which stamps the log with `aye-events`' `Stamper` and says where the run is, a `RunPhase`), each adapter's runtime found by its name (`Runtimes`), a lane's environment (`LaneEnv`), refinement on workers and the session listing's workers, and the worker (`python/aye_worker.py`). |
 | `aye-stream` | The folds over the event stream that aren't presentation, which the renderers, the run store and `aye show` share: what consumes the log (`Consumer`), one stream fanned out to several (`Tee`) and what a consumer's error does to the rest (`StopAfterError` on stdout, `FailOnFinish` for a report written at the end); test keys (`Keys`, of a `Subject`, a test or a lifetime, shown as a `ShortKey`); what the summaries count beside the tests (`Tally`, `Extra`, `ModuleSkips`); a test's bad sub-outcomes held until it finishes (`SubOutcomes`, and which of its own failures `Repeats` theirs); tests a failed lifetime kept from running (`BlockedTests`, and whether a lifetime that fails `Again` is shown again); the first failure of each signature (`FirstBySignature`), the diagnostics that came already (`SeenDiagnostics`, so each is shown once), the line each test is defined on (`DefinitionLines`) and the run's facts (`RunFacts`); a stored run's log indexed for `aye show` (`RunIndex`: its `RunItem`s, by `ItemIndex`, and their records, by `RecordIndex`); and how a file changed since a run (`FileChange`). Where the renderers' rules differ, each says which it takes. Depends on `aye-events` and `aye-index`. |
 | `aye-render` | Renderers, presentation only, each an `aye_stream::Consumer` over aye-stream's folds, each a module tree by concept: text, JSON lines (its line types typed, their fields in the order they are written), JUnit XML, GitHub annotations; how much each shows (`Level`, the net count of `-v` less `-q`; `DetailLevel`, how much of a bad outcome; `Ladder`, a table per format, tested against the ladder below); what a renderer is fed (`RenderMode`: a run's stream, or for `aye show` part of a stored log with `ShowMode`, the log's keys and `ShowContext`, with each stale file's `FileChange`); what they say of a failure alike (`failure`, with the adapters' text rules, kept for 0.1.0 so that logs 0.0.1 stored read the same); the words they share (`words`: durations, plurals, and the times `aye show` says, which the binary reuses) and the summary's (`summary_words`, which `aye show --runs` reuses). Depends on `aye-stream` and `aye-events`; the binary reads the environment for it (`GITHUB_ACTIONS`). |
 | `aye-history` | `.aye/history.json` (`history`): durations, outcomes (the last, and the recent ones, with when a bad streak began) and last failed, folded from the stream (`History`, over each test's `TestStats`); and the run store, `.aye/runs` (`store`): each run's id (`StoredRunId`: its number, `r81`, or a hex id from before runs were numbered) and what `aye show --run` names of them (`RunSelector`); its log, gzip-compressed, written as the records arrive (`RunWriter`, whose `WriterState` says where the run is: claimed, written, not stored or failed, and which folds what the run's summary counts beside the tests itself, with `aye_stream::Tally`); its summary (`RunMeta`), `last`, numbering, retention, and how a file changed since a run (`RunMeta::change`, an `aye_stream::FileChange`); and the runs read back (`RunStore`). Both are written through `aye-fs`. Depends on `aye-events`, `aye-fs` and `aye-stream`. |
@@ -557,7 +557,9 @@ pytest's `-k` and `-m` from `addopts` or `PYTEST_ADDOPTS`.
 - **Protocol.** JSON lines over the worker's stdin and stdout; see
   [protocol.md](protocol.md). The worker keeps the original fds for the
   protocol (close-on-exec, placed high) and points fd 1 at stderr, so stray
-  prints can't corrupt it.
+  prints can't corrupt it. The runner's side is `aye-runner`'s `worker/`:
+  a `LaunchedWorker` takes no request until the handshake
+  (`handshake.rs`) makes it a `Worker`.
 - **Batches.** Cases are grouped by their outermost affinity key, so a
   module's and a class's fixtures are set up once per group. The pytest
   front-end gives a case a key only for a costly lifetime it shares:
@@ -580,7 +582,8 @@ pytest's `-k` and `-m` from `addopts` or `PYTEST_ADDOPTS`.
   batch holding a `serial` case never runs alongside another. With
   `--ff`, last run's failures run first within their batch, across files,
   and their batches are handed out first. `aye-runner`'s crate docs have
-  the details.
+  the details, and its `schedule/` the code (a case's `GroupKey`, each
+  batch a `BatchSpec`, the queue).
 - **Lanes.** A run starts at most `workers` workers, never more than there
   are batches. Each pulls the next batch when it finishes one, which balances
   like LPT scheduling and adapts when history was wrong. A worker's index is
@@ -590,7 +593,9 @@ pytest's `-k` and `-m` from `addopts` or `PYTEST_ADDOPTS`.
   `PYTEST_XDIST_TESTRUNUID`. The worker that refined the pytest adapter's
   files is the first lane; every other lane lists the session (digests
   only) before its first batch, and a file it lists otherwise than the
-  first lane runs there only, with a `listing-differs` warning.
+  first lane runs there only, with a `listing-differs` warning. A lane is
+  `aye-runner`'s `Lane` (`run/lane.rs`), each of its workers a
+  `LaneWorker`, and its environment a `LaneEnv` (`env.rs`).
 - **The pytest executor** is aye's engine with the pytest front-end (see
   [aye's engine and the pytest front-end](#ayes-engine-and-the-pytest-front-end)),
   standard library only. One session per worker, as a pytest-xdist worker
@@ -671,7 +676,9 @@ pytest's `-k` and `-m` from `addopts` or `PYTEST_ADDOPTS`.
   outcome that reaches the limit are dropped, so the log holds exactly
   `maxfail` bad outcomes, plus the `lifetime_finished` records that close
   the lifetimes it holds open. With `maxfail`, the unittest adapter reports
-  a failed lifetime before the tests it blocks, so the log keeps it.
+  a failed lifetime before the tests it blocks, so the log keeps it. The
+  count is `aye-runner`'s `MaxfailBudget` (`run/maxfail.rs`), and a
+  batch's part of it a `Share`.
 - **Crashes.** A worker that dies mid-batch fails the test it was running
   (`error`, with the worker's stderr: a fatal error's dump from its start,
   else its last lines). The batch's tests that never started are re-queued
@@ -682,7 +689,8 @@ pytest's `-k` and `-m` from `addopts` or `PYTEST_ADDOPTS`.
   so an id listed n times skips its first n tests. An id one batch runs
   more than once (a `load_tests` that adds a test again), one of whose
   copies crashed the worker, is not re-queued: its later copies don't run.
-  A worker that dies outside any test is an internal error.
+  A worker that dies outside any test is an internal error. See
+  `aye-runner`'s `run/crash.rs`.
 - **Stopping.** Before the run, Ctrl-C, SIGTERM or SIGHUP stops
   collection: the walk, parsing and refinement (its worker killed) give up
   within moments, `run_finished` says `interrupted`, exit 2; anything that
@@ -704,7 +712,9 @@ pytest's `-k` and `-m` from `addopts` or `PYTEST_ADDOPTS`.
   for a test calling `result.stop()`). That error, or a batch status of 2,
   ends the hand-out, lets running batches finish, and the run exits 2; one
   stopped by pytest's internal error exits 3. A worker whose runner was
-  killed outright kills its own process group at its next message.
+  killed outright kills its own process group at its next message. Where a
+  run is (running, its hand-out stopped by the framework, winding down
+  after `maxfail`, killed) is `aye-runner`'s `RunPhase` (`run/log.rs`).
 
 ## Output and history
 

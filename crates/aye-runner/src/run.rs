@@ -2,13 +2,14 @@
 //! workers, crash recovery, stopping, and the session listing of executors
 //! that [list the session](aye_protocol::SessionMode::ListsSession).
 //!
-//! [`Runner::run`] starts the run's lanes (`lane.rs`), each of which runs
-//! batches on its worker (`batch.rs`) and recovers from its crashes
-//! (`crash.rs`), and tells the log thread (`message.rs`), which stamps and
-//! delivers the records, keeps the summary and decides when the run stops
-//! (`log.rs`); `maxfail.rs` counts `maxfail` across the lanes and stops
-//! their busy workers. The workers refinement keeps or starts for a run
-//! are the crate's `listing.rs`; refinement itself, its `refine.rs`.
+//! [`Runner::run`] starts the run's lanes (`lane.rs`: each a `Lane`), each
+//! of which runs batches on its worker (`batch.rs`) and recovers from its
+//! crashes (`crash.rs`), and tells the log thread (`message.rs`), which
+//! stamps and delivers the records, keeps the summary and decides when the
+//! run stops (`log.rs`); `maxfail.rs` counts `maxfail` across the lanes (a
+//! `MaxfailBudget`) and stops their busy workers. The workers refinement
+//! keeps or starts for a run are the crate's `listing.rs`; refinement
+//! itself, its `refine.rs`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::mpsc::{self, RecvTimeoutError};
