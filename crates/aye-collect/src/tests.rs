@@ -1978,6 +1978,14 @@ fn only_standalone_files_are_cached() {
     }
 }
 
+/// Why a file isn't standalone; `None` when it is.
+fn dependence(cacheability: refine::Cacheability) -> Option<String> {
+    match cacheability {
+        refine::Cacheability::Standalone => None,
+        refine::Cacheability::Dependent(why) => Some(why),
+    }
+}
+
 #[test]
 fn what_makes_a_file_not_standalone() {
     let dir = tempfile::tempdir().unwrap();
@@ -2000,7 +2008,11 @@ fn what_makes_a_file_not_standalone() {
         let module = ruff_python_parser::parse_module(source)
             .unwrap()
             .into_syntax();
-        standalone::dependence(&module, &root.join("tests/t.py"), &scope)
+        dependence(standalone::cacheability(
+            &module,
+            &root.join("tests/t.py"),
+            &scope,
+        ))
     };
     for source in [
         "import pytest\nimport _pytest.mark\nfrom pytest import param\n",
@@ -2091,7 +2103,11 @@ fn what_makes_a_file_not_standalone() {
             seen: &fresh,
             ..scope
         };
-        standalone::dependence(&module, &root.join("tests/t.py"), &scope)
+        dependence(standalone::cacheability(
+            &module,
+            &root.join("tests/t.py"),
+            &scope,
+        ))
     };
     for source in ["import json\n", "import pytest\n"] {
         let why = shadowed(source).unwrap_or_else(|| panic!("{source}: standalone"));
@@ -2099,7 +2115,11 @@ fn what_makes_a_file_not_standalone() {
     }
     // Files outside the project are never standalone.
     let module = ruff_python_parser::parse_module("").unwrap().into_syntax();
-    let outside = standalone::dependence(&module, Path::new("/elsewhere/t.py"), &scope);
+    let outside = dependence(standalone::cacheability(
+        &module,
+        Path::new("/elsewhere/t.py"),
+        &scope,
+    ));
     assert!(outside.unwrap().contains("outside the project"));
 }
 

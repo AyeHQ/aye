@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use aye_adapter::RefineReason;
-use aye_events::{ContentDigest, Fnv128, ProjectPath};
+use aye_events::{ContentDigest, ProjectPath};
 use aye_protocol::{RefineRequest, Refined, Refiner};
 
 use crate::Collector;
@@ -16,14 +16,13 @@ use crate::source::Source;
 use crate::walk::{AdapterId, FileId, Tree};
 
 mod cache;
+mod key;
 pub(crate) mod standalone;
 
-use cache::Cache;
+pub(crate) use cache::Cacheability;
+use cache::RefineCache;
+use key::{AdapterKey, BaseKey, RunKey};
 use standalone::Scope;
-
-/// The cache's own format, part of every key: entries written under other
-/// rules are never read.
-const FORMAT: &str = "refine-2";
 
 #[derive(Default)]
 pub(crate) struct Refinement {
@@ -84,25 +83,23 @@ impl Collector<'_> {
                 (Some(dir), Some(environment))
                     if !self.loads_by_name(context.as_value(), &scope) =>
                 {
-                    // The arguments after `--`, as adapters were given them.
-                    let mut args = Fnv128::new();
-                    for arg in self.project.framework_args {
-                        args.part(arg.as_bytes());
-                    }
-                    Some(Cache::new(
-                        dir,
-                        &[
-                            FORMAT.as_bytes(),
-                            self.options.version.as_bytes(),
-                            self.project.root.as_os_str().as_encoded_bytes(),
-                            self.project.cwd.as_os_str().as_encoded_bytes(),
-                            &environment.to_le_bytes(),
-                            &args.finish().to_le_bytes(),
-                        ],
-                        adapter,
-                        context.as_value(),
-                        &recognizer.settings(),
-                    ))
+                    let run = RunKey {
+                        version: &self.options.version,
+                        root: self.project.root,
+                        cwd: self.project.cwd,
+                        environment,
+                        framework_args: self.project.framework_args,
+                    };
+                    let settings = recognizer.settings();
+                    let base = BaseKey::new(
+                        &run,
+                        &AdapterKey {
+                            name: adapter,
+                            context: context.as_value(),
+                            settings: &settings,
+                        },
+                    );
+                    Some(RefineCache::new(dir, adapter, base))
                 }
                 _ => None,
             };
@@ -111,9 +108,9 @@ impl Collector<'_> {
             for (job, found, reason) in pending {
                 let standalone = cache.is_some()
                     && found
-                        .dependence
+                        .cacheability
                         .iter()
-                        .any(|(by, why)| *by == i && why.is_none())
+                        .any(|(by, cacheability)| *by == i && cacheability.is_standalone())
                     && job.chain(i).iter().all(|&at| {
                         *supports_standalone.entry((at, i)).or_insert_with(|| {
                             let entry = &tree.entries[at];
@@ -121,8 +118,8 @@ impl Collector<'_> {
                                 .get(&at)
                                 .and_then(|source| source.file(&entry.rel, &entry.abs))
                                 .is_some_and(|file| {
-                                    standalone::dependence(file.module, &entry.abs, &scope)
-                                        .is_none()
+                                    standalone::cacheability(file.module, &entry.abs, &scope)
+                                        .is_standalone()
                                 })
                         })
                     });
@@ -133,7 +130,7 @@ impl Collector<'_> {
                 };
                 let key = cache.as_ref().zip(found.digest).zip(packages).map(
                     |((cache, content), packages)| {
-                        let chain: Vec<(ProjectPath, ContentDigest)> = job
+                        let runs_first: Vec<(ProjectPath, ContentDigest)> = job
                             .chain(i)
                             .iter()
                             .filter_map(|&at| {
@@ -145,18 +142,10 @@ impl Collector<'_> {
                             })
                             .chain(packages)
                             .collect();
-                        cache.key(
-                            tree.entries[job.file].rel.as_str(),
-                            content,
-                            chain.iter().map(|(rel, digest)| (rel.as_str(), *digest)),
-                        )
+                        cache.key(&tree.entries[job.file].rel, content, &runs_first)
                     },
                 );
-                if let Some(hit) = cache
-                    .as_ref()
-                    .zip(key.as_deref())
-                    .and_then(|(c, k)| c.read(k))
-                {
+                if let Some(hit) = cache.as_ref().zip(key).and_then(|(c, k)| c.read(k)) {
                     out.refined.insert((job.file, i), hit);
                 } else {
                     misses.push((job.file, reason, key));
@@ -215,7 +204,7 @@ impl Collector<'_> {
                         let part = parts
                             .remove(tree.entries[at].rel.as_str())
                             .unwrap_or_default();
-                        if let (Some(cache), Some(key), true) = (&cache, &key, clean) {
+                        if let (Some(cache), Some(key), true) = (&cache, key, clean) {
                             cache.write(key, &part);
                         }
                         out.refined.insert((at, i), part);
@@ -272,8 +261,8 @@ impl Collector<'_> {
                 let (source, _) = crate::source::load(&init, &rel);
                 let source = source.filter(|s| !s.is_lossy())?;
                 let file = source.file(&rel, &init)?;
-                standalone::dependence(file.module, &init, scope)
-                    .is_none()
+                standalone::cacheability(file.module, &init, scope)
+                    .is_standalone()
                     .then(|| ContentDigest::of(source.bytes()))
             });
             out.push((rel, digest?));

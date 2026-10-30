@@ -30,6 +30,8 @@ use aye_adapter::ast::visitor::{self, Visitor};
 use aye_adapter::ast::{self, Expr, Stmt};
 use aye_provision::InstalledModules;
 
+use super::cache::Cacheability;
+
 /// Standard-library modules whose import can't reach outside the key: no
 /// filesystem walks, processes, network, clock or randomness of their own.
 /// Some reach the filesystem through a few functions, which
@@ -322,12 +324,14 @@ impl Scope<'_> {
     }
 }
 
-/// Why the refined tests of the file at `abs` (or of a file it supports) may
-/// depend on something outside the cache's key, or `None` when they can't.
-pub(crate) fn dependence(module: &ast::ModModule, abs: &Path, scope: &Scope<'_>) -> Option<String> {
-    let dir = abs.parent()?;
+/// Whether the refined tests of the file at `abs` (or of a file it
+/// supports) can depend on something outside the cache's key, and why.
+pub(crate) fn cacheability(module: &ast::ModModule, abs: &Path, scope: &Scope<'_>) -> Cacheability {
+    let Some(dir) = abs.parent() else {
+        return Cacheability::Standalone;
+    };
     if !dir.starts_with(scope.root) {
-        return Some("it is outside the project".to_string());
+        return Cacheability::Dependent("it is outside the project".to_string());
     }
     let mut check = Check {
         scope,
@@ -340,7 +344,9 @@ pub(crate) fn dependence(module: &ast::ModModule, abs: &Path, scope: &Scope<'_>)
             break;
         }
     }
-    check.reason
+    check
+        .reason
+        .map_or(Cacheability::Standalone, Cacheability::Dependent)
 }
 
 /// Why the framework's arguments or the recognizer's context, as `texts`

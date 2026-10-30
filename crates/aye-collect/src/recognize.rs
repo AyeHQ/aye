@@ -10,7 +10,7 @@ use aye_events::ContentDigest;
 
 use crate::Collector;
 use crate::diagnostic::CollectDiagnostic;
-use crate::refine::standalone;
+use crate::refine::{Cacheability, standalone};
 use crate::source::{self, Source};
 use crate::walk::{AdapterId, FileId, Tree};
 
@@ -39,10 +39,10 @@ pub(crate) struct Recognized {
     pub(crate) by: Vec<(AdapterId, Recognition)>,
     /// The content digest, when the cache needs it.
     pub(crate) digest: Option<ContentDigest>,
-    /// By recognizer asking for refinement, why the file's refinement may
-    /// depend on something the cache's key leaves out (`None`: it can't).
-    /// Empty when the cache is off.
-    pub(crate) dependence: Vec<(AdapterId, Option<String>)>,
+    /// By recognizer asking for refinement, whether the file's refinement
+    /// can depend on something the cache's key leaves out. Empty when the
+    /// cache is off.
+    pub(crate) cacheability: Vec<(AdapterId, Cacheability)>,
 }
 
 /// A test file, and what the recognizers claiming it said about it.
@@ -59,7 +59,7 @@ impl Recognized {
             parsed: false,
             by: Vec::new(),
             digest: None,
-            dependence: Vec::new(),
+            cacheability: Vec::new(),
         }
     }
 }
@@ -85,7 +85,7 @@ impl Collector<'_> {
             parsed: false,
             by: Vec::new(),
             digest: None,
-            dependence: Vec::new(),
+            cacheability: Vec::new(),
         };
         let Some(source) = owned.as_ref().or_else(|| support.get(&job.file)) else {
             return recognized;
@@ -118,13 +118,13 @@ impl Collector<'_> {
                 if recognition.refine.is_none() {
                     continue;
                 }
-                let why = if source.is_lossy() {
-                    Some("it is not valid UTF-8".to_string())
+                let cacheability = if source.is_lossy() {
+                    Cacheability::Dependent("it is not valid UTF-8".to_string())
                 } else {
                     let scope = self.scope(self.recognizers[*i].0.as_str(), seen);
-                    standalone::dependence(file.module, &entry.abs, &scope)
+                    standalone::cacheability(file.module, &entry.abs, &scope)
                 };
-                recognized.dependence.push((*i, why));
+                recognized.cacheability.push((*i, cacheability));
             }
         }
         recognized
