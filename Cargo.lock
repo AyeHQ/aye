@@ -189,7 +189,6 @@ dependencies = [
  "aye-adapter",
  "aye-config",
  "aye-events",
- "aye-fs",
  "aye-protocol",
  "aye-pytest",
  "aye-python-semantic",

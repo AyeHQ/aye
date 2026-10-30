@@ -9,11 +9,12 @@
 //! diffs instead of two text blobs. Per-example re-runs and an `--accept`
 //! mode that rewrites expected output in place are planned.
 //!
-//! Depends on: aye-adapter, aye-config (`[tool.aye.doctest]`, the INI and
-//! TOML loaders, where a setting came from), aye-events, aye-fs (pytest's
-//! common ancestor), aye-protocol, aye-python-semantic (the `__main__`
-//! guard), aye-python-stdlib (`fnmatch`, `glob`, `os.path`, identifiers),
-//! aye-static (the variables it reads by name).
+//! Depends on: aye-adapter, aye-config (`[tool.aye.doctest]`, where a
+//! setting came from), aye-events, aye-protocol, aye-pytest (pytest's
+//! configuration, read approximately; its conftest rules),
+//! aye-python-semantic (the `__main__` guard), aye-python-stdlib
+//! (`fnmatch`, `glob`, `os.path`, identifiers), aye-static (the variables
+//! it reads by name).
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **This crate is the doctest adapter, and it is native**: it maps
@@ -22,9 +23,10 @@
 //!   so plain `pytest --doctest-modules` / `--doctest-glob` is the referee.
 //!   The executor (`python/aye_engine_doctest.py`) imports only the standard
 //!   library and runs on Python 3.10 and later, with or without pytest. The
-//!   crate also depends on `aye-config`, for its loaders and `[tool.aye]`,
-//!   on `aye-fs` for paths, and on `aye-static` for the variables it reads.
-//!   Per-example re-runs and `--accept` are not implemented yet.
+//!   crate reads pytest's configuration and conftest rules through
+//!   `aye-pytest`, `[tool.aye]` through `aye-config`, and the variables it
+//!   reads through `aye-static`. Per-example re-runs and `--accept` are not
+//!   implemented yet.
 //! - **Ids.** A module gives one case per `DocTest` with examples, named as
 //!   `DocTestFinder().find(module, module.__name__)` names it, in its order
 //!   (sorted by name): `pkg/mod.py::pkg.mod`, `pkg/mod.py::pkg.mod.func`,
@@ -310,7 +312,6 @@
 //!   asks for it.
 
 mod config;
-mod conftest;
 mod context;
 mod finder;
 mod parser;
@@ -329,6 +330,7 @@ use aye_events::{
     AdapterName, AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity, Span,
 };
 use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
+use aye_pytest::conftest;
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
 use aye_python_stdlib::glob;
 use aye_python_stdlib::identifier::is_ascii_identifier;

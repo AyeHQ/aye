@@ -11,12 +11,11 @@ use aye_python_stdlib::identifier::is_ascii_identifier;
 
 /// Hooks that may add marks to doctest items: `-k` and `-m` can't be
 /// evaluated on the source alone where one is in scope.
-pub(crate) const MARKING_HOOKS: [&str; 2] =
-    ["pytest_collection_modifyitems", "pytest_itemcollected"];
+pub const MARKING_HOOKS: [&str; 2] = ["pytest_collection_modifyitems", "pytest_itemcollected"];
 
 /// pytest's conftest rules for one run.
 #[derive(Debug, Clone)]
-pub(crate) struct Conftests {
+pub struct Conftests {
     /// No conftest is imported (`--noconftest`).
     pub disabled: bool,
     /// pytest's confcutdir: no conftest above it is imported.
@@ -25,7 +24,7 @@ pub(crate) struct Conftests {
 
 impl Conftests {
     /// pytest's `_is_in_confcutdir`: not strictly above the confcutdir.
-    pub(crate) fn in_confcutdir(&self, dir: &Path) -> bool {
+    pub fn in_confcutdir(&self, dir: &Path) -> bool {
         !self
             .confcutdir
             .ancestors()
@@ -35,7 +34,7 @@ impl Conftests {
 
     /// The conftests `_loadconftestmodules` imports for `dir`: each
     /// directory's from the top down, within the confcutdir.
-    pub(crate) fn chain(&self, dir: &Path) -> Vec<PathBuf> {
+    pub fn chain(&self, dir: &Path) -> Vec<PathBuf> {
         if self.disabled {
             return Vec::new();
         }
@@ -52,7 +51,7 @@ impl Conftests {
     /// it imports them: for each anchor (the collection roots that exist,
     /// and the `test*` directories of a directory among them; else `cwd`
     /// and its `test*` directories), the chain of its directory.
-    pub(crate) fn initial(&self, roots: &[PathBuf], cwd: &Path) -> Vec<PathBuf> {
+    pub fn initial(&self, roots: &[PathBuf], cwd: &Path) -> Vec<PathBuf> {
         if self.disabled {
             return Vec::new();
         }
@@ -108,7 +107,7 @@ fn test_dirs(dir: &Path) -> Vec<PathBuf> {
 
 /// Whether a conftest is in a package (pytest's `resolve_package_path`
 /// finds one): pytest imports it as `package.conftest`, not as `conftest`.
-pub(crate) fn in_package(conftest: &Path) -> bool {
+pub fn in_package(conftest: &Path) -> bool {
     conftest.parent().is_some_and(|dir| {
         dir.join("__init__.py").is_file()
             && dir.file_name().is_some_and(|name| {
@@ -121,7 +120,7 @@ pub(crate) fn in_package(conftest: &Path) -> bool {
 
 /// Whether `source` names `hook` (as a definition, or anywhere: a hook may
 /// be bound by assignment).
-pub(crate) fn names_hook(source: &str, hook: &str) -> bool {
+pub fn names_hook(source: &str, hook: &str) -> bool {
     let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
     source.match_indices(hook).any(|(at, _)| {
         !source[..at].chars().next_back().is_some_and(word)

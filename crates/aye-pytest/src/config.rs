@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::ini::{self, ini_section};
+
+pub mod approximate;
 use aye_adapter::{AdapterError, Project, Setting};
 use aye_config::{Sourced, ValueSource, read_toml, split_args};
 use aye_fs::common_ancestor;

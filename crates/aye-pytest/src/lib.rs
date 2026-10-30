@@ -12,6 +12,7 @@
 //! Only the adapters and the binary depend on it.
 
 pub mod config;
+pub mod conftest;
 pub mod env;
 pub mod getini;
 pub mod ini;
