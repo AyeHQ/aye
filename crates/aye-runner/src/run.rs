@@ -11,7 +11,7 @@
 //! are the crate's `listing.rs`; refinement itself, its `refine.rs`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::atomic::AtomicU32;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
@@ -39,7 +39,7 @@ mod log;
 mod maxfail;
 mod message;
 
-use log::Log;
+use log::{Log, RunPhase};
 use maxfail::Busy;
 
 /// Runs plans on workers, and refines files on them.
@@ -133,9 +133,6 @@ impl Runner {
                 ..RunSummary::default()
             },
             running: HashMap::new(),
-            halted: false,
-            killed: false,
-            kill_at: None,
         };
         if self.stop.is_stopped() {
             log.summary.interrupted = true;
@@ -270,7 +267,7 @@ impl Runner {
             queue,
             busy: Mutex::new(HashMap::new()),
             bad: AtomicU32::new(0),
-            killing: AtomicBool::new(false),
+            phase: Mutex::new(RunPhase::Running),
             spec,
             policy: &policy,
             plan,
@@ -293,16 +290,18 @@ impl Runner {
             }
             drop(tx);
             loop {
-                if self.stop.is_stopped() && !log.killed {
+                let phase = shared.phase();
+                if self.stop.is_stopped() && phase != RunPhase::Killed {
                     // Also after `maxfail`: Ctrl-C ends a teardown it waits for.
-                    if !log.halted {
+                    if !phase.stops_workers() {
                         log.summary.interrupted = true;
                         log.stop(StopReason::Interrupted);
                     }
-                    log.kill(&shared);
+                    shared.halt();
                 }
-                if !log.killed && log.kill_at.is_some_and(|at| Instant::now() >= at) {
-                    log.kill_at = None;
+                if let RunPhase::WindingDown { kill_at: Some(at) } = shared.phase()
+                    && Instant::now() >= at
+                {
                     shared.kill_interrupted();
                 }
                 match rx.recv_timeout(POLL) {
@@ -350,9 +349,10 @@ struct Shared<'a> {
     /// own count; lanes read this one to stop taking batches without
     /// waiting for it, and to size each batch's `maxfail`.
     bad: AtomicU32,
-    /// The run stops its busy workers (`maxfail`, the stop handle), so a
-    /// worker's death is no crash.
-    killing: AtomicBool,
+    /// Where the run is: the log thread moves it on as it stops the run,
+    /// and a lane whose batch the framework stopped; the lanes read it
+    /// before they start anything, and the log for every record.
+    phase: Mutex<RunPhase>,
     spec: WorkerSpec,
     /// The plan's, with `maxfail` 0 made `None`.
     policy: &'a Policy,
@@ -376,6 +376,10 @@ struct Shared<'a> {
 }
 
 impl Shared<'_> {
+    fn phase(&self) -> RunPhase {
+        *lock(&self.phase)
+    }
+
     /// Whether `adapter`'s executor lists the session.
     fn lists_session(&self, adapter: &AdapterName) -> bool {
         self.spec

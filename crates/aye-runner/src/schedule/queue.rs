@@ -239,10 +239,6 @@ impl Queue {
         self.changed.notify_all();
     }
 
-    pub(crate) fn is_halted(&self) -> bool {
-        lock(&self.state).halted
-    }
-
     /// Take every batch still pending: the ids that were never handed out.
     pub(crate) fn drain(&self) -> Vec<TestId> {
         let mut state = lock(&self.state);
@@ -558,6 +554,6 @@ mod tests {
         thread::sleep(ms(20));
         q.halt();
         assert_eq!(waiter.join().unwrap(), None);
-        assert!(q.is_halted());
+        assert_eq!(q.take(lane(0), None), None);
     }
 }

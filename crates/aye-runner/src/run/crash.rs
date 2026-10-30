@@ -2,7 +2,6 @@
 //! errors made for those it cut short, and the re-queue.
 
 use std::collections::HashSet;
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use aye_events::{
@@ -51,7 +50,7 @@ impl Shared<'_> {
                 error,
             });
         };
-        if self.killing.load(Ordering::SeqCst) || self.stop.is_stopped() {
+        if self.phase().stops_workers() || self.stop.is_stopped() {
             // Killed by the stop, or dead meanwhile: nothing to recover.
             closing(BatchEnd::Stopped, None, track.remaining(&batch.spec.ids));
             return;

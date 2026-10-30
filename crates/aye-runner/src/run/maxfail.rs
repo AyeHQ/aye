@@ -1,14 +1,18 @@
-//! `maxfail` across the lanes, and how the run stops their busy workers:
-//! interrupted when `maxfail` runs out, killed when the run is stopped.
+//! `maxfail` across the lanes, and how the run stops: the run's
+//! [`RunPhase`] as the framework stops a batch, as `maxfail` runs out (the
+//! busy workers interrupted) and as the run is stopped (killed).
 
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use aye_events::{Event, Record, WorkerIndex};
 
 use crate::sync::lock;
 use crate::worker::Killer;
+use crate::worker::timeouts::INTERRUPT_GRACE;
 
 use super::Shared;
+use super::log::RunPhase;
 use super::message::Message;
 
 /// A busy worker, and how the run is stopping it.
@@ -29,9 +33,21 @@ enum Stopping {
 }
 
 impl Shared<'_> {
+    /// The framework stopped a batch, ending its session there: hand
+    /// nothing more out.
+    pub(super) fn framework_stopped(&self) {
+        {
+            let mut phase = lock(&self.phase);
+            if *phase == RunPhase::Running {
+                *phase = RunPhase::FrameworkStopped;
+            }
+        }
+        self.queue.halt();
+    }
+
     /// Hand nothing more out and kill the busy workers (the stop handle).
     pub(super) fn halt(&self) {
-        self.killing.store(true, Ordering::SeqCst);
+        *lock(&self.phase) = RunPhase::Killed;
         self.queue.halt();
         #[expect(
             clippy::iter_over_hash_type,
@@ -46,10 +62,12 @@ impl Shared<'_> {
     /// batches as pytest's `-x` ends a session, tearing down. A worker
     /// whose batch reached its own `maxfail` ends it by itself; the others
     /// are interrupted (SIGINT, a `KeyboardInterrupt`; killed where there is
-    /// none) and killed if still busy after [`INTERRUPT_GRACE`](crate::worker::timeouts::INTERRUPT_GRACE)
+    /// none) and killed if still busy after [`INTERRUPT_GRACE`]
     /// ([`Shared::kill_interrupted`]).
     pub(super) fn wind_down(&self) {
-        self.killing.store(true, Ordering::SeqCst);
+        *lock(&self.phase) = RunPhase::WindingDown {
+            kill_at: Some(Instant::now() + INTERRUPT_GRACE),
+        };
         self.queue.halt();
         #[expect(
             clippy::iter_over_hash_type,
@@ -63,9 +81,12 @@ impl Shared<'_> {
         }
     }
 
-    /// Kill the workers [`Shared::wind_down`] interrupted that are still
-    /// busy.
+    /// The grace after `maxfail` is over: kill the workers
+    /// [`Shared::wind_down`] interrupted that are still busy, once.
     pub(super) fn kill_interrupted(&self) {
+        if let RunPhase::WindingDown { kill_at } = &mut *lock(&self.phase) {
+            *kill_at = None;
+        }
         #[expect(
             clippy::iter_over_hash_type,
             reason = "signals every busy worker; which goes first is not observable"
@@ -99,9 +120,10 @@ impl Shared<'_> {
         }
     }
 
-    /// Whether the run is stopping: halted, or its stop handle used.
+    /// Whether the run is stopping: it hands nothing more out, or its stop
+    /// handle was used.
     pub(super) fn stopping(&self) -> bool {
-        self.queue.is_halted() || self.stop.is_stopped()
+        !self.phase().hands_out() || self.stop.is_stopped()
     }
 
     /// Mark a worker idle; whether the run interrupted it.

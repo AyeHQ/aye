@@ -51,7 +51,7 @@ impl Shared<'_> {
                 let verdict = Verdict::of(status, track.stopped, track.clean());
                 if verdict.stop {
                     // pytest ends its session there; so does the run.
-                    self.queue.halt();
+                    self.framework_stopped();
                 }
                 let cut =
                     interrupted || verdict.stop || maxfail.is_some_and(|max| track.bad >= max);

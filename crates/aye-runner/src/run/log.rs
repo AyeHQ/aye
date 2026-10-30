@@ -10,7 +10,6 @@ use aye_events::{
 };
 
 use crate::summary::{BatchSummary, RunSummary};
-use crate::worker::timeouts::INTERRUPT_GRACE;
 
 use super::Shared;
 use super::message::Message;
@@ -23,14 +22,41 @@ pub(super) struct Log<'a> {
     pub(super) summary: RunSummary,
     /// Each batch between its started and finished.
     pub(super) running: HashMap<BatchIndex, Running>,
-    /// The run stopped (`maxfail`, the stop handle): workers' records are
-    /// dropped.
-    pub(super) halted: bool,
-    /// The run killed every busy worker (the stop handle).
-    pub(super) killed: bool,
-    /// When `maxfail` ran out: when the workers it interrupted are killed,
-    /// if they are still busy.
-    pub(super) kill_at: Option<Instant>,
+}
+
+/// Where a run is: whether the lanes hand anything more out, and what the
+/// log does with the records they send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RunPhase {
+    /// Batches are handed out, and every record counts.
+    Running,
+    /// The framework stopped a batch (a `batch-stopped` error, pytest's
+    /// status 2), ending its session there: nothing more is handed out, and
+    /// the batches already running finish, their records counted.
+    FrameworkStopped,
+    /// `maxfail` ran out: nothing more is handed out, and the busy workers
+    /// end their batches, tearing down, their records dropped but those
+    /// that close lifetimes the log holds open ([`Shared::wind_down`]). The
+    /// workers the run interrupted are killed at `kill_at` if still busy;
+    /// `None` once they were.
+    WindingDown { kill_at: Option<Instant> },
+    /// The stop handle was used: the busy workers were killed, and their
+    /// records are dropped ([`Shared::halt`]).
+    Killed,
+}
+
+impl RunPhase {
+    /// Whether the lanes may start a batch.
+    pub(super) fn hands_out(self) -> bool {
+        self == Self::Running
+    }
+
+    /// Whether the run is stopping its busy workers (`maxfail`, the stop
+    /// handle): their records are dropped, and a worker's death is no
+    /// crash.
+    pub(super) fn stops_workers(self) -> bool {
+        matches!(self, Self::WindingDown { .. } | Self::Killed)
+    }
 }
 
 /// A batch the log has seen start.
@@ -76,13 +102,6 @@ impl Log<'_> {
     fn forward(&mut self, record: Record) {
         let record = self.stamper.stamp(record);
         (self.on_record)(record);
-    }
-
-    /// Stop at once: kill every busy worker.
-    pub(super) fn kill(&mut self, shared: &Shared<'_>) {
-        self.halted = true;
-        self.killed = true;
-        shared.halt();
     }
 
     /// Record why the run stops; the first reason stays.
@@ -144,7 +163,7 @@ impl Log<'_> {
                     .envelope
                     .batch
                     .and_then(|batch| self.running.get_mut(&batch));
-                if self.halted {
+                if shared.phase().stops_workers() {
                     // Batches tear down as they end, as pytest's `-x` and
                     // unittest's `-f` do: what closes the lifetimes the log
                     // holds open still counts, with its failure, but for the
@@ -186,8 +205,6 @@ impl Log<'_> {
                 if bad && maxfail.is_some_and(|max| self.summary.counts.bad() >= max) {
                     self.summary.stopped_early = true;
                     self.stop(StopReason::Maxfail);
-                    self.halted = true;
-                    self.kill_at = Some(Instant::now() + INTERRUPT_GRACE);
                     shared.wind_down();
                 }
             }
@@ -198,7 +215,7 @@ impl Log<'_> {
                 path,
                 message,
             } => {
-                if self.halted {
+                if shared.phase().stops_workers() {
                     return;
                 }
                 self.summary.internal_error = true;
@@ -219,7 +236,7 @@ impl Log<'_> {
                 self.summary.crashes.push(crash);
             }
             Message::Warning { worker, diagnostic } => {
-                if !self.halted {
+                if !shared.phase().stops_workers() {
                     self.deliver(Some(worker), None, Event::Diagnostic(diagnostic));
                 }
             }
@@ -231,9 +248,9 @@ impl Log<'_> {
                 verdict,
                 not_run,
             } => {
-                // Once the run has halted, the batch's records were dropped:
-                // its status counts no more than they do.
-                if !self.halted {
+                // Once the run stops its workers, the batch's records were
+                // dropped: its status counts no more than they do.
+                if !shared.phase().stops_workers() {
                     self.summary.internal_error |= verdict.internal_error;
                     self.summary.framework_failed |= verdict.failed;
                 }
