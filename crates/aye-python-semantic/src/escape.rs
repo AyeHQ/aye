@@ -10,6 +10,7 @@ use ruff_python_ast::{
 };
 use ruff_text_size::{Ranged, TextSize};
 
+use crate::framework::Framework;
 use crate::hash::{FastMap, FastSet};
 use crate::namespace::{
     Binding, Bound, MUTATORS, Namespace, children, evaluated, pattern_captures, walrus_targets,
@@ -356,20 +357,17 @@ fn is_dunder(name: &str) -> bool {
     name.len() > 4 && name.starts_with("__") && name.ends_with("__")
 }
 
-/// Decorators known to neither call the function they get nor rename it.
-fn harmless_decorator(path: Option<&str>) -> bool {
+/// Decorators known to neither call the function they get nor rename it:
+/// Python's, and the framework's.
+fn harmless_decorator(path: Option<&str>, framework: &Framework) -> bool {
     let Some(path) = path else {
         return false;
     };
-    [
-        "pytest.",
-        "_pytest.",
-        "unittest.mock.patch",
-        "mock.patch",
-        "unittest.skip",
-    ]
-    .iter()
-    .any(|prefix| path.starts_with(prefix))
+    framework
+        .harmless_decorators
+        .iter()
+        .chain(&["unittest.mock.patch", "mock.patch", "unittest.skip"])
+        .any(|prefix| path.starts_with(prefix))
         || matches!(
             path,
             "abc.abstractmethod"
@@ -407,13 +405,22 @@ fn known_path<'a>(expr: &'a Expr, scope: Lookup<'_, 'a>) -> Option<String> {
         Some(Bound {
             binding: Binding::Import(path),
             ..
-        }) if !["pytest", "_pytest", "copy"]
-            .contains(&path.split('.').next().unwrap_or_default()) =>
+        }) if !callee_reads(
+            path.split('.').next().unwrap_or_default(),
+            &scope.module.framework,
+        ) =>
         {
             Some(String::new())
         }
         _ => scope.path(expr),
     }
+}
+
+/// Whether [`callee`] has something to say about calls through the
+/// package `head`: `copy`'s (`copy.copy`, `copy.deepcopy`), and the
+/// framework's.
+fn callee_reads(head: &str, framework: &Framework) -> bool {
+    head == "copy" || framework.packages.contains(&head)
 }
 
 /// What a decorator expression resolves to (the callee, for a call).
@@ -564,8 +571,8 @@ enum Trigger<'a> {
     /// The analyzed body itself.
     Root,
     /// Whenever the code defining it runs: lambdas, functions whose
-    /// decorators may call them, dunder methods Python or pytest calls on
-    /// their own, hooks.
+    /// decorators may call them, dunder methods Python or the framework
+    /// calls on their own, the framework's hooks.
     Always,
     /// A function: when code that runs uses its name.
     Named(&'a str),
@@ -651,7 +658,8 @@ pub(crate) struct Found<'a> {
 
 /// How a call treats its arguments.
 enum Callee {
-    /// Keeps them, never changes them (`pytest.mark.*`, `pytest.param`).
+    /// Keeps them, never changes them: the framework's marks and its
+    /// [`Framework::inert_calls`] (`pytest.mark.*`, `pytest.param`).
     Inert,
     /// Reads them.
     Operand,
@@ -1239,7 +1247,10 @@ impl<'s, 'a> Escapes<'s, 'a> {
         let mut harmless = true;
         for decorator in &def.decorator_list {
             self.expr(&decorator.expression, &Sink::inert(), scope);
-            harmless &= harmless_decorator(decorator_path(&decorator.expression, scope).as_deref());
+            harmless &= harmless_decorator(
+                decorator_path(&decorator.expression, scope).as_deref(),
+                &self.module.framework,
+            );
         }
         let id = def.start();
         self.parameters(&def.parameters, id, scope);
@@ -1248,17 +1259,18 @@ impl<'s, 'a> Escapes<'s, 'a> {
         }
         let name = def.name.id.as_str();
         self.global_write(name, None);
-        // Python calls dunder methods on its own (and pytest instantiates
-        // test classes and reads their attributes while collecting); pytest
-        // calls hooks.
+        // Python calls dunder methods on its own (and a framework may
+        // instantiate test classes and read their attributes while it
+        // collects); the framework calls its hooks.
         let implicit = is_dunder(name) && !EXPLICIT_DUNDERS.contains(&name);
-        let trigger = if !harmless || implicit || (self.top() && name.starts_with("pytest_")) {
-            Trigger::Always
-        } else if let Some(class) = self.class {
-            Trigger::Method(class, name)
-        } else {
-            Trigger::Named(name)
-        };
+        let trigger =
+            if !harmless || implicit || (self.top() && self.module.framework.is_hook(name)) {
+                Trigger::Always
+            } else if let Some(class) = self.class {
+                Trigger::Method(class, name)
+            } else {
+                Trigger::Named(name)
+            };
         let operand_params = if implicit && !NO_OPERAND_DUNDERS.contains(&name) {
             def.parameters
                 .iter()
@@ -1290,8 +1302,10 @@ impl<'s, 'a> Escapes<'s, 'a> {
         let mut handed = false;
         for decorator in &class.decorator_list {
             self.expr(&decorator.expression, &Sink::inert(), scope);
-            let harmless =
-                harmless_decorator(decorator_path(&decorator.expression, scope).as_deref());
+            let harmless = harmless_decorator(
+                decorator_path(&decorator.expression, scope).as_deref(),
+                &self.module.framework,
+            );
             intrinsic |= !harmless;
             handed |= !harmless;
         }
@@ -1650,7 +1664,7 @@ impl<'s, 'a> Escapes<'s, 'a> {
             Some("builtins.setattr" | "builtins.delattr") => self.setattr(arguments, scope),
             _ => {}
         }
-        let callee = callee(call, path.as_deref());
+        let callee = callee(call, path.as_deref(), &self.module.framework);
         match &*call.func {
             Expr::Name(name) => self.load(name.id.as_str(), &Sink::inert(), scope),
             // A method of a value.
@@ -2122,7 +2136,7 @@ fn function_locals<'a>(parameters: Option<&'a Parameters>, body: &'a [Stmt]) -> 
 }
 
 /// How a call treats its arguments.
-fn callee(call: &ExprCall, path: Option<&str>) -> Callee {
+fn callee(call: &ExprCall, path: Option<&str>, framework: &Framework) -> Callee {
     if let Expr::Attribute(attr) = &*call.func {
         // `str` and `bytes` methods keep and change none of their arguments.
         if matches!(
@@ -2140,11 +2154,7 @@ fn callee(call: &ExprCall, path: Option<&str>) -> Callee {
         }
     }
     match path {
-        Some(p)
-            if p.starts_with("pytest.mark.") || matches!(p, "pytest.param" | "pytest.fixture") =>
-        {
-            Callee::Inert
-        }
+        Some(p) if framework.is_inert(p) => Callee::Inert,
         Some(p) if READ_BUILTINS.contains(&p) => Callee::Operand,
         Some(p) if FLOW_BUILTINS.contains(&p) && call.arguments.keywords.is_empty() => Callee::Flow,
         _ => Callee::Unknown,

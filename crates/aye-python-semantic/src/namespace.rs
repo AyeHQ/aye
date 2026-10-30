@@ -3,12 +3,12 @@
 //! A name counts as a constant only when nothing that runs while the module
 //! is imported (and collected) can change its value. [`Namespace::build`]
 //! therefore runs a conservative escape analysis over the whole body: every
-//! use of a name other than a read it understands (an argument of a
-//! `pytest.mark` call, an operand, an element of a literal bound to another
-//! name, which then shares its fate) marks the value as possibly changed.
-//! Function bodies count only when they may run during the import: when
-//! their name is used by code that runs, or their decorators, dunder name or
-//! class make Python or pytest call them.
+//! use of a name other than a read it understands (an argument of a call
+//! the framework keeps, such as pytest's marks, an operand, an element of a
+//! literal bound to another name, which then shares its fate) marks the
+//! value as possibly changed. Function bodies count only when they may run
+//! during the import: when their name is used by code that runs, or their
+//! decorators, dunder name or class make Python or the framework call them.
 //!
 //! A value bound in a class body is reachable as an attribute of anything
 //! (`H.x`, `cls.x`, `P().x`), so it shares the fate of every attribute of
@@ -50,6 +50,7 @@ use ruff_python_ast::{Expr, Identifier, Operator, Pattern, Stmt, StmtClassDef, S
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::escape::{Escaped, Escapes, Found};
+use crate::framework::Framework;
 use crate::hash::{FastMap, FastSet};
 
 /// A `__test__` setting: absent, a literal, or computed at runtime.
@@ -136,6 +137,8 @@ pub struct Namespace<'a> {
     pub(crate) origin: Option<TextSize>,
     /// What the escape analysis found.
     pub(crate) escapes: Escaped<'a>,
+    /// What the framework collecting the module does with it.
+    pub(crate) framework: Framework,
     /// Code that runs reaches module namespaces in ways aye can't follow
     /// (`sys.modules[name]` for a computed name, frames, `gc`): this
     /// module's names may change, and any module's attributes.
@@ -160,9 +163,11 @@ pub(crate) const MUTATORS: [&str; 14] = [
 ];
 
 impl<'a> Namespace<'a> {
-    /// The namespace a body builds, with the escape analysis's verdicts.
-    pub fn build(body: &'a [Stmt]) -> Self {
+    /// The namespace a body builds, with the escape analysis's verdicts,
+    /// for the framework that collects the module.
+    pub fn build(body: &'a [Stmt], framework: Framework) -> Self {
         let mut ns = Self::without_escapes(body);
+        ns.framework = framework;
         let found = Escapes::analyze(&ns, body);
         ns.apply(found);
         ns

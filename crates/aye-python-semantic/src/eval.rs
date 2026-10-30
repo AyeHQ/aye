@@ -13,7 +13,8 @@ use ruff_text_size::Ranged;
 use crate::namespace::{Binding, Bound, Namespace};
 use crate::resolve::{DEPTH, Lookup, Resolved};
 
-/// A statically known parameter value, as far as ids are concerned.
+/// A statically known value, as far as its type and what `str()`,
+/// `repr()` or `__name__` give of it go: what pytest's ids are made of.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Str(String),
@@ -38,9 +39,9 @@ pub enum Value {
     Unknown,
 }
 
-/// Callables whose results have no id of their own: not strings, bytes,
-/// numbers, booleans, patterns or enums, and no `__name__`. pytest falls
-/// back to `argname + index` for them.
+/// Callables whose results are [`Value::Opaque`]: not strings, bytes,
+/// numbers, booleans, patterns or enums, and no `__name__` (pytest's ids
+/// fall back to `argname + index` for them).
 pub(crate) const NO_ID: &[&str] = &[
     "builtins.object",
     "builtins.dict",
@@ -210,7 +211,7 @@ impl<'s, 'a> Lookup<'s, 'a> {
             ),
             Expr::Attribute(_) => self
                 .path(expr)
-                .is_some_and(|p| p.starts_with("pytest.mark.")),
+                .is_some_and(|p| self.module.framework.is_mark(&p)),
             _ => false,
         }
     }
@@ -234,7 +235,7 @@ impl<'s, 'a> Lookup<'s, 'a> {
             })
     }
 
-    /// Evaluate an expression to a value pytest can make an id from.
+    /// Evaluate an expression to its static value.
     pub fn value(&self, expr: &'a Expr) -> Result<Value, Unknown> {
         self.value_depth(expr, 0)
     }
@@ -407,7 +408,7 @@ impl<'s, 'a> Lookup<'s, 'a> {
         }
         if decorators.iter().all(|d| {
             self.path(&d.expression)
-                .is_some_and(|p| p.starts_with("pytest.mark."))
+                .is_some_and(|p| self.module.framework.is_mark(&p))
         }) {
             Ok(Value::Named(name.to_string()))
         } else {
@@ -1348,7 +1349,7 @@ impl DictKey {
 }
 
 /// Whether `re.compile` surely accepts a pattern, `str` or `bytes`, on
-/// every Python pytest 9.1.1 supports.
+/// every Python aye supports.
 fn regex_compiles(pattern: &Value) -> bool {
     match pattern {
         Value::Str(s) => re::compiles(s),

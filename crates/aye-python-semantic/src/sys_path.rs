@@ -22,12 +22,29 @@ pub struct SysPath {
     pub unknown: bool,
 }
 
-/// The visitor behind [`SysPath`]: module-level code and hooks (functions
-/// named `pytest_*`), which run before or while pytest collects.
-pub struct SysPathVisitor<'s, 'a> {
-    pub lookup: Lookup<'s, 'a>,
-    pub file: PathBuf,
-    pub out: SysPath,
+impl SysPath {
+    /// What `body`, a module's, puts on `sys.path` while it runs and while
+    /// the framework collects, its names resolved by `lookup`; `file` is
+    /// the module's `__file__`.
+    pub fn read<'a>(body: &'a [Stmt], lookup: Lookup<'_, 'a>, file: PathBuf) -> Self {
+        let mut visitor = SysPathVisitor {
+            lookup,
+            file,
+            out: Self::default(),
+        };
+        for stmt in body {
+            visitor.visit_stmt(stmt);
+        }
+        visitor.out
+    }
+}
+
+/// The visitor behind [`SysPath`]: module-level code and the framework's
+/// hooks (pytest's `pytest_*`), which run before or while it collects.
+struct SysPathVisitor<'s, 'a> {
+    lookup: Lookup<'s, 'a>,
+    file: PathBuf,
+    out: SysPath,
 }
 
 impl<'a> SysPathVisitor<'_, 'a> {
@@ -154,9 +171,13 @@ impl<'a> SysPathVisitor<'_, 'a> {
 impl<'a> Visitor<'a> for SysPathVisitor<'_, 'a> {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
         match stmt {
-            // Only hooks run while pytest collects; fixtures and helpers
-            // run later, if at all.
-            Stmt::FunctionDef(def) if !def.name.id.as_str().starts_with("pytest_") => return,
+            // Only hooks run while the framework collects; fixtures and
+            // helpers run later, if at all.
+            Stmt::FunctionDef(def)
+                if !self.lookup.module.framework.is_hook(def.name.id.as_str()) =>
+            {
+                return;
+            }
             Stmt::ClassDef(_) => return,
             Stmt::Assign(assign) => {
                 for target in &assign.targets {

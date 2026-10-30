@@ -478,6 +478,7 @@ use aye_adapter::{
 use aye_config::ValueSource;
 use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 use aye_protocol::AdapterContext;
+use aye_python_semantic::framework::Framework;
 use aye_python_semantic::module_resolver::{absolute_imports, find_module, found_in};
 use aye_python_semantic::namespace::Namespace;
 use aye_python_semantic::sys_path::SysPath;
@@ -502,6 +503,20 @@ use crate::support::{Summary, Supports};
 /// differs from CPython for a set whose first item is a reversed range
 /// followed by `!`.
 pub(crate) const SETS: SetTranslation = SetTranslation::Legacy;
+
+/// What pytest does with a module's code, for aye-python-semantic's
+/// readings of it: marks and `pytest.param` keep their arguments, its own
+/// decorators leave a function alone, it calls `pytest_*` hooks while it
+/// collects, and `pytest.skip` or `pytest.importorskip` at import skips
+/// the module.
+pub(crate) const PYTEST: Framework = Framework {
+    packages: &["pytest", "_pytest"],
+    marks: Some("pytest.mark."),
+    inert_calls: &["pytest.param", "pytest.fixture"],
+    harmless_decorators: &["pytest.", "_pytest."],
+    hooks: Some("pytest_"),
+    skips: &["pytest.skip", "pytest.importorskip"],
+};
 
 /// The pytest adapter's static face for one project.
 #[derive(Debug)]
@@ -1856,7 +1871,7 @@ impl Recognizer for PytestRecognizer {
         // Fixtures the test module imports from project files register
         // with its own.
         let dir = file.abs.parent().unwrap_or(file.abs);
-        let mut namespace = Namespace::build(&file.module.body);
+        let mut namespace = Namespace::build(&file.module.body, PYTEST);
         // What support files do to modules holds here too.
         namespace.assume_patched(scope.patched.iter().cloned(), scope.reflective);
         if !module::reached(&namespace, &scope, file.rel.as_str()).is_empty() {

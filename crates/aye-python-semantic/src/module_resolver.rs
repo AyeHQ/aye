@@ -8,10 +8,10 @@ use ruff_python_ast::visitor::{self, Visitor};
 use ruff_python_ast::{ModModule, Stmt};
 
 /// A module name as code in `dir` imports it: relative to `dir`'s package
-/// when it starts with dots, else from `sys.path` as pytest's import mode
-/// leaves it: the directory `prepend` puts first for `dir` (its package
-/// base), then `bases`; with `append` and `importlib` (`bases_first`),
-/// `bases` first, then that directory (where `append` puts it, and the
+/// when it starts with dots, else from `sys.path` as the importer leaves
+/// it: `own` (`dir`'s package base, which pytest's `prepend` import mode
+/// puts first), then `bases`; with `bases_first` (pytest's `append` and
+/// `importlib`), `bases` first, then `own` (where `append` puts it, and the
 /// last place `importlib` could find it).
 pub fn resolve_from(
     name: &str,
@@ -88,8 +88,9 @@ pub fn found_in(path: &str, dirs: &[PathBuf]) -> bool {
     (1..=parts.len()).any(|split| resolve_module(&parts[..split].join("."), dirs).is_some())
 }
 
-/// The directory pytest's `prepend` import mode puts on `sys.path` for a
-/// module in `dir`: the first ancestor that is not a package.
+/// The directory above the packages that hold `dir`: its first ancestor,
+/// itself included, that is not a package (what pytest's `prepend` import
+/// mode puts on `sys.path` for a module in `dir`).
 pub fn package_base(dir: &Path) -> PathBuf {
     let mut base = dir;
     while base.join("__init__.py").is_file() {

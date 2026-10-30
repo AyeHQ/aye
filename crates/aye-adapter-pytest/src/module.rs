@@ -21,12 +21,12 @@ use aye_python_semantic::resolve::{Lookup, Resolved};
 use aye_python_stdlib::fnmatch::matches_prefix_or_glob;
 use aye_python_stdlib::unittest::{KNOWN_BASES, RUNTEST_BASES, TESTCASE_ROOTS};
 
-use crate::SETS;
 use crate::ids::{IdOptions, parameterset_ids};
 use crate::marks::{self, Decorator, EmptyMark, Mark, MarkList, Scoped, SetTimeout, decorator};
 use crate::support::{
     BUILTIN_FIXTURES, FixtureDef, MARKING_HOOKS, REFINING_HOOKS, default_argnames, fixture_of,
 };
+use crate::{PYTEST, SETS};
 
 /// The configuration recognition depends on.
 #[derive(Debug, Clone)]
@@ -483,7 +483,7 @@ fn class_namespaces<'a>(
                     class.start(),
                     ClassInfo {
                         def: class,
-                        ns: Namespace::build(&class.body),
+                        ns: Namespace::build(&class.body, PYTEST),
                         site,
                     },
                 );

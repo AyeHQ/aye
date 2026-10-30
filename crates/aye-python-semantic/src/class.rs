@@ -115,8 +115,9 @@ pub fn external_kind(path: &str) -> Option<External> {
     })
 }
 
-/// Whether `path` names one of the unittest base classes pytest's unittest
-/// plugin knows.
+/// Whether `path` names one of the unittest bases aye knows without
+/// reading them: `TestCase` and its standard library subclass,
+/// `FunctionTestCase`, and the [`KNOWN_BASES`] of installed packages.
 pub fn is_unittest_base(path: &str) -> bool {
     TESTCASE_ROOTS.contains(&path) || KNOWN_BASES.contains(&path) || RUNTEST_BASES.contains(&path)
 }

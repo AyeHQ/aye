@@ -65,9 +65,11 @@ pub fn is_main_guard(test: &Expr) -> bool {
     (is_name(&cmp.left) && is_main(right)) || (is_main(&cmp.left) && is_name(right))
 }
 
-/// A `pytest.skip` or `pytest.importorskip` call that runs while the module
-/// is imported, in its body or a class body: pytest then skips the whole
-/// module, depending on the environment.
+/// A call to one of the framework's
+/// [`skips`](crate::framework::Framework::skips)
+/// (`pytest.skip`, `pytest.importorskip`) that runs while the module is
+/// imported, in its body or a class body: the framework then skips the
+/// whole module, depending on the environment.
 pub fn import_time_skip<'a>(body: &'a [Stmt], lookup: Lookup<'_, 'a>) -> Option<String> {
     use ast::visitor::{Visitor, walk_expr, walk_stmt};
 
@@ -87,7 +89,7 @@ pub fn import_time_skip<'a>(body: &'a [Stmt], lookup: Lookup<'_, 'a>) -> Option<
             }
             if let Expr::Call(call) = expr
                 && let Some(path) = self.lookup.path(&call.func)
-                && matches!(path.as_str(), "pytest.skip" | "pytest.importorskip")
+                && self.lookup.module.framework.skips.contains(&path.as_str())
             {
                 self.found = Some(path);
                 return;
@@ -110,8 +112,8 @@ pub fn import_time_skip<'a>(body: &'a [Stmt], lookup: Lookup<'_, 'a>) -> Option<
 /// raise, described: a call to a callable aye evaluates, with literal
 /// arguments it can't confirm are accepted (`X = range(0, 3, 0)`), a
 /// division of literals by zero, a `raise` statement (pytest skips the
-/// module for `unittest.SkipTest`), or an `assert` of a false literal.
-/// pytest reports the error as the module's collection error.
+/// module for `unittest.SkipTest`), or an `assert` of a false literal: the
+/// module fails to import (pytest reports a collection error).
 pub fn import_time_raise<'a>(body: &'a [Stmt], lookup: Lookup<'_, 'a>) -> Option<String> {
     use ast::visitor::{Visitor, walk_expr, walk_stmt};
 

@@ -18,8 +18,9 @@ use aye_python_semantic::flow::{exclusive, guarded_by_try, import_time_skip};
 use aye_python_semantic::module_resolver::{package_base, resolve_from};
 use aye_python_semantic::namespace::{Binding, Bound, Flag, Namespace, OpKind};
 use aye_python_semantic::resolve::{Lookup, Resolved};
-use aye_python_semantic::sys_path::{SysPath, SysPathVisitor};
+use aye_python_semantic::sys_path::SysPath;
 
+use crate::PYTEST;
 use crate::marks::{Decorator, Scoped, decorator};
 
 /// A fixture definition, as far as parametrization is concerned.
@@ -831,7 +832,7 @@ pub(crate) const MARKING_HOOKS: [&str; 2] =
 
 impl Summary {
     pub(crate) fn build(dir: &Path, source: &str, module: &ModModule) -> Self {
-        Self::of_namespace(dir, source, module, &Namespace::build(&module.body))
+        Self::of_namespace(dir, source, module, &Namespace::build(&module.body, PYTEST))
     }
 
     /// [`Summary::build`] with the module's namespace already built.
@@ -1056,16 +1057,8 @@ impl Summary {
             })
         };
         if may_change_path {
-            let mut visitor = SysPathVisitor {
-                lookup,
-                // Only its directory matters to what it adds.
-                file: dir.join("__file__.py"),
-                out: SysPath::default(),
-            };
-            for stmt in &module.body {
-                visitor.visit_stmt(stmt);
-            }
-            out.sys_path = visitor.out;
+            // Only its directory matters to what it adds.
+            out.sys_path = SysPath::read(&module.body, lookup, dir.join("__file__.py"));
         }
         out
     }

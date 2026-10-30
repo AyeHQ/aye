@@ -6,6 +6,8 @@
 //! imported can change it, so every reading is conservative, and says
 //! when it can't tell.
 //!
+//! - [`framework`]: what the framework collecting a module does with it
+//!   that Python doesn't, which every reading below takes as given.
 //! - [`namespace`]: a module's or class body's namespace in dict order,
 //!   each name's bindings with the branches they sit in, and the escape
 //!   analysis's verdicts on it.
@@ -27,7 +29,8 @@
 //! decorator and import-time facts, `sys.path` changes and module
 //! resolution. Does not own: the standard library's behaviour
 //! (aye-python-stdlib), nor a framework's rules: what a framework does with
-//! a module (pytest's marks, hooks and skips) is a parameter.
+//! a module (pytest's marks, hooks and skips) is a [`Framework`](framework::Framework)
+//! its adapter gives.
 //!
 //! Depends on: aye-python-stdlib (the builtins, `re`, reprs), and Ruff's
 //! AST. Knows no framework but the standard library's own unittest; only
@@ -39,6 +42,7 @@ pub mod decorator;
 mod escape;
 pub mod eval;
 pub mod flow;
+pub mod framework;
 mod hash;
 pub mod module_resolver;
 pub mod namespace;
