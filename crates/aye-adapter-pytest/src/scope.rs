@@ -52,8 +52,9 @@ use aye_adapter::ast::{
     Pattern, Stmt, StmtClassDef, StmtFunctionDef, UnaryOp,
 };
 use aye_adapter::{Ranged, TextRange, TextSize};
+use aye_python_stdlib::repr::int_literal_decimal;
 
-use crate::ids::{Value, int_literal_decimal};
+use crate::ids::Value;
 
 /// A `__test__` setting: absent, a literal, or computed at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

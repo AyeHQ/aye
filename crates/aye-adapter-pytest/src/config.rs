@@ -210,7 +210,7 @@ fn python_str(value: &toml::Value) -> String {
     match value {
         toml::Value::String(s) => s.clone(),
         toml::Value::Boolean(b) => if *b { "True" } else { "False" }.to_string(),
-        toml::Value::Float(f) => crate::ids::float_repr(*f),
+        toml::Value::Float(f) => aye_python_stdlib::repr::float_repr(*f),
         other => other.to_string(),
     }
 }

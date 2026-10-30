@@ -1,8 +1,13 @@
 //! pytest's parameter id algorithm (`_pytest/python.py`, `IdMaker`), and the
-//! Python `str()` of the literal values it turns into ids.
+//! Python `str()` of the literal values it turns into ids: pytest's
+//! `ascii_escaped` here, the `repr` of numbers and `str.isdigit` from
+//! aye-python-stdlib.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
+
+use aye_python_stdlib::builtins::str_isdigit;
+use aye_python_stdlib::repr::{complex_repr, float_repr};
 
 /// A statically known parameter value, as far as ids are concerned.
 #[derive(Debug, Clone, PartialEq)]
@@ -171,7 +176,9 @@ pub(crate) fn parameterset_ids(
         if original_counts[&Some(id.clone())] <= 1 {
             continue;
         }
-        let separator = match id.chars().last().map_or(Some(false), is_digit) {
+        // Non-ASCII ids come from `__name__`s, which are never escaped, and
+        // from strings when escaping is disabled.
+        let separator = match id.chars().last().map_or(Some(false), str_isdigit) {
             Some(true) => "_",
             Some(false) => "",
             None => return Err(IdError::VersionDependentDigit(id)),
@@ -191,89 +198,6 @@ pub(crate) fn parameterset_ids(
     }
     Ok(resolved)
 }
-
-/// Python's `str.isdigit` (Unicode `Numeric_Type` `Digit` or `Decimal`),
-/// on every Python pytest 9.1.1 supports: 3.10 to 3.14, whose Unicode
-/// databases go from 13.0 to 16.0. `None` when they disagree, or for a
-/// numeric character the tables below don't cover (Rust's Unicode is
-/// newer). Non-ASCII ids come from `__name__`s, which are never escaped,
-/// and from strings when escaping is disabled.
-fn is_digit(c: char) -> Option<bool> {
-    let within = |table: &[(u32, u32)]| {
-        let code = u32::from(c);
-        table
-            .binary_search_by(|&(lo, hi)| {
-                if hi < code {
-                    std::cmp::Ordering::Less
-                } else if lo > code {
-                    std::cmp::Ordering::Greater
-                } else {
-                    std::cmp::Ordering::Equal
-                }
-            })
-            .is_ok()
-    };
-    if c.is_ascii() {
-        Some(c.is_ascii_digit())
-    } else if within(DIGITS) {
-        Some(true)
-    } else if !c.is_numeric() || within(NUMERIC_NOT_DIGITS) {
-        Some(false)
-    } else {
-        None
-    }
-}
-
-// Generated from `chr(c).isdigit()` and `chr(c).isnumeric()` on CPython
-// 3.10 to 3.14, keeping what every version agrees on (and, for the second
-// table, only the general categories Rust's `char::is_numeric` covers).
-
-/// Non-ASCII characters `str.isdigit` accepts on Python 3.10 to 3.14.
-#[rustfmt::skip]
-const DIGITS: &[(u32, u32)] = &[
-    (0x00b2, 0x00b3), (0x00b9, 0x00b9), (0x0660, 0x0669), (0x06f0, 0x06f9), (0x07c0, 0x07c9),
-    (0x0966, 0x096f), (0x09e6, 0x09ef), (0x0a66, 0x0a6f), (0x0ae6, 0x0aef), (0x0b66, 0x0b6f),
-    (0x0be6, 0x0bef), (0x0c66, 0x0c6f), (0x0ce6, 0x0cef), (0x0d66, 0x0d6f), (0x0de6, 0x0def),
-    (0x0e50, 0x0e59), (0x0ed0, 0x0ed9), (0x0f20, 0x0f29), (0x1040, 0x1049), (0x1090, 0x1099),
-    (0x1369, 0x1371), (0x17e0, 0x17e9), (0x1810, 0x1819), (0x1946, 0x194f), (0x19d0, 0x19da),
-    (0x1a80, 0x1a89), (0x1a90, 0x1a99), (0x1b50, 0x1b59), (0x1bb0, 0x1bb9), (0x1c40, 0x1c49),
-    (0x1c50, 0x1c59), (0x2070, 0x2070), (0x2074, 0x2079), (0x2080, 0x2089), (0x2460, 0x2468),
-    (0x2474, 0x247c), (0x2488, 0x2490), (0x24ea, 0x24ea), (0x24f5, 0x24fd), (0x24ff, 0x24ff),
-    (0x2776, 0x277e), (0x2780, 0x2788), (0x278a, 0x2792), (0xa620, 0xa629), (0xa8d0, 0xa8d9),
-    (0xa900, 0xa909), (0xa9d0, 0xa9d9), (0xa9f0, 0xa9f9), (0xaa50, 0xaa59), (0xabf0, 0xabf9),
-    (0xff10, 0xff19), (0x104a0, 0x104a9), (0x10a40, 0x10a43), (0x10d30, 0x10d39),
-    (0x10e60, 0x10e68), (0x11052, 0x1105a), (0x11066, 0x1106f), (0x110f0, 0x110f9),
-    (0x11136, 0x1113f), (0x111d0, 0x111d9), (0x112f0, 0x112f9), (0x11450, 0x11459),
-    (0x114d0, 0x114d9), (0x11650, 0x11659), (0x116c0, 0x116c9), (0x11730, 0x11739),
-    (0x118e0, 0x118e9), (0x11950, 0x11959), (0x11c50, 0x11c59), (0x11d50, 0x11d59),
-    (0x11da0, 0x11da9), (0x16a60, 0x16a69), (0x16b50, 0x16b59), (0x1d7ce, 0x1d7ff),
-    (0x1e140, 0x1e149), (0x1e2f0, 0x1e2f9), (0x1e950, 0x1e959), (0x1f100, 0x1f10a),
-    (0x1fbf0, 0x1fbf9),
-];
-
-/// Non-ASCII characters of the numeric general categories (`Nd`, `Nl`,
-/// `No`) `str.isdigit` rejects on Python 3.10 to 3.14.
-#[rustfmt::skip]
-const NUMERIC_NOT_DIGITS: &[(u32, u32)] = &[
-    (0x00bc, 0x00be), (0x09f4, 0x09f9), (0x0b72, 0x0b77), (0x0bf0, 0x0bf2), (0x0c78, 0x0c7e),
-    (0x0d58, 0x0d5e), (0x0d70, 0x0d78), (0x0f2a, 0x0f33), (0x1372, 0x137c), (0x16ee, 0x16f0),
-    (0x17f0, 0x17f9), (0x2150, 0x2182), (0x2185, 0x2189), (0x2469, 0x2473), (0x247d, 0x2487),
-    (0x2491, 0x249b), (0x24eb, 0x24f4), (0x24fe, 0x24fe), (0x277f, 0x277f), (0x2789, 0x2789),
-    (0x2793, 0x2793), (0x2cfd, 0x2cfd), (0x3007, 0x3007), (0x3021, 0x3029), (0x3038, 0x303a),
-    (0x3192, 0x3195), (0x3220, 0x3229), (0x3248, 0x324f), (0x3251, 0x325f), (0x3280, 0x3289),
-    (0x32b1, 0x32bf), (0xa6e6, 0xa6ef), (0xa830, 0xa835), (0x10107, 0x10133), (0x10140, 0x10178),
-    (0x1018a, 0x1018b), (0x102e1, 0x102fb), (0x10320, 0x10323), (0x10341, 0x10341),
-    (0x1034a, 0x1034a), (0x103d1, 0x103d5), (0x10858, 0x1085f), (0x10879, 0x1087f),
-    (0x108a7, 0x108af), (0x108fb, 0x108ff), (0x10916, 0x1091b), (0x109bc, 0x109bd),
-    (0x109c0, 0x109cf), (0x109d2, 0x109ff), (0x10a44, 0x10a48), (0x10a7d, 0x10a7e),
-    (0x10a9d, 0x10a9f), (0x10aeb, 0x10aef), (0x10b58, 0x10b5f), (0x10b78, 0x10b7f),
-    (0x10ba9, 0x10baf), (0x10cfa, 0x10cff), (0x10e69, 0x10e7e), (0x10f1d, 0x10f26),
-    (0x10f51, 0x10f54), (0x10fc5, 0x10fcb), (0x1105b, 0x11065), (0x111e1, 0x111f4),
-    (0x1173a, 0x1173b), (0x118ea, 0x118f2), (0x11c5a, 0x11c6c), (0x11fc0, 0x11fd4),
-    (0x12400, 0x1246e), (0x16b5b, 0x16b61), (0x16e80, 0x16e96), (0x1d2e0, 0x1d2f3),
-    (0x1d360, 0x1d378), (0x1e8c7, 0x1e8cf), (0x1ec71, 0x1ecab), (0x1ecad, 0x1ecaf),
-    (0x1ecb1, 0x1ecb4), (0x1ed01, 0x1ed2d), (0x1ed2f, 0x1ed3d), (0x1f10b, 0x1f10c),
-];
 
 /// `_idval_from_value`: the id a value makes on its own, if it makes one.
 pub(crate) fn idval_from_value(
@@ -351,115 +275,6 @@ pub(crate) fn ascii_escaped_bytes(bytes: &[u8]) -> String {
     out
 }
 
-/// `repr(float)`.
-pub(crate) fn float_repr(f: f64) -> String {
-    format_float(f, true, false)
-}
-
-/// `repr(complex)`.
-pub(crate) fn complex_repr(re: f64, im: f64) -> String {
-    if re == 0.0 && re.is_sign_positive() {
-        format!("{}j", format_float(im, false, false))
-    } else {
-        format!(
-            "({}{}j)",
-            format_float(re, false, false),
-            format_float(im, false, true)
-        )
-    }
-}
-
-/// Python's `format_float_short` in `'r'` mode.
-fn format_float(f: f64, add_dot_0: bool, always_sign: bool) -> String {
-    let sign = if f.is_sign_negative() && !f.is_nan() {
-        "-"
-    } else if always_sign {
-        "+"
-    } else {
-        ""
-    };
-    if f.is_nan() {
-        return format!("{sign}nan");
-    }
-    if f.is_infinite() {
-        return format!("{sign}inf");
-    }
-    // Rust's `{:e}` gives the shortest round-trip digits, like dtoa mode 0.
-    let sci = format!("{:e}", f.abs());
-    let (mantissa, exponent) = sci.split_once('e').expect("exponent");
-    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
-    let exponent: i64 = exponent.parse().expect("integer exponent");
-    let decpt = exponent + 1;
-    let len = i64::try_from(digits.len()).expect("short");
-
-    let mut out = String::from(sign);
-    if decpt <= -4 || decpt > 16 {
-        out.push_str(&digits[..1]);
-        if digits.len() > 1 {
-            out.push('.');
-            out.push_str(&digits[1..]);
-        }
-        let exp = decpt - 1;
-        let _ = write!(out, "e{}{:02}", if exp < 0 { '-' } else { '+' }, exp.abs());
-        return out;
-    }
-    if decpt <= 0 {
-        out.push_str("0.");
-        out.push_str(&"0".repeat(usize::try_from(-decpt).expect("small")));
-        out.push_str(&digits);
-    } else if decpt < len {
-        let at = usize::try_from(decpt).expect("small");
-        out.push_str(&digits[..at]);
-        out.push('.');
-        out.push_str(&digits[at..]);
-    } else {
-        out.push_str(&digits);
-        out.push_str(&"0".repeat(usize::try_from(decpt - len).expect("small")));
-        if add_dot_0 {
-            out.push_str(".0");
-        }
-    }
-    out
-}
-
-/// The decimal spelling of a Python integer literal (`0x_ff`, `1_000`).
-pub(crate) fn int_literal_decimal(token: &str) -> Option<String> {
-    let token: String = token.chars().filter(|c| *c != '_').collect();
-    let lower = token.to_ascii_lowercase();
-    let (radix, digits) = if let Some(rest) = lower.strip_prefix("0x") {
-        (16, rest)
-    } else if let Some(rest) = lower.strip_prefix("0o") {
-        (8, rest)
-    } else if let Some(rest) = lower.strip_prefix("0b") {
-        (2, rest)
-    } else {
-        (10, lower.as_str())
-    };
-    if digits.is_empty() {
-        return None;
-    }
-    // Little-endian limbs of 10^9.
-    let mut limbs: Vec<u64> = vec![0];
-    for c in digits.chars() {
-        let digit = u64::from(c.to_digit(radix)?);
-        let mut carry = digit;
-        for limb in &mut limbs {
-            let value = *limb * u64::from(radix) + carry;
-            *limb = value % 1_000_000_000;
-            carry = value / 1_000_000_000;
-        }
-        while carry > 0 {
-            limbs.push(carry % 1_000_000_000);
-            carry /= 1_000_000_000;
-        }
-    }
-    let mut out = limbs.last().expect("one limb").to_string();
-    for limb in limbs.iter().rev().skip(1) {
-        let _ = write!(out, "{limb:09}");
-    }
-    Some(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,46 +306,6 @@ mod tests {
 
     fn int(text: &str) -> Value {
         Value::Int(text.to_string())
-    }
-
-    #[test]
-    fn floats_print_like_python_repr() {
-        // Expected values from `pytest --collect-only` on pytest 9.1.1.
-        for (value, expected) in [
-            (1.0, "1.0"),
-            (1e16, "1e+16"),
-            (1e-5, "1e-05"),
-            (0.1, "0.1"),
-            (1e22, "1e+22"),
-            (123_456_789.0, "123456789.0"),
-            (1.5e-7, "1.5e-07"),
-            (f64::INFINITY, "inf"),
-            (f64::NEG_INFINITY, "-inf"),
-            (f64::NAN, "nan"),
-            (-0.0, "-0.0"),
-            (0.0, "0.0"),
-            (2.5, "2.5"),
-            (1e15, "1000000000000000.0"),
-            (0.0001, "0.0001"),
-            (1.234_567_890_123_45, "1.23456789012345"),
-            (1.0 / 3.0, "0.3333333333333333"),
-            (-1.5, "-1.5"),
-            (1e100, "1e+100"),
-            (5e-324, "5e-324"),
-            (123.456, "123.456"),
-        ] {
-            assert_eq!(float_repr(value), expected, "{value}");
-        }
-    }
-
-    #[test]
-    fn complex_numbers_print_like_python_repr() {
-        assert_eq!(complex_repr(0.0, 1.0), "1j");
-        assert_eq!(complex_repr(1.0, 2.0), "(1+2j)");
-        assert_eq!(complex_repr(-0.0, -1.0), "(-0-1j)");
-        assert_eq!(complex_repr(0.0, 10.5), "10.5j");
-        assert_eq!(complex_repr(1.5, -1e16), "(1.5-1e+16j)");
-        assert_eq!(complex_repr(0.0, 0.0), "0j");
     }
 
     #[test]
@@ -703,27 +478,6 @@ mod tests {
     }
 
     #[test]
-    fn digits_are_what_str_isdigit_says_on_every_supported_python() {
-        for (c, expected) in [
-            ('0', Some(true)),
-            ('a', Some(false)),
-            ('_', Some(false)),
-            ('\u{b2}', Some(true)),    // ²
-            ('\u{663}', Some(true)),   // ٣
-            ('\u{2460}', Some(true)),  // ①
-            ('\u{ff19}', Some(true)),  // ９
-            ('\u{bd}', Some(false)),   // ½
-            ('\u{3007}', Some(false)), // 〇
-            ('\u{216b}', Some(false)), // Ⅻ
-            ('\u{4e00}', Some(false)), // 一, numeric but not `Nd`/`Nl`/`No`
-            ('\u{df}', Some(false)),   // ß
-            ('\u{16ac0}', None),       // a Tangsa digit: Python 3.11+ only
-        ] {
-            assert_eq!(is_digit(c), expected, "{c:?}");
-        }
-    }
-
-    #[test]
     fn duplicate_suffixes_follow_str_isdigit() {
         // pytest 9.1.1 with escaping disabled: a½0, a½1, a〇0, a〇1, Ⅻ0,
         // Ⅻ1, x²_0, x²_1.
@@ -772,50 +526,5 @@ mod tests {
             parameterset_ids(&argnames, &tangsa, None, no_escaping),
             Err(IdError::VersionDependentDigit(_))
         ));
-    }
-
-    #[test]
-    fn digits_match_the_python_running_the_tests() {
-        let Some(python) = aye_test::test_python(aye_test::Needs::Stdlib) else {
-            return;
-        };
-        let output = std::process::Command::new(&python)
-            .args([
-                "-c",
-                "import sys; sys.stdout.write(' '.join(str(c) for c in range(0x110000) if chr(c).isdigit()))",
-            ])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{}", python.display());
-        let digits: std::collections::HashSet<u32> = String::from_utf8(output.stdout)
-            .unwrap()
-            .split_whitespace()
-            .map(|c| c.parse().unwrap())
-            .collect();
-        for code in 0..0x11_0000 {
-            let Some(c) = char::from_u32(code) else {
-                continue;
-            };
-            if let Some(digit) = is_digit(c) {
-                assert_eq!(digit, digits.contains(&code), "U+{code:04X}");
-            }
-        }
-    }
-
-    #[test]
-    fn integer_literals_in_any_base() {
-        assert_eq!(int_literal_decimal("100_000").as_deref(), Some("100000"));
-        assert_eq!(int_literal_decimal("0x_ff").as_deref(), Some("255"));
-        assert_eq!(int_literal_decimal("0o17").as_deref(), Some("15"));
-        assert_eq!(int_literal_decimal("0b101").as_deref(), Some("5"));
-        assert_eq!(
-            int_literal_decimal("0xFFFFFFFFFFFFFFFFFFFF").as_deref(),
-            Some("1208925819614629174706175")
-        );
-        assert_eq!(
-            int_literal_decimal("100000000000000000000").as_deref(),
-            Some("100000000000000000000")
-        );
-        assert_eq!(int_literal_decimal("0").as_deref(), Some("0"));
     }
 }

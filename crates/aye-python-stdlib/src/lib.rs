@@ -16,6 +16,10 @@
 //! - [`os_path`]: `os.path.abspath` (aye-fs's lexical forms) and
 //!   `os.path.expandvars` and `expanduser`, `posixpath`'s and `ntpath`'s,
 //!   over a lookup of the environment they are given.
+//! - [`repr`]: `repr` of floats and complex numbers, and the decimal
+//!   spelling of an integer literal.
+//! - [`builtins`]: the builtins as every supported version has them
+//!   (`str.isdigit`).
 //! - [`unittest`]: unittest's loader rules (`VALID_MODULE_NAME`).
 //!
 //! Owns: the standard library's behaviour, as the adapters read it. Does
@@ -25,7 +29,9 @@
 //! Depends on: aye-fs, for `os.path`'s lexical forms. Knows no framework
 //! but the standard library's own unittest; only the adapters depend on it.
 
+pub mod builtins;
 pub mod fnmatch;
 pub mod glob;
 pub mod os_path;
+pub mod repr;
 pub mod unittest;
