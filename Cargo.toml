@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.1" # x-release-please-version
+version = "1.0.0" # x-release-please-version
 edition = "2024"
 rust-version = "1.94"
 license = "Apache-2.0"
@@ -13,21 +13,21 @@ authors = ["René-Jean Corneille"]
 
 [workspace.dependencies]
 # x-release-please-start-version
-aye-collect = { path = "crates/aye-collect", version = "=0.0.1" }
-aye-config = { path = "crates/aye-config", version = "=0.0.1" }
-aye-engine = { path = "crates/aye-engine", version = "=0.0.1" }
-aye-engine-doctest = { path = "crates/aye-engine-doctest", version = "=0.0.1" }
-aye-engine-pytest = { path = "crates/aye-engine-pytest", version = "=0.0.1" }
-aye-engine-unittest = { path = "crates/aye-engine-unittest", version = "=0.0.1" }
-aye-events = { path = "crates/aye-events", version = "=0.0.1" }
-aye-fs = { path = "crates/aye-fs", version = "=0.0.1" }
-aye-history = { path = "crates/aye-history", version = "=0.0.1" }
-aye-index = { path = "crates/aye-index", version = "=0.0.1" }
-aye-provision = { path = "crates/aye-provision", version = "=0.0.1" }
-aye-render = { path = "crates/aye-render", version = "=0.0.1" }
-aye-runner = { path = "crates/aye-runner", version = "=0.0.1" }
-aye-select = { path = "crates/aye-select", version = "=0.0.1" }
-aye-static = { path = "crates/aye-static", version = "=0.0.1" }
+aye-collect = { path = "crates/aye-collect", version = "=1.0.0" }
+aye-config = { path = "crates/aye-config", version = "=1.0.0" }
+aye-engine = { path = "crates/aye-engine", version = "=1.0.0" }
+aye-engine-doctest = { path = "crates/aye-engine-doctest", version = "=1.0.0" }
+aye-engine-pytest = { path = "crates/aye-engine-pytest", version = "=1.0.0" }
+aye-engine-unittest = { path = "crates/aye-engine-unittest", version = "=1.0.0" }
+aye-events = { path = "crates/aye-events", version = "=1.0.0" }
+aye-fs = { path = "crates/aye-fs", version = "=1.0.0" }
+aye-history = { path = "crates/aye-history", version = "=1.0.0" }
+aye-index = { path = "crates/aye-index", version = "=1.0.0" }
+aye-provision = { path = "crates/aye-provision", version = "=1.0.0" }
+aye-render = { path = "crates/aye-render", version = "=1.0.0" }
+aye-runner = { path = "crates/aye-runner", version = "=1.0.0" }
+aye-select = { path = "crates/aye-select", version = "=1.0.0" }
+aye-static = { path = "crates/aye-static", version = "=1.0.0" }
 # x-release-please-end
 
 anstream = "0.6"
