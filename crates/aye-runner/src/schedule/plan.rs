@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use aye_events::{AdapterName, AffinityKey, Case, ProjectPathRef, TestId};
 
-use super::batch::Planned;
+use super::batch::{BatchSpec, Planned, Priority};
 use super::weights::Weights;
 
 /// With several workers, groups lighter than the total over
@@ -136,8 +136,12 @@ pub(crate) fn plan(
         // Tests to run first go first, in plan order; the rest keep their
         // groups.
         let runs_first = |id: &TestId| first.contains(id);
-        let priority = ids.iter().any(|(_, id)| runs_first(id));
-        if priority {
+        let priority = if ids.iter().any(|(_, id)| runs_first(id)) {
+            Priority::RunsFirst
+        } else {
+            Priority::Normal
+        };
+        if priority == Priority::RunsFirst {
             let mut at_front: Vec<(usize, &TestId)> = ids
                 .iter()
                 .copied()
@@ -148,31 +152,34 @@ pub(crate) fn plan(
             ids = at_front;
         }
         Planned {
-            adapter: batch[0].adapter.clone(),
+            spec: BatchSpec::planned(
+                batch[0].adapter.clone(),
+                ids.into_iter().map(|(_, id)| id.clone()).collect(),
+                batch.iter().any(|g| g.serial),
+                priority,
+            ),
             weight: weight(&batch),
-            serial: batch.iter().any(|g| g.serial),
             first: batch[0].cases[0].0,
-            priority,
-            ids: ids.into_iter().map(|(_, id)| id.clone()).collect(),
         }
     })
     .collect::<Vec<_>>();
 
     if workers <= 1 {
-        batches.sort_by_key(|b| (!b.priority, b.first));
+        batches.sort_by_key(|b| (b.spec.priority, b.first));
     } else {
         batches.sort_by(|a, b| {
-            b.priority
-                .cmp(&a.priority)
+            a.spec
+                .priority
+                .cmp(&b.spec.priority)
                 .then(b.weight.cmp(&a.weight))
                 .then(a.first.cmp(&b.first))
         });
         // The ordered adapters' batches take their places in plan order.
         let slots: Vec<usize> = (0..batches.len())
-            .filter(|&at| ordered.contains(&batches[at].adapter))
+            .filter(|&at| ordered.contains(&batches[at].spec.adapter))
             .collect();
         let mut in_order: Vec<Planned> = slots.iter().map(|&at| batches[at].clone()).collect();
-        in_order.sort_by_key(|b| (!b.priority, b.first));
+        in_order.sort_by_key(|b| (b.spec.priority, b.first));
         for (at, batch) in slots.into_iter().zip(in_order) {
             batches[at] = batch;
         }
@@ -260,7 +267,7 @@ mod tests {
     }
 
     fn ids(batch: &Planned) -> Vec<&str> {
-        batch.ids.iter().map(TestId::as_str).collect()
+        batch.spec.ids.iter().map(TestId::as_str).collect()
     }
 
     fn ms(n: u64) -> Duration {
@@ -329,8 +336,8 @@ mod tests {
         let cases = [case("a.py::t1"), Case::new("a.py::t1", "doctest")];
         let batches = plan(&cases, &HashMap::new(), &HashSet::new(), 1, &none());
         assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].adapter, "pytest");
-        assert_eq!(batches[1].adapter, "doctest");
+        assert_eq!(batches[0].spec.adapter, "pytest");
+        assert_eq!(batches[1].spec.adapter, "doctest");
     }
 
     #[test]
@@ -421,7 +428,7 @@ mod tests {
         let mut all = cases.to_vec();
         all.push(case("big.py::t"));
         let batches = plan(&all, &durations, &HashSet::new(), 2, &none());
-        let serial: Vec<&Planned> = batches.iter().filter(|b| b.serial).collect();
+        let serial: Vec<&Planned> = batches.iter().filter(|b| b.spec.serial).collect();
         assert_eq!(serial.len(), 1);
         assert_eq!(ids(serial[0]), ["s.py::t"]);
     }
@@ -466,7 +473,7 @@ mod tests {
             cases.iter().map(|c| (c.id.clone(), ms(100))).collect();
         let batches = plan(&all, &durations, &HashSet::new(), 4, &none());
         assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].ids.len(), 12);
+        assert_eq!(batches[0].spec.ids.len(), 12);
         assert_eq!(ids(&batches[1]), ["small.py::t"]);
     }
 
@@ -479,7 +486,7 @@ mod tests {
             .collect();
         let batches = plan(&cases, &durations, &HashSet::new(), 4, &none());
         assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].ids.len(), 6);
+        assert_eq!(batches[0].spec.ids.len(), 6);
     }
 
     #[test]
@@ -489,7 +496,8 @@ mod tests {
         let durations: HashMap<TestId, Duration> =
             cases.iter().map(|c| (c.id.clone(), ms(100))).collect();
         let batches = plan(&cases, &durations, &HashSet::new(), 2, &none());
-        let serial: Vec<(Vec<&str>, bool)> = batches.iter().map(|b| (ids(b), b.serial)).collect();
+        let serial: Vec<(Vec<&str>, bool)> =
+            batches.iter().map(|b| (ids(b), b.spec.serial)).collect();
         assert_eq!(
             serial,
             [
@@ -610,7 +618,7 @@ mod tests {
             ("y.txt::d", 400),
         ]);
         let batches = plan(&cases, &durations, &HashSet::new(), 4, &ordered());
-        let got: Vec<&str> = batches.iter().map(|b| b.ids[0].as_str()).collect();
+        let got: Vec<&str> = batches.iter().map(|b| b.spec.ids[0].as_str()).collect();
         // By weight, the slots are c, y, b, x, a; pytest's take theirs in
         // plan order.
         assert_eq!(

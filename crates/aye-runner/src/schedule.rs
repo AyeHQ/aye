@@ -57,7 +57,7 @@ mod plan;
 mod queue;
 mod weights;
 
-pub(crate) use batch::Assigned;
+pub(crate) use batch::{Assigned, BatchOrigin};
 pub(crate) use plan::plan;
 pub(crate) use queue::Queue;
 pub use weights::DEFAULT_WEIGHT;

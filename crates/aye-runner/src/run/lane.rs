@@ -102,7 +102,7 @@ impl Shared<'_> {
                 .queue
                 .take(lane, if one { None } else { adapter.as_ref() })
         {
-            if adapter.as_ref() != Some(&batch.adapter) || ended {
+            if adapter.as_ref() != Some(&batch.spec.adapter) || ended {
                 let park = one
                     && !ended
                     && parked.is_none()
@@ -128,11 +128,11 @@ impl Shared<'_> {
                         });
                     }
                 }
-                adapter = Some(batch.adapter.clone());
+                adapter = Some(batch.spec.adapter.clone());
                 ended = false;
                 if parked
                     .as_ref()
-                    .is_some_and(|(_, of, _)| *of == batch.adapter)
+                    .is_some_and(|(_, of, _)| *of == batch.spec.adapter)
                 {
                     let (waiting, _, was) = parked.take().expect("checked above");
                     worker = Some(waiting);
@@ -140,7 +140,7 @@ impl Shared<'_> {
                 }
             }
             if worker.is_none() {
-                match self.start(lane, &batch.adapter) {
+                match self.start(lane, &batch.spec.adapter) {
                     Ok((started, digests)) => {
                         send(Message::WorkerStarted {
                             worker: lane,
@@ -149,7 +149,7 @@ impl Shared<'_> {
                             version: started.version().to_string(),
                         });
                         announced = true;
-                        pinned = self.compare(lane, &batch.adapter, digests.as_ref(), &send);
+                        pinned = self.compare(lane, &batch.spec.adapter, digests.as_ref(), &send);
                         self.queue.may_pin(lane, !pinned.is_empty());
                         worker = Some(started);
                         ended = false;
@@ -184,7 +184,7 @@ impl Shared<'_> {
                 self.queue.put_back(batch);
                 break;
             }
-            ended |= batch.ends_session && self.lists_session(&batch.adapter);
+            ended |= batch.ends_session && self.lists_session(&batch.spec.adapter);
             announce(lane, worker.as_ref(), &mut announced, &send);
             self.execute(lane, &mut worker, &batch, &send);
             self.queue.finished(&batch);

@@ -39,15 +39,15 @@ impl Shared<'_> {
         send(Message::BatchStarted {
             worker: lane,
             batch: batch.id,
-            adapter: batch.adapter.clone(),
-            cases: u32::try_from(batch.ids.len()).unwrap_or(u32::MAX),
+            adapter: batch.spec.adapter.clone(),
+            cases: u32::try_from(batch.spec.ids.len()).unwrap_or(u32::MAX),
             maxfail,
         });
         let end = self.run_batch(lane, running, batch, maxfail, send);
         let interrupted = self.idle(lane);
         match end {
             End::Done { status, track } => {
-                let remaining = track.remaining(&batch.ids);
+                let remaining = track.remaining(&batch.spec.ids);
                 let verdict = Verdict::of(status, track.stopped, track.clean());
                 if verdict.stop {
                     // pytest ends its session there; so does the run.
@@ -76,7 +76,7 @@ impl Shared<'_> {
                     path: first_path(batch),
                     message: format!(
                         "the {} adapter failed outside any test:\n{message}",
-                        batch.adapter
+                        batch.spec.adapter
                     ),
                 });
                 send(Message::BatchFinished {
@@ -85,7 +85,7 @@ impl Shared<'_> {
                     status: None,
                     end: BatchEnd::Failed,
                     verdict: Verdict::default(),
-                    not_run: track.remaining(&batch.ids),
+                    not_run: track.remaining(&batch.spec.ids),
                 });
             }
             End::Eof(track) => {
@@ -137,15 +137,15 @@ impl Shared<'_> {
     ) -> End {
         let mut policy = self.policy.clone();
         policy.maxfail = maxfail;
-        let mut context = self.plan.context(&batch.adapter);
-        context.ran_ids.clone_from(&batch.ran);
+        let mut context = self.plan.context(&batch.spec.adapter);
+        context.ran_ids = batch.spec.origin.ran().to_vec();
         let request = Request::Run(Batch {
             id: batch.id,
-            adapter: batch.adapter.clone(),
-            ids: batch.ids.clone(),
+            adapter: batch.spec.adapter.clone(),
+            ids: batch.spec.ids.clone(),
             policy,
             context,
-            ends_session: batch.ends_session && self.lists_session(&batch.adapter),
+            ends_session: batch.ends_session && self.lists_session(&batch.spec.adapter),
         });
         // A worker that died since its last batch shows up below as an end
         // of stream.
@@ -242,9 +242,13 @@ impl Verdict {
 }
 
 fn first_path(batch: &Assigned) -> DiagnosticPath {
-    batch.ids.first().map_or(DiagnosticPath::Nowhere, |id| {
-        DiagnosticPath::as_written(id.path().as_str())
-    })
+    batch
+        .spec
+        .ids
+        .first()
+        .map_or(DiagnosticPath::Nowhere, |id| {
+            DiagnosticPath::as_written(id.path().as_str())
+        })
 }
 
 #[cfg(test)]

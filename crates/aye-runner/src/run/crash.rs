@@ -9,7 +9,7 @@ use aye_events::{
     DiagnosticCode, Event, Failure, Outcome, Record, Severity, TestId, TestResult, WorkerIndex,
 };
 
-use crate::schedule::Assigned;
+use crate::schedule::{Assigned, BatchOrigin};
 use crate::summary::{BatchEnd, Crash};
 use crate::worker::Worker;
 
@@ -53,7 +53,7 @@ impl Shared<'_> {
         };
         if self.killing.load(Ordering::SeqCst) || self.stop.is_stopped() {
             // Killed by the stop, or dead meanwhile: nothing to recover.
-            closing(BatchEnd::Stopped, None, track.remaining(&batch.ids));
+            closing(BatchEnd::Stopped, None, track.remaining(&batch.spec.ids));
             return;
         }
         // After a framework stop, the tests re-queued below are never handed
@@ -74,8 +74,8 @@ impl Shared<'_> {
             self.pass_on(record, send);
         };
 
-        let retried = track.unfinished(&batch.ids);
-        let unstarted: HashSet<TestId> = track.remaining(&batch.ids).into_iter().collect();
+        let retried = track.unfinished(&batch.spec.ids);
+        let unstarted: HashSet<TestId> = track.remaining(&batch.spec.ids).into_iter().collect();
         let ran = track.ran.clone();
         let in_flight = track.in_flight.map(|(id, since)| {
             synthesize(
@@ -85,7 +85,7 @@ impl Shared<'_> {
             );
             id
         });
-        if batch.retry {
+        if let BatchOrigin::Retry { .. } = batch.spec.origin {
             for id in retried {
                 let message = if unstarted.contains(&id) {
                     format!("worker crashed again before this test ran: {reason}")
@@ -95,9 +95,8 @@ impl Shared<'_> {
                 synthesize(id, message, Duration::ZERO);
             }
         } else if !retried.is_empty() {
-            let mut ran_before = batch.ran.clone();
-            ran_before.extend(ran);
-            self.queue.retry(batch, retried, ran_before);
+            // Not a retry: none of its tests ran before.
+            self.queue.retry(batch, retried, ran);
         }
 
         let error = match &in_flight {

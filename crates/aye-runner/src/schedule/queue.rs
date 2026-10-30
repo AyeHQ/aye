@@ -6,7 +6,7 @@ use aye_events::{AdapterName, BatchIndex, TestId, WorkerIndex};
 
 use crate::sync::lock;
 
-use super::batch::{Assigned, Pending, Planned};
+use super::batch::{Assigned, BatchOrigin, BatchSpec, Pending, Pin, Planned};
 
 /// The batches still to run. Workers pull from it; a serial batch is not
 /// handed out while another one runs.
@@ -46,13 +46,7 @@ impl Queue {
             .into_iter()
             .map(|p| Pending {
                 id: None,
-                adapter: p.adapter,
-                ids: p.ids,
-                serial: p.serial,
-                retry: false,
-                ran: Vec::new(),
-                lane: None,
-                priority: p.priority,
+                spec: p.spec,
             })
             .collect();
         Self {
@@ -82,27 +76,21 @@ impl Queue {
                 .pending
                 .iter()
                 .enumerate()
-                .filter(|(_, p)| p.eligible(lane) && !(p.serial && blocked))
-                .min_by_key(|(at, p)| (!p.priority, Some(&p.adapter) != prefer, *at))
+                .filter(|(_, p)| p.eligible(lane) && !(p.spec.serial && blocked))
+                .min_by_key(|(at, p)| (p.spec.priority, Some(&p.spec.adapter) != prefer, *at))
                 .map(|(at, _)| at);
             if let Some(at) = chosen {
                 let pending = state.pending.remove(at).expect("position is in range");
                 let id = pending.id.unwrap_or_else(|| state.next_index());
-                state.serial_running |= pending.serial;
+                state.serial_running |= pending.spec.serial;
                 let ends_session = (!lane.is_first() || state.pinning.is_empty())
                     && !state
                         .pending
                         .iter()
-                        .any(|p| p.adapter == pending.adapter && p.eligible(lane));
+                        .any(|p| p.spec.adapter == pending.spec.adapter && p.eligible(lane));
                 return Some(Assigned {
                     id,
-                    adapter: pending.adapter,
-                    ids: pending.ids,
-                    serial: pending.serial,
-                    retry: pending.retry,
-                    ran: pending.ran,
-                    lane: pending.lane,
-                    priority: pending.priority,
+                    spec: pending.spec,
                     ends_session,
                 });
             }
@@ -127,13 +115,7 @@ impl Queue {
         let mut state = lock(&self.state);
         Assigned {
             id: state.next_index(),
-            adapter: adapter.clone(),
-            ids: Vec::new(),
-            serial: false,
-            retry: false,
-            ran: Vec::new(),
-            lane: None,
-            priority: false,
+            spec: BatchSpec::closing(adapter.clone()),
             ends_session: true,
         }
     }
@@ -141,7 +123,7 @@ impl Queue {
     /// Return a batch that never started, to the front.
     pub(crate) fn put_back(&self, batch: Assigned) {
         let mut state = lock(&self.state);
-        state.serial_running &= !batch.serial;
+        state.serial_running &= !batch.spec.serial;
         let id = Some(batch.id);
         state.pending.push_front(Pending::of(batch, id));
         self.changed.notify_all();
@@ -195,17 +177,17 @@ impl Queue {
         if state.first_done {
             return Some(batch);
         }
-        let (moved, kept): (Vec<TestId>, Vec<TestId>) = std::mem::take(&mut batch.ids)
+        let (moved, kept): (Vec<TestId>, Vec<TestId>) = std::mem::take(&mut batch.spec.ids)
             .into_iter()
             .partition(|id| pinned(id));
         if moved.is_empty() {
-            batch.ids = kept;
+            batch.spec.ids = kept;
             return Some(batch);
         }
         if kept.is_empty() {
-            batch.ids = moved;
-            batch.lane = Some(WorkerIndex::FIRST);
-            state.serial_running &= !batch.serial;
+            batch.spec.ids = moved;
+            batch.spec.pin = Pin::FirstLane;
+            state.serial_running &= !batch.spec.serial;
             let id = Some(batch.id);
             state.pending.push_front(Pending::of(batch, id));
             self.changed.notify_all();
@@ -213,16 +195,14 @@ impl Queue {
         }
         state.pending.push_front(Pending {
             id: None,
-            adapter: batch.adapter.clone(),
-            ids: moved,
-            serial: batch.serial,
-            retry: batch.retry,
-            ran: batch.ran.clone(),
-            lane: Some(WorkerIndex::FIRST),
-            priority: batch.priority,
+            spec: BatchSpec {
+                ids: moved,
+                pin: Pin::FirstLane,
+                ..batch.spec.clone()
+            },
         });
         self.changed.notify_all();
-        batch.ids = kept;
+        batch.spec.ids = kept;
         Some(batch)
     }
 
@@ -233,20 +213,21 @@ impl Queue {
         let mut state = lock(&self.state);
         state.pending.push_front(Pending {
             id: None,
-            adapter: batch.adapter.clone(),
-            ids,
-            serial: batch.serial,
-            retry: true,
-            ran,
-            lane: batch.lane,
-            priority: batch.priority,
+            spec: BatchSpec {
+                adapter: batch.spec.adapter.clone(),
+                ids,
+                serial: batch.spec.serial,
+                priority: batch.spec.priority,
+                origin: BatchOrigin::Retry { ran },
+                pin: batch.spec.pin,
+            },
         });
         self.changed.notify_all();
     }
 
     /// A batch is over, however it ended.
     pub(crate) fn finished(&self, batch: &Assigned) {
-        if batch.serial {
+        if batch.spec.serial {
             lock(&self.state).serial_running = false;
             self.changed.notify_all();
         }
@@ -265,7 +246,7 @@ impl Queue {
     /// Take every batch still pending: the ids that were never handed out.
     pub(crate) fn drain(&self) -> Vec<TestId> {
         let mut state = lock(&self.state);
-        state.pending.drain(..).flat_map(|p| p.ids).collect()
+        state.pending.drain(..).flat_map(|p| p.spec.ids).collect()
     }
 }
 
@@ -276,6 +257,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::schedule::DEFAULT_WEIGHT;
+    use crate::schedule::batch::Priority;
 
     use super::*;
 
@@ -306,12 +288,18 @@ mod tests {
             batches
                 .iter()
                 .map(|(adapter, name, serial, priority)| Planned {
-                    adapter: (*adapter).into(),
-                    ids: vec![TestId::new(*name)],
+                    spec: BatchSpec::planned(
+                        (*adapter).into(),
+                        vec![TestId::new(*name)],
+                        *serial,
+                        if *priority {
+                            Priority::RunsFirst
+                        } else {
+                            Priority::Normal
+                        },
+                    ),
                     weight: DEFAULT_WEIGHT,
-                    serial: *serial,
                     first: 0,
-                    priority: *priority,
                 })
                 .collect(),
         )
@@ -322,7 +310,7 @@ mod tests {
 
     fn taken(q: &Queue, prefer: Option<&'static str>) -> String {
         let prefer = prefer.map(AdapterName::from);
-        q.take(lane(0), prefer.as_ref()).unwrap().ids[0]
+        q.take(lane(0), prefer.as_ref()).unwrap().spec.ids[0]
             .as_str()
             .to_owned()
     }
@@ -380,8 +368,11 @@ mod tests {
 
         // A batch that only ends a session: no ids, an id of its own.
         let closing = q.closing(&PYTEST);
-        assert!(closing.ends_session && closing.ids.is_empty());
-        assert_eq!((closing.id, closing.adapter.as_str()), (index(2), "pytest"));
+        assert!(closing.ends_session && closing.spec.ids.is_empty());
+        assert_eq!(
+            (closing.id, closing.spec.adapter.as_str()),
+            (index(2), "pytest")
+        );
     }
 
     #[test]
@@ -412,18 +403,22 @@ mod tests {
         let q = queue(&[("a", false), ("b", false), ("c", false)]);
         let a = q.take(lane(0), None).unwrap();
         let b = q.take(lane(0), None).unwrap();
-        assert_eq!((a.id, a.ids[0].as_str()), (index(0), "a"));
-        assert_eq!((b.id, b.ids[0].as_str()), (index(1), "b"));
+        assert_eq!((a.id, a.spec.ids[0].as_str()), (index(0), "a"));
+        assert_eq!((b.id, b.spec.ids[0].as_str()), (index(1), "b"));
         q.put_back(b);
         let again = q.take(lane(0), None).unwrap();
-        assert_eq!((again.id, again.ids[0].as_str()), (index(1), "b"));
+        assert_eq!((again.id, again.spec.ids[0].as_str()), (index(1), "b"));
         q.retry(&a, vec![TestId::new("a2")], vec![TestId::new("a1")]);
         let retry = q.take(lane(0), None).unwrap();
         assert_eq!(
-            (retry.id, retry.ids[0].as_str(), retry.retry),
+            (
+                retry.id,
+                retry.spec.ids[0].as_str(),
+                matches!(retry.spec.origin, BatchOrigin::Retry { .. })
+            ),
             (index(2), "a2", true)
         );
-        assert_eq!(retry.ran, [TestId::new("a1")]);
+        assert_eq!(retry.spec.origin.ran(), [TestId::new("a1")]);
         assert_eq!(q.take(lane(0), None).unwrap().id, index(3));
         assert_eq!(q.take(lane(0), None), None);
     }
@@ -431,35 +426,34 @@ mod tests {
     #[test]
     fn pinned_ids_go_to_the_first_lane_only() {
         let q = Queue::new(vec![Planned {
-            adapter: "pytest".into(),
-            ids: ["a.py::t1", "b.py::t1", "a.py::t2"]
-                .into_iter()
-                .map(TestId::new)
-                .collect(),
+            spec: BatchSpec::planned(
+                "pytest".into(),
+                ["a.py::t1", "b.py::t1", "a.py::t2"]
+                    .into_iter()
+                    .map(TestId::new)
+                    .collect(),
+                false,
+                Priority::Normal,
+            ),
             weight: DEFAULT_WEIGHT,
-            serial: false,
             first: 0,
-            priority: false,
         }]);
         let batch = q.take(lane(1), None).unwrap();
         let kept = q.pin(batch, |id| id.path() == "a.py").unwrap();
         assert_eq!(
-            (kept.id, kept.ids.clone()),
+            (kept.id, kept.spec.ids.clone()),
             (index(0), vec![TestId::new("b.py::t1")])
         );
         assert_eq!(q.take(lane(1), None), None, "pinned to the first lane");
         let pinned = q.take(lane(0), None).unwrap();
         assert_eq!(pinned.id, index(1));
-        assert_eq!(pinned.lane, Some(WorkerIndex::FIRST));
-        let names: Vec<&str> = pinned.ids.iter().map(TestId::as_str).collect();
+        assert_eq!(pinned.spec.pin, Pin::FirstLane);
+        let names: Vec<&str> = pinned.spec.ids.iter().map(TestId::as_str).collect();
         assert_eq!(names, ["a.py::t1", "a.py::t2"]);
         // Its retry stays on the first lane.
         q.retry(&pinned, vec![TestId::new("a.py::t2")], Vec::new());
         assert_eq!(q.take(lane(1), None), None);
-        assert_eq!(
-            q.take(lane(0), None).unwrap().lane,
-            Some(WorkerIndex::FIRST)
-        );
+        assert_eq!(q.take(lane(0), None).unwrap().spec.pin, Pin::FirstLane);
     }
 
     #[test]
@@ -468,14 +462,17 @@ mod tests {
         let batch = q.take(lane(1), None).unwrap();
         assert_eq!(q.pin(batch, |_| true), None);
         assert_eq!(taken(&q, None), "a.py::t");
-        assert_eq!(q.take(lane(1), None).unwrap().ids[0].as_str(), "b.py::t");
+        assert_eq!(
+            q.take(lane(1), None).unwrap().spec.ids[0].as_str(),
+            "b.py::t"
+        );
         let unpinned = q.take(lane(1), None);
         assert_eq!(unpinned, None);
         let q = queue(&[("a.py::t", false)]);
         let batch = q.take(lane(1), None).unwrap();
         let kept = q.pin(batch, |_| false).unwrap();
-        assert_eq!(kept.lane, None);
-        assert_eq!(kept.ids.len(), 1);
+        assert_eq!(kept.spec.pin, Pin::AnyLane);
+        assert_eq!(kept.spec.ids.len(), 1);
     }
 
     #[test]
@@ -491,7 +488,10 @@ mod tests {
         thread::sleep(ms(50));
         assert!(!first.is_finished());
         assert_eq!(q.pin(other, |_| true), None);
-        assert_eq!(first.join().unwrap().unwrap().ids[0].as_str(), "a.py::t");
+        assert_eq!(
+            first.join().unwrap().unwrap().spec.ids[0].as_str(),
+            "a.py::t"
+        );
         let first = {
             let q = Arc::clone(&q);
             thread::spawn(move || q.take(lane(0), None))
@@ -517,7 +517,7 @@ mod tests {
         let batch = q.take(lane(1), None).unwrap();
         q.lane_done(lane(0));
         let kept = q.pin(batch, |_| true).unwrap();
-        assert_eq!((kept.ids.len(), kept.lane), (1, None));
+        assert_eq!((kept.spec.ids.len(), kept.spec.pin), (1, Pin::AnyLane));
         assert_eq!(q.take(lane(1), None), None);
     }
 
@@ -525,7 +525,7 @@ mod tests {
     fn a_serial_batch_waits_for_the_running_one() {
         let q = Arc::new(queue(&[("s1", true), ("s2", true), ("x", false)]));
         let s1 = q.take(lane(0), None).unwrap();
-        assert_eq!(q.take(lane(0), None).unwrap().ids[0].as_str(), "x");
+        assert_eq!(q.take(lane(0), None).unwrap().spec.ids[0].as_str(), "x");
         let waiter = {
             let q = Arc::clone(&q);
             thread::spawn(move || q.take(lane(0), None))
@@ -534,7 +534,7 @@ mod tests {
         assert!(!waiter.is_finished());
         q.finished(&s1);
         let s2 = waiter.join().unwrap().unwrap();
-        assert_eq!(s2.ids[0].as_str(), "s2");
+        assert_eq!(s2.spec.ids[0].as_str(), "s2");
     }
 
     #[test]

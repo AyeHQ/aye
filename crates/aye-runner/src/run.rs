@@ -204,7 +204,7 @@ impl Runner {
             .workers
             .max(1)
             .min(u32::try_from(batches.len()).unwrap_or(u32::MAX));
-        let adapters: HashSet<&AdapterName> = batches.iter().map(|b| &b.adapter).collect();
+        let adapters: HashSet<&AdapterName> = batches.iter().map(|b| &b.spec.adapter).collect();
         let runtimes = self
             .options
             .runtimes
@@ -235,7 +235,7 @@ impl Runner {
                 Some(warm) => Some(warm.adapter.clone()),
                 None => batches
                     .iter()
-                    .map(|batch| &batch.adapter)
+                    .map(|batch| &batch.spec.adapter)
                     .find(|adapter| {
                         self.runtime(adapter)
                             .is_some_and(|runtime| runtime.session.lists_session())
@@ -248,7 +248,10 @@ impl Runner {
             })
             .flatten();
         let early = reference.as_ref().map_or(0, |reference| {
-            let of = batches.iter().filter(|b| b.adapter == *reference).count();
+            let of = batches
+                .iter()
+                .filter(|b| b.spec.adapter == *reference)
+                .count();
             lanes.min(u32::try_from(of).unwrap_or(u32::MAX))
         });
         // The workers started for the other lanes during refinement, if the
