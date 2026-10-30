@@ -1,6 +1,45 @@
 //! Python's builtins, as every Python aye supports has them (3.10 to 3.14):
 //! where they differ between versions, an answer says it can't tell.
 
+/// Builtins that rebind names or reach the namespace by name.
+pub const DYNAMIC_CALLS: &[&str] = &[
+    "exec",
+    "eval",
+    "globals",
+    "locals",
+    "vars",
+    "setattr",
+    "delattr",
+    "__import__",
+];
+
+/// Builtins that only read what they are given.
+pub const READING_BUILTINS: &[&str] = &[
+    "print",
+    "isinstance",
+    "issubclass",
+    "len",
+    "repr",
+    "str",
+    "id",
+    "hash",
+    "hasattr",
+    "getattr",
+    "callable",
+    "type",
+    "list",
+    "tuple",
+    "dict",
+    "set",
+    "frozenset",
+    "sorted",
+    "iter",
+    "any",
+    "all",
+    "vars",
+    "dir",
+];
+
 /// Python's `str.isdigit` (Unicode `Numeric_Type` `Digit` or `Decimal`) of
 /// one character, on every Python aye supports: 3.10 to 3.14, whose
 /// Unicode databases go from 13.0 to 16.0. `None` when they disagree, or

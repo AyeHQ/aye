@@ -293,10 +293,9 @@ use aye_events::{AdapterName, AffinityKey, Case, Certainty, ProjectPath, Project
 use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
 use aye_python_stdlib::fnmatch::{SetTranslation, fnmatch};
 use aye_python_stdlib::os_path::normalize_absolute;
-use aye_python_stdlib::unittest::valid_module_name;
+use aye_python_stdlib::unittest::{may_define_load_tests, valid_module_name};
 
 pub use config::UnittestConfig;
-pub use module::may_define_load_tests;
 
 use crate::context::UnittestContext;
 use crate::module::Modules;

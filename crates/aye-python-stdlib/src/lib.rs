@@ -19,9 +19,13 @@
 //! - [`repr`]: `repr` of floats and complex numbers, and the decimal
 //!   spelling of an integer literal.
 //! - [`builtins`]: the builtins as every supported version has them: those
-//!   with a `__name__`, what `float()` parses, `str.isdigit`.
+//!   with a `__name__`, what `float()` parses, `str.isdigit`, and those
+//!   that reach a namespace by name or only read.
 //! - [`re`]: which patterns `re.compile` surely accepts.
-//! - [`unittest`]: unittest's loader rules (`VALID_MODULE_NAME`).
+//! - [`modules`]: the standard library's modules.
+//! - [`unittest`]: unittest's loader rules: `VALID_MODULE_NAME`, the test
+//!   method prefix, the bases that bring no tests, what keeps a method a
+//!   test, when a package may define `load_tests`.
 //!
 //! Owns: the standard library's behaviour, as the adapters read it. Does
 //! not own: a framework's rules (pytest's are the pytest and doctest
@@ -33,6 +37,7 @@
 pub mod builtins;
 pub mod fnmatch;
 pub mod glob;
+pub mod modules;
 pub mod os_path;
 pub mod re;
 pub mod repr;
