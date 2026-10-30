@@ -4,6 +4,7 @@
 //! interpreter when one is available (`AYE_TEST_PYTHON`, or the workspace's
 //! `.venv`).
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -1024,4 +1025,151 @@ fn mros_are_linearized_as_python_does() {
         ]
     );
     assert_eq!(exact(&found).len(), 9);
+}
+
+/// A class is one class of an MRO whichever read of its file found it: the
+/// test module as collection parsed it, or the project's own read of it when
+/// a module it imports imports from it again (finding 5 of
+/// `docs/reorganisation.md`). Python refuses `test_cycle.py`'s `Both`, whose
+/// bases put `Base` before a subclass of it: the module is refined, with the
+/// classes surely tests kept. In `test_diamond.py`, `Right` comes before
+/// `Base` in `Both`'s MRO, so `Both.test_b` is `Right`'s.
+#[test]
+fn a_class_is_one_class_whichever_read_of_its_file_found_it() {
+    const SUITE: Suite = Suite {
+        name: "one_class",
+        files: &[
+            (
+                "test_cycle.py",
+                "import unittest\n\n\nclass Base(unittest.TestCase):\n    def test_base(self):\n        pass\n\n\nimport cycle\n\n\nclass Both(Base, cycle.Sub):\n    pass\n",
+            ),
+            (
+                "cycle.py",
+                "from test_cycle import Base\n\n\nclass Sub(Base):\n    def test_sub(self):\n        pass\n",
+            ),
+            (
+                "test_diamond.py",
+                "import unittest\n\n\nclass Base(unittest.TestCase):\n    def test_a(self):\n        pass\n\n    def test_b(self):\n        pass\n\n\nimport diamond\n\n\nclass Left(Base):\n    pass\n\n\nclass Both(Left, diamond.Right):\n    pass\n",
+            ),
+            (
+                "diamond.py",
+                "from test_diamond import Base\n\n\nclass Right(Base):\n    def test_b(self):\n        pass\n",
+            ),
+        ],
+        exact: &[
+            "test_diamond.py::Base::test_a",
+            "test_diamond.py::Base::test_b",
+            "test_diamond.py::Both::test_a",
+            "test_diamond.py::Both::test_b",
+            "test_diamond.py::Left::test_a",
+            "test_diamond.py::Left::test_b",
+        ],
+        refined: &["test_cycle.py"],
+    };
+    let dir = scratch(SUITE.files);
+    let found = collect(dir.path(), &[]);
+    assert_eq!(exact(&found), SUITE.exact);
+    assert_eq!(refined(&found), SUITE.refined);
+    let (rel, cycle) = &found[0];
+    assert_eq!(rel, "test_cycle.py");
+    assert_eq!(
+        cycle.refine.as_ref().map(ToString::to_string).as_deref(),
+        Some("Both has an inconsistent MRO; Python refuses to make it")
+    );
+    let guess: Vec<(&str, Certainty)> = cycle
+        .cases
+        .iter()
+        .map(|case| (case.id.as_str(), case.certainty))
+        .collect();
+    assert_eq!(
+        guess,
+        [("test_cycle.py::Base::test_base", Certainty::Partial)]
+    );
+    let spans: Vec<(&str, &str, Option<u32>)> = found[1]
+        .1
+        .cases
+        .iter()
+        .filter(|case| case.id.as_str().starts_with("test_diamond.py::Both::"))
+        .filter_map(|case| {
+            let span = case.span.as_ref()?;
+            Some((case.id.as_str(), span.path.as_str(), span.line))
+        })
+        .collect();
+    assert_eq!(
+        spans,
+        [
+            ("test_diamond.py::Both::test_a", "test_diamond.py", Some(5)),
+            ("test_diamond.py::Both::test_b", "diamond.py", Some(5)),
+        ]
+    );
+    if let Some(python) = python() {
+        differential(&python, &SUITE);
+    }
+}
+
+/// Recognitions on many threads at once, whose MROs meet one base class
+/// through two of its subclasses, each find that class once: `Both.test_b`
+/// is `Right`'s, which comes before `Base`. Two threads could each read
+/// `base.py` and one of them meet both reads in one MRO, giving `Base`'s
+/// `test_b` (finding 5 of `docs/reorganisation.md`); a large `base.py`
+/// keeps the reads long enough to overlap. Pinned: it can't be forced.
+#[test]
+fn threads_reading_one_file_find_one_class() {
+    const MODULES: usize = 16;
+    let mut base = String::from(
+        "import unittest\n\n\nclass Base(unittest.TestCase):\n    def test_a(self):\n        pass\n\n    def test_b(self):\n        pass\n",
+    );
+    for i in 0..1500 {
+        let _ = write!(
+            base,
+            "\n\ndef filler_{i}(x):\n    return [x + {i} for _ in range(3)]\n"
+        );
+    }
+    let names: Vec<String> = (0..MODULES).map(|i| format!("test_{i:02}.py")).collect();
+    let mut files = vec![
+        ("base.py", base.as_str()),
+        (
+            "helper.py",
+            "from base import Base\n\n\nclass Left(Base):\n    pass\n\n\nclass Right(Base):\n    def test_b(self):\n        pass\n",
+        ),
+    ];
+    for name in &names {
+        files.push((
+            name,
+            "from helper import Left, Right\n\n\nclass Both(Left, Right):\n    pass\n",
+        ));
+    }
+    for _ in 0..4 {
+        let dir = scratch(&files);
+        let recognizer = recognizer(dir.path(), &[]).unwrap();
+        let parsed: Vec<Parsed> = names
+            .iter()
+            .map(|name| Parsed::read(dir.path(), name))
+            .collect();
+        let start = std::sync::Barrier::new(MODULES);
+        let found: Vec<Recognition> = std::thread::scope(|scope| {
+            let threads: Vec<_> = parsed
+                .iter()
+                .map(|parsed| {
+                    scope.spawn(|| {
+                        start.wait();
+                        recognizer.recognize(&parsed.file(), Requested::Found, &[])
+                    })
+                })
+                .collect();
+            threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect()
+        });
+        for (name, recognition) in names.iter().zip(&found) {
+            let test_b: Vec<&str> = recognition
+                .cases
+                .iter()
+                .filter(|case| case.id.as_str().ends_with("::Both::test_b"))
+                .filter_map(|case| Some(case.span.as_ref()?.path.as_str()))
+                .collect();
+            assert_eq!(test_b, ["helper.py"], "{name}");
+        }
+    }
 }

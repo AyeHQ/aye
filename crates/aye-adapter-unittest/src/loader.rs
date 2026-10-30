@@ -34,8 +34,10 @@ pub(crate) struct Loaded {
     pub mro: Vec<(PathBuf, usize)>,
 }
 
+/// A class of an MRO.
 #[derive(Clone)]
 enum Node {
+    /// A project class: its module's summary and its position there.
     Class(Arc<Summary>, usize),
     TestCase,
     Object,
@@ -43,9 +45,12 @@ enum Node {
 }
 
 impl PartialEq for Node {
+    /// A project class is its file's class at its position, whichever read
+    /// of the file found it: the test module as collection parsed it, or the
+    /// project's read of it, which two threads may each have made.
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Class(a, i), Self::Class(b, j)) => Arc::ptr_eq(a, b) && i == j,
+            (Self::Class(a, i), Self::Class(b, j)) => a.path == b.path && i == j,
             (Self::TestCase, Self::TestCase) | (Self::Object, Self::Object) => true,
             (Self::Plain(a), Self::Plain(b)) => a == b,
             _ => false,
