@@ -169,15 +169,19 @@ mod tests {
             names(&subs.take(&TestId::new("t.py::test_b"))),
             ["x=1", "x=3"]
         );
-        assert!(subs.take(&TestId::new("t.py::test_b")).is_empty());
+        assert_eq!(
+            names(&subs.take(&TestId::new("t.py::test_b"))),
+            [] as [String; 0]
+        );
         // What is left, by id.
-        let left: Vec<String> = subs
-            .take_left()
-            .into_iter()
-            .map(|(id, _)| id.into_string())
-            .collect();
-        assert_eq!(left, ["t.py::test_a", "t.py::test_c"]);
-        assert!(subs.take_left().is_empty());
+        let left = |subs: &mut SubOutcomes| {
+            subs.take_left()
+                .into_iter()
+                .map(|(id, _)| id.into_string())
+                .collect::<Vec<String>>()
+        };
+        assert_eq!(left(&mut subs), ["t.py::test_a", "t.py::test_c"]);
+        assert_eq!(left(&mut subs), [] as [String; 0]);
     }
 
     #[test]

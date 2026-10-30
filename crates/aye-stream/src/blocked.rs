@@ -181,7 +181,7 @@ mod tests {
         assert!(blocked.failed(&b, &Failure::default(), Again::Never));
         assert!(blocked.has_failed(&b));
         assert_eq!(blocked.take(&b), [1, 3]);
-        assert!(blocked.take(&b).is_empty());
+        assert_eq!(blocked.take(&b), [] as [i32; 0]);
         // Held again after it was taken: it comes after the others.
         blocked.hold(&b, 4);
         assert_eq!(blocked.by_lifetime(), [(&a, &[2][..]), (&b, &[4][..])]);
