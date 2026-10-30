@@ -189,6 +189,32 @@ fn runs_are_numbered_after_the_highest_number_stored_and_last() {
     );
 }
 
+/// `--run`'s text: a run's number in either case, with or without its `r`
+/// or leading zeros, which is also the start of a legacy id should no run
+/// have the number; anything else the start of a legacy id, lower-cased.
+#[test]
+fn run_selectors_read_a_number_or_the_start_of_a_legacy_id() {
+    let number = |n: u64, text: &str| RunSelector::Number {
+        number: RunNumber::new(n).unwrap(),
+        or_prefix: text.into(),
+    };
+    for (text, selector) in [
+        ("r81", number(81, "r81")),
+        ("81", number(81, "81")),
+        ("R81", number(81, "r81")),
+        ("081", number(81, "081")),
+        ("r081", number(81, "r081")),
+        ("9", number(9, "9")),
+        ("FEDC", RunSelector::LegacyPrefix("fedc".into())),
+        ("0", RunSelector::LegacyPrefix("0".into())),
+        ("r", RunSelector::LegacyPrefix("r".into())),
+        ("r9x", RunSelector::LegacyPrefix("r9x".into())),
+        ("", RunSelector::LegacyPrefix("".into())),
+    ] {
+        assert_eq!(RunSelector::from(text), selector, "{text}");
+    }
+}
+
 #[test]
 fn a_number_another_run_holds_is_skipped() {
     let project = project();

@@ -61,8 +61,7 @@
 use std::io::{self, Write as _};
 
 use aye_config::OutputFormat;
-use aye_events::RunNumber;
-use aye_history::{RunMeta, RunStore, StoredRunId};
+use aye_history::{RunMeta, RunSelector, RunStore, SelectRunError, StoredRunId};
 use aye_render::{JsonLines, RenderMode, ShowMode, Text, TextOptions};
 use aye_stream::{Consumer, Keys, RunIndex, RunItem};
 
@@ -212,52 +211,34 @@ fn no_run(store: &RunStore, keep: usize) -> AyeError {
     }
 }
 
-/// The run `--run` names, else the last ([`RunStore::last`]: the newest
-/// stored when the one `last` names is gone). `--run` takes a run's number
-/// (`r81` or `81`) or, for a run stored before runs were numbered, the
-/// start of its hex id.
+/// The run `--run` names ([`RunSelector`]: a run's number, `r81` or `81`,
+/// or, for a run stored before runs were numbered, the start of its hex
+/// id), else the last ([`RunStore::last`]: the newest stored when the one
+/// `last` names is gone).
 fn pick(store: &RunStore, wanted: Option<&str>, keep: usize) -> Result<RunMeta, AyeError> {
-    let Some(wanted) = wanted else {
-        return store.last().ok_or_else(|| no_run(store, keep));
-    };
-    let runs = store.runs();
-    if runs.is_empty() {
-        return Err(no_run(store, keep));
-    }
-    let lower = wanted.to_ascii_lowercase();
-    if let Ok(number) = lower.parse::<RunNumber>()
-        && let Some(meta) = runs.iter().find(|meta| meta.number() == Some(number))
-    {
-        return Ok(meta.clone());
-    }
-    let mut found: Vec<RunMeta> = runs
-        .iter()
-        .filter(
-            |meta| matches!(&meta.run, StoredRunId::Legacy(id) if id.as_str().starts_with(&lower)),
-        )
-        .cloned()
-        .collect();
-    match found.len() {
-        1 => Ok(found.remove(0)),
-        0 => Err(AyeError::usage(format!(
+    let selector = wanted.map_or(RunSelector::Last, RunSelector::from);
+    let wanted = wanted.unwrap_or_default();
+    store.select(&selector).map_err(|err| match err {
+        SelectRunError::NoRun => no_run(store, keep),
+        SelectRunError::NoSuchRun { stored } => AyeError::usage(format!(
             "--run {wanted}: no stored run is numbered so{}; stored: {}",
-            if runs.iter().any(|meta| meta.number().is_none()) {
+            if stored.iter().any(|id| id.number().is_none()) {
                 " or has an id that starts with it"
             } else {
                 ""
             },
-            ids(&runs)
-        ))),
-        _ => Err(AyeError::usage(format!(
+            ids(&stored)
+        )),
+        SelectRunError::Ambiguous { ids: found } => AyeError::usage(format!(
             "--run {wanted}: several stored runs' ids start with it: {}",
             ids(&found)
-        ))),
-    }
+        )),
+    })
 }
 
-fn ids(runs: &[RunMeta]) -> String {
+fn ids(runs: &[StoredRunId]) -> String {
     runs.iter()
-        .map(|meta| meta.run.to_string())
+        .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ")
 }

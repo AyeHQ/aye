@@ -1,5 +1,6 @@
 //! A stored run's id ([`StoredRunId`]): its number, or the hex id of a run
-//! stored before runs were numbered.
+//! stored before runs were numbered; and what `aye show --run` names of
+//! the runs stored ([`RunSelector`]).
 
 use std::fmt;
 
@@ -80,5 +81,42 @@ impl<'de> Deserialize<'de> for StoredRunId {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let id = Box::<str>::deserialize(deserializer)?;
         Ok(Self::from(&*id))
+    }
+}
+
+/// What `aye show --run` names of the runs stored
+/// ([`RunStore::select`](super::RunStore::select)): the last run, without
+/// `--run`; a run's number (`r81` or `81`, in either case); or the start of
+/// the id of a run stored before runs were numbered (its hex digits, in
+/// either case). A number no stored run has is the start of such an id
+/// too, as it was written, so `--run 81` names a run `81ab…` when no `r81`
+/// is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunSelector {
+    /// The last run ([`RunStore::last`](super::RunStore::last)).
+    Last,
+    /// The run numbered `number`, else the one whose legacy id starts with
+    /// `or_prefix`.
+    Number {
+        number: RunNumber,
+        or_prefix: Box<str>,
+    },
+    /// The run whose legacy id starts so.
+    LegacyPrefix(Box<str>),
+}
+
+/// What `--run` names with `text`: lower-cased, a run's number when it
+/// reads as one ([`RunNumber`]'s `FromStr`: `r81`, `81`, `081`), else the
+/// start of a legacy id.
+impl From<&str> for RunSelector {
+    fn from(text: &str) -> Self {
+        let lower = text.to_ascii_lowercase();
+        match lower.parse::<RunNumber>() {
+            Ok(number) => Self::Number {
+                number,
+                or_prefix: lower.into(),
+            },
+            Err(_) => Self::LegacyPrefix(lower.into()),
+        }
     }
 }

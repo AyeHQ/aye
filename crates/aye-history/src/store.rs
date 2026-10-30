@@ -57,10 +57,10 @@ mod reader;
 mod retention;
 mod writer;
 
-pub use id::StoredRunId;
+pub use id::{RunSelector, StoredRunId};
 pub use layout::{DIR, LAST};
 pub use meta::{RunMeta, VERSION};
-pub use reader::RunStore;
+pub use reader::{RunStore, SelectRunError};
 pub use writer::RunWriter;
 
 #[cfg(test)]

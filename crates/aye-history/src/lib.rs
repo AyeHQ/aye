@@ -38,4 +38,4 @@ pub mod history;
 pub mod store;
 
 pub use history::{FILE, History, TestStats, VERSION};
-pub use store::{RunMeta, RunStore, RunWriter, StoredRunId};
+pub use store::{RunMeta, RunSelector, RunStore, RunWriter, SelectRunError, StoredRunId};

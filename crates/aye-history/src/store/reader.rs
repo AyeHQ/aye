@@ -1,5 +1,6 @@
 //! The runs kept in the store, read back for `aye show` ([`RunStore`]):
-//! listed, the last first, each one's summary, and its log.
+//! listed, the last first, the one `--run` names, each one's summary, and
+//! its log.
 
 use std::cmp::Reverse;
 use std::fs;
@@ -10,12 +11,24 @@ use aye_events::Record;
 use flate2::read::GzDecoder;
 
 use super::layout::{LAST, LOG, META, is_run_id};
-use super::{RunMeta, StoredRunId, VERSION};
+use super::{RunMeta, RunSelector, StoredRunId, VERSION};
 
 /// The runs kept in a directory (`.aye/runs`), for `aye show`.
 #[derive(Debug, Clone)]
 pub struct RunStore {
     pub(super) dir: PathBuf,
+}
+
+/// Why [`RunStore::select`] names no run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectRunError {
+    /// No run is stored.
+    NoRun,
+    /// No stored run is numbered so, nor has a legacy id that starts so:
+    /// the ids of the runs stored, the last first.
+    NoSuchRun { stored: Vec<StoredRunId> },
+    /// Several stored runs' legacy ids start so: theirs, the last first.
+    Ambiguous { ids: Vec<StoredRunId> },
 }
 
 impl RunStore {
@@ -58,6 +71,42 @@ impl RunStore {
     /// `last` is), the newest run stored. `None` when no run is.
     pub fn last(&self) -> Option<RunMeta> {
         self.runs().into_iter().next()
+    }
+
+    /// The run `selector` names: the last, the one with its number, else
+    /// the one whose legacy id starts with its text ([`RunSelector`]).
+    pub fn select(&self, selector: &RunSelector) -> Result<RunMeta, SelectRunError> {
+        let prefix = match selector {
+            RunSelector::Last => return self.last().ok_or(SelectRunError::NoRun),
+            RunSelector::Number { or_prefix, .. } | RunSelector::LegacyPrefix(or_prefix) => {
+                or_prefix
+            }
+        };
+        let runs = self.runs();
+        if runs.is_empty() {
+            return Err(SelectRunError::NoRun);
+        }
+        if let RunSelector::Number { number, .. } = selector
+            && let Some(meta) = runs.iter().find(|meta| meta.number() == Some(*number))
+        {
+            return Ok(meta.clone());
+        }
+        let mut found: Vec<RunMeta> = runs
+            .iter()
+            .filter(|meta| {
+                matches!(&meta.run, StoredRunId::Legacy(id) if id.as_str().starts_with(&**prefix))
+            })
+            .cloned()
+            .collect();
+        match found.len() {
+            1 => Ok(found.remove(0)),
+            0 => Err(SelectRunError::NoSuchRun {
+                stored: runs.into_iter().map(|meta| meta.run).collect(),
+            }),
+            _ => Err(SelectRunError::Ambiguous {
+                ids: found.into_iter().map(|meta| meta.run).collect(),
+            }),
+        }
     }
 
     /// The id `last` holds, when it is one.
