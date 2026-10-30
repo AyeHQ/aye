@@ -6,10 +6,10 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use aye_events::{Case, Outcome, TestId};
+use aye_events::{Case, KeyPrefix, Outcome, TestId};
 use aye_history::{RunMeta, StoredRunId};
-use aye_render::Keys;
 use aye_select::Selection;
+use aye_stream::{Keys, ShortKey};
 
 use super::feed::{Item, Log};
 use crate::cli::ShowArgs;
@@ -63,11 +63,13 @@ pub(super) fn choose(
         let selector = match wanted {
             Wanted::Path(selector) => selector,
             Wanted::Test(selector) => {
-                let found = keys.resolve(arg);
+                let found = arg
+                    .parse::<KeyPrefix>()
+                    .map_or_else(|_| Vec::new(), |prefix| keys.resolve(&prefix));
                 if found.is_empty() {
                     selector
                 } else {
-                    match by_key(arg, &found, &with_results, keys, &meta.run) {
+                    match by_key(arg, &found, &with_results, &meta.run) {
                         Ok(id) => chosen.extend(
                             log.items
                                 .iter()
@@ -110,36 +112,34 @@ pub(super) fn choose(
 }
 
 /// The one id with a result in run `run` that `arg` names as a key, of the
-/// ids `found` whose key it is or starts (those in `with_results` have one);
-/// else why not: the start of several keys, or of keys none of whose tests
-/// has a result.
+/// ids `found`, with their keys, whose key it is or starts (those in
+/// `with_results` have one); else why not: the start of several keys, or
+/// of keys none of whose tests has a result.
 fn by_key<'a>(
     arg: &str,
-    found: &'a [String],
+    found: &[(&'a str, ShortKey)],
     with_results: &HashSet<&str>,
-    keys: &Keys,
     run: &StoredRunId,
 ) -> Result<&'a str, String> {
-    let shown: Vec<&str> = found
+    let shown: Vec<(&str, ShortKey)> = found
         .iter()
-        .map(String::as_str)
-        .filter(|id| with_results.contains(id))
+        .copied()
+        .filter(|(id, _)| with_results.contains(id))
         .collect();
     match shown[..] {
-        [id] => Ok(id),
+        [(id, _)] => Ok(id),
         [] => Err(match found {
-            [id] => format!("{arg}: the key of {id}, which has no result in run {run}"),
+            [(id, _)] => format!("{arg}: the key of {id}, which has no result in run {run}"),
             _ => format!(
                 "{arg}: the start of {} tests' keys, none of which has a result in run {run}",
                 found.len()
             ),
         }),
         _ => {
-            let key = |id: &str| keys.key(id).unwrap_or(arg);
-            let width = shown.iter().map(|id| key(id).len()).max().unwrap_or(0);
+            let width = shown.iter().map(|(_, key)| key.digits()).max().unwrap_or(0);
             let candidates: Vec<String> = shown
                 .iter()
-                .map(|id| format!("\n  {:<width$}  {id}", key(id)))
+                .map(|(id, key)| format!("\n  {key:<width$}  {id}"))
                 .collect();
             Err(format!(
                 "{arg}: the start of several keys; give more of the one you want:{}",

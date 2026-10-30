@@ -332,7 +332,10 @@ fn each_result_comes_with_its_own_records_and_a_key_names_them_all() {
     assert_eq!(meta_like(&feed), (ExitCode::TestsFailed, 0, 1));
     // The test's key: both its results, each with its own records.
     let keys = Keys::of(&records);
-    let key = keys.key("t.py::T::test_t").unwrap().to_owned();
+    let key = keys
+        .key(&TestId::new("t.py::T::test_t"))
+        .unwrap()
+        .to_string();
     let wanted = [(key.as_str(), Wanted::Test(key.clone()))];
     let chosen = choose(&log, &keys, &wanted, &meta("r1")).ok().unwrap();
     let shown: Vec<&Item<'_>> = log
@@ -422,7 +425,7 @@ fn keys_and_their_start_name_tests_and_the_start_of_several_is_a_usage_error() {
     }
     let records = stamped(events);
     let keys = Keys::of(&records);
-    let key = |id: &str| keys.key(id).unwrap().to_owned();
+    let key = |id: &str| keys.key(&TestId::new(id)).unwrap().to_string();
     // A key, whole or upper case; the start of one test's key, from 4
     // digits; its whole hash.
     let full = aye_events::TestKey::of(&first).to_string();
@@ -432,7 +435,7 @@ fn keys_and_their_start_name_tests_and_the_start_of_several_is_a_usage_error() {
     let other = aye_events::TestKey::of("t.py::test_other").to_string();
     let unique = (4..=16)
         .map(|len| &other[..len])
-        .find(|start| keys.resolve(start).len() == 1)
+        .find(|start| keys.resolve(&start.parse().unwrap()).len() == 1)
         .unwrap();
     assert_eq!(
         chosen(&records, &[unique]),
@@ -463,7 +466,7 @@ fn keys_and_their_start_name_tests_and_the_start_of_several_is_a_usage_error() {
     // Hex that is no key's start is read as any other name: here, none.
     let none = (0..0x1_0000)
         .map(|n| format!("{n:04x}"))
-        .find(|hex| keys.resolve(hex).is_empty())
+        .find(|hex| keys.resolve(&hex.parse().unwrap()).is_empty())
         .unwrap();
     let problem = chosen(&records, &[&none]).unwrap_err();
     assert!(

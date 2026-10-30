@@ -130,20 +130,22 @@
 //! 500; a worker's `error` its last 2000.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::time::Duration;
 
 use aye_events::{
     Captured, Certainty, Compare, Counts, Diagnostic, DiagnosticCode, Event, ExitCode, Failure,
-    FailureSignature, LifetimeId, Local, Outcome, Record, RunNumber, Severity, StopReason, TestId,
-    TestResult, WorkerIndex,
+    LifetimeId, Local, Outcome, Record, Severity, StopReason, TestId, TestResult, WorkerIndex,
+};
+use aye_stream::{
+    Again, BlockedTests, Consumer, FirstBySignature, HeldSub, Keys, Left, Noted, Repeats, RunFacts,
+    SubOutcomes, Subject, Tally,
 };
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
 
-use crate::tally::{Noted, Tally};
-use crate::{Keys, Level, Reporter, ShowContext, ShowMode, shared};
+use crate::{Level, ShowContext, ShowMode, shared};
 
 const ID_MAX: usize = 1000;
 const PATH_MAX: usize = 500;
@@ -190,24 +192,19 @@ pub struct JsonLines<W: Write> {
     out: W,
     /// `-v` count minus `-q` count, clamped to -1..=3.
     verbosity: i8,
-    collect_only: bool,
-    /// From `run_started`.
-    run: Option<RunNumber>,
-    /// From `collection_finished`.
-    selected: Option<u32>,
-    /// Each worker's Python version, from its `worker_started`.
-    pythons: HashMap<Option<WorkerIndex>, String>,
+    /// From `run_started`, `collection_finished` and each
+    /// `worker_started`.
+    facts: RunFacts,
     /// The first bad outcome reported with each signature: its key and
     /// message.
-    signatures: HashMap<FailureSignature, (String, String)>,
+    signatures: FirstBySignature<(String, String)>,
     /// Tests blocked by a lifetime whose `lifetime_finished` has not
-    /// arrived, with their keys.
-    pending: BTreeMap<LifetimeId, Vec<(TestId, String)>>,
-    /// Lifetimes reported, and the signature they were reported with.
-    reported: HashMap<LifetimeId, Option<FailureSignature>>,
+    /// arrived, with their keys; and the lifetimes reported, each again
+    /// with a signature other than the one it was last reported with.
+    blocked: BlockedTests<(TestId, String)>,
     /// Bad sub-outcomes of tests that haven't finished, held so that the
     /// first can carry the test's output and rerun.
-    held: BTreeMap<TestId, Vec<HeldSub>>,
+    subs: SubOutcomes,
     /// Diagnostics reported, by severity, code, path and message, so that
     /// one every batch repeats (a framework rejecting its arguments) is
     /// reported once.
@@ -222,15 +219,6 @@ pub struct JsonLines<W: Write> {
     /// What `aye show` asks for; `None` in a run.
     show: Option<ShowMode>,
     context: ShowContext,
-}
-
-/// A bad sub-outcome, until its test finishes.
-struct HeldSub {
-    name: String,
-    outcome: Outcome,
-    failure: Option<Failure>,
-    duration: Duration,
-    worker: Option<WorkerIndex>,
 }
 
 #[derive(Serialize)]
@@ -709,14 +697,10 @@ impl<W: Write> JsonLines<W> {
         Self {
             out,
             verbosity: level.count(),
-            collect_only: false,
-            run: None,
-            selected: None,
-            pythons: HashMap::new(),
-            signatures: HashMap::new(),
-            pending: BTreeMap::new(),
-            reported: HashMap::new(),
-            held: BTreeMap::new(),
+            facts: RunFacts::new(),
+            signatures: FirstBySignature::new(),
+            blocked: BlockedTests::new(),
+            subs: SubOutcomes::new(),
             diagnostics: HashSet::new(),
             tally: Tally::default(),
             keys: Keys::new(),
@@ -774,17 +758,14 @@ impl<W: Write> JsonLines<W> {
         self.out.write_all(b"\n")
     }
 
-    /// The key of a test's or a lifetime's id.
-    fn key(&self, id: &str) -> String {
-        self.keys.key(id).map_or_else(
-            || aye_events::TestKey::of(id).prefix(crate::keys::MIN),
-            str::to_owned,
-        )
+    /// The key of a test or a lifetime.
+    fn key<'s>(&self, subject: impl Into<Subject<'s>>) -> String {
+        self.keys.shown(subject).to_string()
     }
 
-    /// The summary's `failures` counts `id`'s key.
-    fn note_bad(&mut self, id: &str) {
-        let key = self.key(id);
+    /// The summary's `failures` counts the key of a test or a lifetime.
+    fn note_bad<'s>(&mut self, subject: impl Into<Subject<'s>>) {
+        let key = self.key(subject);
         if self.failures_seen.insert(key.clone()) {
             self.failures.push(key);
         }
@@ -797,8 +778,12 @@ impl<W: Write> JsonLines<W> {
             return None;
         }
         Some(Shown {
-            run: self.context.run.or(self.run).map(|run| run.to_string()),
-            python: self.pythons.get(&worker).cloned(),
+            run: self
+                .context
+                .run
+                .or(self.facts.number)
+                .map(|run| run.to_string()),
+            python: self.facts.python(worker).map(str::to_owned),
             stale: self.context.stale.contains_key(path),
         })
     }
@@ -811,14 +796,11 @@ impl<W: Write> JsonLines<W> {
         if self.all() {
             return None;
         }
-        if let Some(first) = self.signatures.get(signature) {
-            return Some(first.clone());
-        }
-        self.signatures.insert(
-            signature.clone(),
-            (key.to_owned(), shared::message(failure).to_owned()),
-        );
-        None
+        self.signatures
+            .first_or_keep(signature, || {
+                (key.to_owned(), shared::message(failure).to_owned())
+            })
+            .cloned()
     }
 
     /// L2 and L3 of a failure.
@@ -947,18 +929,10 @@ impl<W: Write> JsonLines<W> {
         // its own: the first of theirs carries its output and rerun. What
         // they reported (the unittest and doctest adapters fail the test
         // with the same failures) isn't reported again.
-        let subs = self.held.remove(&result.id).unwrap_or_default();
-        let reported: Vec<Failure> = subs.iter().filter_map(|sub| sub.failure.clone()).collect();
-        let own: Vec<Failure> = if subs.is_empty() {
-            result.failures.clone()
-        } else {
-            result
-                .failures
-                .iter()
-                .filter(|failure| !shared::repeats_subs(failure, &reported))
-                .cloned()
-                .collect()
-        };
+        let subs = self.subs.take(&result.id);
+        let own: Vec<Failure> = aye_stream::own_failures(result, &subs, Repeats::SameOrBare)
+            .cloned()
+            .collect();
         let only_subs =
             !subs.is_empty() && result.outcome.is_bad() && result.cause.is_none() && own.is_empty();
         for (at, sub) in subs.iter().enumerate() {
@@ -980,15 +954,12 @@ impl<W: Write> JsonLines<W> {
         own: &[Failure],
         worker: Option<WorkerIndex>,
     ) -> io::Result<()> {
-        let key = self.key(result.id.as_str());
+        let key = self.key(&result.id);
         if let Some(lifetime) = &result.cause {
-            if self.reported.contains_key(lifetime) {
+            if self.blocked.has_failed(lifetime) {
                 return self.caused(&result.id, key, result.outcome, lifetime);
             }
-            self.pending
-                .entry(lifetime.clone())
-                .or_default()
-                .push((result.id.clone(), key));
+            self.blocked.hold(lifetime, (result.id.clone(), key));
             return Ok(());
         }
         let Some(first) = own.first() else {
@@ -1032,7 +1003,7 @@ impl<W: Write> JsonLines<W> {
         carried: Option<&TestResult>,
         brief: bool,
     ) -> io::Result<()> {
-        let key = self.key(id.as_str());
+        let key = self.key(id);
         let mut fail = Fail::new(key.clone(), id, sub.outcome);
         fail.sub = Some(shared::head(&sub.name, ID_MAX));
         fail.shown = self.shown(id.path().as_str(), sub.worker);
@@ -1065,7 +1036,7 @@ impl<W: Write> JsonLines<W> {
 
     /// Bad sub-outcomes whose test never finished (its worker was killed).
     fn flush_held(&mut self) -> io::Result<()> {
-        for (id, subs) in std::mem::take(&mut self.held) {
+        for (id, subs) in self.subs.take_left() {
             if !self.lines() {
                 continue;
             }
@@ -1095,18 +1066,18 @@ impl<W: Write> JsonLines<W> {
         duration: Duration,
         worker: Option<WorkerIndex>,
     ) -> io::Result<()> {
-        let blocked = self.pending.remove(lifetime).unwrap_or_default();
-        let fresh =
-            failure.filter(|failure| self.reported.get(lifetime) != Some(&failure.signature));
+        let blocked = self.blocked.take(lifetime);
+        let fresh = failure.filter(|failure| {
+            self.blocked
+                .failed(lifetime, failure, Again::OtherSignature)
+        });
         let Some(failure) = fresh else {
             for (id, key) in blocked {
                 self.caused(&id, key, Outcome::Error, lifetime)?;
             }
             return Ok(());
         };
-        self.reported
-            .insert(lifetime.clone(), failure.signature.clone());
-        let key = self.key(lifetime.as_str());
+        let key = self.key(lifetime);
         let mut line = LifetimeFail {
             key: key.clone(),
             lifetime: shared::head(lifetime.as_str(), ID_MAX),
@@ -1139,13 +1110,11 @@ impl<W: Write> JsonLines<W> {
     /// A failed lifetime's line in `aye show`'s list, once per lifetime,
     /// at L1 whatever the level.
     fn lifetime_list_line(&mut self, lifetime: &LifetimeId, failure: &Failure) -> io::Result<()> {
-        if self.reported.contains_key(lifetime) {
+        if !self.blocked.failed(lifetime, failure, Again::Never) {
             return Ok(());
         }
-        self.reported
-            .insert(lifetime.clone(), failure.signature.clone());
         self.line(&Line::LifetimeFail(Box::new(LifetimeFail {
-            key: self.key(lifetime.as_str()),
+            key: self.key(lifetime),
             lifetime: shared::head(lifetime.as_str(), ID_MAX),
             phase: failure.phase.map(shared::phase),
             same_as: None,
@@ -1169,7 +1138,7 @@ impl<W: Write> JsonLines<W> {
             None
         };
         self.line(&Line::Test {
-            key: Some(self.key(result.id.as_str())),
+            key: Some(self.key(&result.id)),
             id: shared::head(result.id.as_str(), ID_MAX),
             outcome: result.outcome.as_str(),
             ms: shared::millis(result.duration),
@@ -1201,7 +1170,7 @@ impl<W: Write> JsonLines<W> {
 
     /// Tests blocked by lifetimes that never reported a failure.
     fn flush_pending(&mut self) -> io::Result<()> {
-        for (lifetime, ids) in std::mem::take(&mut self.pending) {
+        for (lifetime, ids) in self.blocked.take_left(Left::Lifetime) {
             for (id, key) in ids {
                 self.caused(&id, key, Outcome::Error, &lifetime)?;
             }
@@ -1273,9 +1242,13 @@ impl<W: Write> JsonLines<W> {
             .then_some("aye show <key> --output json");
         let omitted = failures.len().saturating_sub(FAILURES);
         self.line(&Line::Summary(Summary {
-            run: self.context.run.or(self.run).map(|run| run.to_string()),
+            run: self
+                .context
+                .run
+                .or(self.facts.number)
+                .map(|run| run.to_string()),
             exit: u8::from(exit_code),
-            tests: self.selected,
+            tests: self.facts.selected,
             failed: counts.failed,
             errors: counts.error,
             passed: counts.passed,
@@ -1298,39 +1271,26 @@ impl<W: Write> JsonLines<W> {
     /// What every level folds, whatever it writes: the run's number, the
     /// selected count, the workers' Pythons, and the keys of what failed.
     fn fold(&mut self, record: &Record) {
+        self.facts.note(record);
         match &record.event {
-            Event::RunStarted {
-                collect_only, run, ..
-            } => {
-                self.collect_only = *collect_only;
-                self.run = *run;
-            }
-            Event::CollectionFinished { selected, .. } => self.selected = Some(*selected),
-            Event::WorkerStarted {
-                python, version, ..
-            } => {
-                if let Some(python) = shared::python_version(python, version.as_deref()) {
-                    self.pythons.insert(record.envelope.worker, python);
-                }
-            }
             Event::TestFinished(result) if result.outcome.is_bad() => {
-                self.note_bad(result.id.as_str());
+                self.note_bad(&result.id);
             }
             Event::SubOutcome { id, outcome, .. } if outcome.is_bad() => {
-                self.note_bad(id.as_str());
+                self.note_bad(id);
             }
             Event::LifetimeFinished {
                 lifetime,
                 failure: Some(_),
                 ..
-            } => self.note_bad(lifetime.as_str()),
+            } => self.note_bad(lifetime),
             _ => {}
         }
     }
 }
 
-impl<W: Write> Reporter for JsonLines<W> {
-    fn report(&mut self, record: &Record) -> io::Result<()> {
+impl<W: Write> Consumer for JsonLines<W> {
+    fn consume(&mut self, record: &Record) -> io::Result<()> {
         let noted = self.tally.count(record);
         self.keys.note(record);
         self.fold(record);
@@ -1367,7 +1327,7 @@ impl<W: Write> Reporter for JsonLines<W> {
             };
         }
         match &record.event {
-            Event::CaseCollected(case) if self.collect_only => self.line(&Line::Case {
+            Event::CaseCollected(case) if self.facts.collect_only => self.line(&Line::Case {
                 id: shared::head(case.id.as_str(), ID_MAX),
                 partial: case.certainty == Certainty::Partial,
             }),
@@ -1378,21 +1338,8 @@ impl<W: Write> Reporter for JsonLines<W> {
                 failure,
                 duration,
             } => self.lifetime(lifetime, failure.as_ref(), *duration, worker),
-            Event::SubOutcome {
-                id,
-                name,
-                outcome,
-                failure,
-                duration,
-                ..
-            } if outcome.is_bad() => {
-                self.held.entry(id.clone()).or_default().push(HeldSub {
-                    name: name.clone(),
-                    outcome: *outcome,
-                    failure: failure.clone(),
-                    duration: *duration,
-                    worker,
-                });
+            Event::SubOutcome { outcome, .. } if outcome.is_bad() => {
+                self.subs.hold(record);
                 Ok(())
             }
             Event::TestFinished(result) => self.test(result, worker),

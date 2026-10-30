@@ -4,9 +4,10 @@ use aye_events::{
     Assertion, BatchIndex, Captured, Counts, Event, ExitCode, Failure, FailureSignature, Outcome,
     Phase, Record, TestId, TestResult, WorkerIndex,
 };
+use aye_stream::Consumer;
 
 use super::{feed, lines, streams};
-use crate::{ColorChoice, Level, Reporter, Text, TextOptions};
+use crate::{ColorChoice, Level, Text, TextOptions};
 
 fn text(records: &[Record], verbosity: i8) -> String {
     let mut text = Text::new(
@@ -709,14 +710,14 @@ fn the_header_comes_once_when_the_first_worker_starts() {
         .position(|record| matches!(record.event, Event::WorkerStarted { .. }))
         .unwrap();
     for record in &records[..started] {
-        text.report(record).unwrap();
+        text.consume(record).unwrap();
     }
     assert_eq!(text.into_inner(), [] as [u8; 0]);
     let mut text = Text::new(Vec::new(), TextOptions::default());
     let mut twice = records.clone();
     twice.insert(started, records[started].clone());
     for record in &twice[..=started + 1] {
-        text.report(record).unwrap();
+        text.consume(record).unwrap();
     }
     assert_eq!(
         String::from_utf8(text.into_inner()).unwrap(),
@@ -760,7 +761,7 @@ fn renderers_can_move_between_threads() {
     send::<crate::JsonLines<std::fs::File>>();
     send::<crate::Junit>();
     send::<crate::GithubAnnotations<std::io::Stdout>>();
-    send::<crate::Tee<'static>>();
+    send::<aye_stream::Tee<'static>>();
     assert_eq!(TextOptions::default().verbosity, Level::Default);
 }
 

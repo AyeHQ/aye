@@ -28,10 +28,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use aye_events::{
-    Diagnostic, Event, Failure, LifetimeId, Outcome, Phase, Record, Severity, TestId, TestResult,
+    Diagnostic, Event, Failure, LifetimeId, Outcome, Phase, Record, Severity, TestResult,
 };
+use aye_stream::{Consumer, DefinitionLines, HeldSub, ModuleSkips, Repeats, SubOutcomes};
 
-use crate::{Reporter, shared};
+use crate::shared;
 
 /// How the report is written: the framework's JUnit settings (pytest's
 /// `junit_*` options, which the binary reads from the adapter's context),
@@ -153,27 +154,20 @@ pub struct Junit {
     /// The run's properties, each pair once, in the order first recorded.
     properties: Vec<(String, String)>,
     /// The 1-based line each collected test is defined on.
-    lines: HashMap<String, u32>,
+    lines: DefinitionLines,
     /// Test cases in the order they finished.
     cases: Vec<Testcase>,
     /// Failed lifetimes, for the tests they kept from running.
     lifetimes: HashMap<LifetimeId, Failure>,
     /// Bad sub-outcomes of tests that haven't finished yet.
-    subs: HashMap<TestId, Vec<Sub>>,
+    subs: SubOutcomes,
     totals: Totals,
     /// Modules skipped while collecting.
-    module_skips: shared::ModuleSkips,
+    module_skips: ModuleSkips,
     /// The run's own duration, once known.
     duration: Option<Duration>,
     /// The sum of the tests' durations.
     tests_time: Duration,
-}
-
-/// A bad sub-outcome: its name, outcome and failure.
-struct Sub {
-    name: String,
-    outcome: Outcome,
-    failure: Option<Failure>,
 }
 
 enum Testcase {
@@ -201,12 +195,12 @@ impl Junit {
             prefix: String::new(),
             options: JunitOptions::default(),
             properties: Vec::new(),
-            lines: HashMap::new(),
+            lines: DefinitionLines::new(),
             cases: Vec::new(),
             lifetimes: HashMap::new(),
-            subs: HashMap::new(),
+            subs: SubOutcomes::new(),
             totals: Totals::default(),
-            module_skips: shared::ModuleSkips::default(),
+            module_skips: ModuleSkips::default(),
             duration: None,
             tests_time: Duration::ZERO,
         }
@@ -314,20 +308,17 @@ impl Junit {
     }
 
     fn test(&mut self, result: &TestResult) {
-        let subs = self.subs.remove(&result.id).unwrap_or_default();
+        let subs = self.subs.take(&result.id);
         // The unittest and doctest adapters fail the test with the very
         // failures of its subtests or examples: each is reported once, on
-        // its sub-outcome, which names it.
-        let repeated = |failure: &Failure| {
-            subs.iter()
-                .filter_map(|sub| sub.failure.as_ref())
-                .any(|sub| shared::same_failure(sub, failure))
+        // its sub-outcome, which names it. A bare failure of its own stays.
+        let own = aye_stream::own_failures(result, &subs, Repeats::Same)
+            .cloned()
+            .collect();
+        let result = &TestResult {
+            failures: own,
+            ..result.clone()
         };
-        let mut result = result.clone();
-        if !subs.is_empty() {
-            result.failures.retain(|failure| !repeated(failure));
-        }
-        let result = &result;
         self.totals.tests += 1;
         match result.outcome {
             Outcome::Failed => self.totals.failures += 1,
@@ -348,30 +339,15 @@ impl Junit {
         }
     }
 
-    fn sub_outcome(
-        &mut self,
-        id: &TestId,
-        name: &str,
-        outcome: Outcome,
-        failure: Option<&Failure>,
-    ) {
-        if outcome.is_bad() {
-            self.subs.entry(id.clone()).or_default().push(Sub {
-                name: name.to_owned(),
-                outcome,
-                failure: failure.cloned(),
-            });
-        }
-    }
-
-    fn testcase(&self, result: &TestResult, lifetime: Option<&Failure>, subs: &[Sub]) -> String {
+    fn testcase(
+        &self,
+        result: &TestResult,
+        lifetime: Option<&Failure>,
+        subs: &[HeldSub],
+    ) -> String {
         let id = result.id.as_str();
         let (classname, name) = names(id);
-        let line = self
-            .lines
-            .get(id)
-            .or_else(|| self.lines.get(result.id.without_params()))
-            .copied();
+        let line = self.lines.line(&result.id);
         let time = match self.options.duration {
             JunitDuration::Body => result.body_duration.unwrap_or(result.duration),
             JunitDuration::Total => result.duration,
@@ -760,30 +736,22 @@ fn escape(value: &str, attribute: bool) -> String {
     out
 }
 
-impl Reporter for Junit {
-    fn report(&mut self, record: &Record) -> io::Result<()> {
+impl Consumer for Junit {
+    fn consume(&mut self, record: &Record) -> io::Result<()> {
         if let Some(skipped) = self.module_skips.note(record) {
             self.module_skip(skipped);
         }
+        self.lines.note(record);
         match &record.event {
-            Event::CaseCollected(case) => {
-                if let Some(line) = case.span.as_ref().and_then(|span| span.line) {
-                    self.lines.insert(case.id.as_str().to_owned(), line);
-                }
-            }
             Event::Diagnostic(diagnostic) => self.diagnostic(diagnostic),
             Event::LifetimeFinished {
                 lifetime,
                 failure: Some(failure),
                 ..
             } => self.lifetime(lifetime, failure),
-            Event::SubOutcome {
-                id,
-                name,
-                outcome,
-                failure,
-                ..
-            } => self.sub_outcome(id, name, *outcome, failure.as_ref()),
+            Event::SubOutcome { .. } => {
+                self.subs.hold(record);
+            }
             Event::TestFinished(result) => self.test(result),
             Event::RunProperty { name, value } => {
                 let pair = (name.clone(), value.clone());

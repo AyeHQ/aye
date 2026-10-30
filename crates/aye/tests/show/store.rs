@@ -4,6 +4,7 @@
 
 use std::fs;
 
+use aye_events::TestId;
 use aye_test::{code, json_lines, project, stderr, stdout};
 use serde_json::Value;
 
@@ -112,7 +113,10 @@ fn show_picks_an_older_run_and_lists_the_runs() {
     assert_eq!(passed(&["--run", "r1"]), 4);
     assert_eq!(passed(&["--run", "1"]), 4);
     assert_eq!(passed(&["--run", "r2"]), 2);
-    let fail = keys(dir.path(), "r1").key(FAIL).unwrap().to_owned();
+    let fail = keys(dir.path(), "r1")
+        .key(&TestId::new(FAIL))
+        .unwrap()
+        .to_string();
     assert_eq!(
         failures(&show_json(dir.path(), &["--run", "r1", &fail])),
         [FAIL]

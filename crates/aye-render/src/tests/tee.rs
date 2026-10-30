@@ -1,15 +1,16 @@
 use std::io;
 
 use aye_events::{Event, Record};
+use aye_stream::{Consumer, Tee};
 
 use super::streams;
-use crate::{JsonLines, Level, Reporter, Tee};
+use crate::{JsonLines, Level};
 
 /// Fails on every record, and counts how often it was asked.
 struct Broken<'a>(&'a mut u32);
 
-impl Reporter for Broken<'_> {
-    fn report(&mut self, _: &Record) -> io::Result<()> {
+impl Consumer for Broken<'_> {
+    fn consume(&mut self, _: &Record) -> io::Result<()> {
         *self.0 += 1;
         Err(io::Error::other("broken pipe"))
     }
@@ -31,7 +32,7 @@ fn every_reporter_sees_every_record() {
         assert_eq!(tee.len(), 3);
         assert!(!tee.is_empty());
         for record in &records {
-            let error = tee.report(record).unwrap_err();
+            let error = tee.consume(record).unwrap_err();
             assert_eq!(error.to_string(), "broken pipe");
         }
         assert_eq!(tee.finish().unwrap_err().to_string(), "still broken");
@@ -50,7 +51,7 @@ fn every_reporter_sees_every_record() {
 fn an_empty_tee_does_nothing() {
     let mut tee = Tee::new();
     assert!(tee.is_empty());
-    tee.report(&Record::new(Event::CollectionStarted)).unwrap();
+    tee.consume(&Record::new(Event::CollectionStarted)).unwrap();
     tee.finish().unwrap();
 }
 
@@ -59,9 +60,9 @@ fn boxed_and_borrowed_reporters_are_reporters() {
     let mut out = Vec::new();
     {
         let mut json = JsonLines::new(&mut out, Level::Engine);
-        let mut boxed: Box<dyn Reporter> = Box::new(&mut json);
+        let mut boxed: Box<dyn Consumer> = Box::new(&mut json);
         boxed
-            .report(&Record::new(Event::RunFinished {
+            .consume(&Record::new(Event::RunFinished {
                 exit_code: aye_events::ExitCode::Ok,
                 counts: aye_events::Counts::default(),
                 duration: std::time::Duration::ZERO,

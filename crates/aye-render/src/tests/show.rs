@@ -9,11 +9,11 @@ use aye_events::{
     Counts, DiagnosticCode, Event, ExitCode, Outcome, ProjectPath, Record, RunNumber, TestId,
     TestKey,
 };
+use aye_stream::{Extra, Keys, Tally};
 
 use super::{feed, lines, streams};
 use crate::{
-    ColorChoice, Extra, JsonLines, Keys, Level, ShowContext, ShowMode, Tally, Text, TextOptions,
-    summary_words,
+    ColorChoice, JsonLines, Level, ShowContext, ShowMode, Text, TextOptions, summary_words,
 };
 
 fn text_for(records: &[Record], verbosity: i8, show: Option<(ShowMode, Keys)>) -> String {
@@ -88,7 +88,7 @@ fn part(records: &[Record], ids: &[&str]) -> Vec<Record> {
 
 /// The key a run gives `id`.
 fn key(records: &[Record], id: &str) -> String {
-    Keys::of(records).key(id).unwrap().to_owned()
+    Keys::of(records).key(&TestId::new(id)).unwrap().to_string()
 }
 
 /// Two test ids whose keys share their first five digits.

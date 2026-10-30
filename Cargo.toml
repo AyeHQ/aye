@@ -30,6 +30,7 @@ aye-render = { path = "crates/aye-render", version = "=0.0.1" }
 aye-runner = { path = "crates/aye-runner", version = "=0.0.1" }
 aye-select = { path = "crates/aye-select", version = "=0.0.1" }
 aye-static = { path = "crates/aye-static", version = "=0.0.1" }
+aye-stream = { path = "crates/aye-stream", version = "=0.0.1" }
 # x-release-please-end
 
 anstream = "0.6"

@@ -9,18 +9,20 @@
 //! finishes, so repeats can be counted, and capped: GitHub shows only the
 //! first few of a step anyway.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::io::{self, Write};
 
 use aye_events::{
-    Diagnostic, DiagnosticCode, Event, Failure, FailureSignature, LifetimeId, Outcome, Phase,
-    Record, Severity, TestId, TestResult, WorkerIndex,
+    Diagnostic, DiagnosticCode, Event, Failure, LifetimeId, Outcome, Phase, Record, Severity,
+    TestId, TestResult, WorkerIndex,
+};
+use aye_static::{EnvVars, ProcessEnv};
+use aye_stream::{
+    Again, BlockedTests, Consumer, DefinitionLines, FirstBySignature, Repeats, SubOutcomes,
 };
 
-use aye_static::{EnvVars, ProcessEnv};
-
-use crate::{Reporter, shared};
+use crate::shared;
 
 /// Failure annotations written per run.
 const ANNOTATIONS: usize = 50;
@@ -43,16 +45,16 @@ pub struct GithubAnnotations<W: Write> {
     out: W,
     prefix: String,
     /// The 1-based line each collected test is defined on.
-    lines: HashMap<String, u32>,
+    lines: DefinitionLines,
     annotations: Vec<Annotation>,
     /// Index of the annotation for each failure signature.
-    signatures: HashMap<FailureSignature, usize>,
-    /// Index of the annotation for each failed lifetime.
-    lifetimes: HashMap<LifetimeId, usize>,
-    /// Per lifetime: the first test it kept from running, and how many.
-    blocked: BTreeMap<LifetimeId, (TestId, u32)>,
-    /// The failures of each running test's bad sub-outcomes.
-    subs: HashMap<TestId, Vec<Failure>>,
+    signatures: FirstBySignature<usize>,
+    /// The tests each lifetime kept from running (the first names where an
+    /// annotation goes, and each is counted), and the lifetimes annotated,
+    /// each once.
+    blocked: BlockedTests<TestId>,
+    /// Each running test's bad sub-outcomes.
+    subs: SubOutcomes,
     written: bool,
     /// Error diagnostics annotated, so that one every batch repeats is
     /// annotated once.
@@ -75,12 +77,11 @@ impl<W: Write> GithubAnnotations<W> {
         Self {
             out,
             prefix: String::new(),
-            lines: HashMap::new(),
+            lines: DefinitionLines::new(),
             annotations: Vec::new(),
-            signatures: HashMap::new(),
-            lifetimes: HashMap::new(),
-            blocked: BTreeMap::new(),
-            subs: HashMap::new(),
+            signatures: FirstBySignature::new(),
+            blocked: BlockedTests::new(),
+            subs: SubOutcomes::new(),
             written: false,
             errors: HashSet::new(),
         }
@@ -117,40 +118,25 @@ impl<W: Write> GithubAnnotations<W> {
         {
             return (Some(path.as_str().to_owned()), Some(line));
         }
-        let line = self
-            .lines
-            .get(id.as_str())
-            .or_else(|| self.lines.get(id.without_params()))
-            .copied();
-        (Some(id.path().as_str().to_owned()), line)
+        (Some(id.path().as_str().to_owned()), self.lines.line(id))
     }
 
     fn test(&mut self, result: &TestResult) {
-        let subs = self.subs.remove(&result.id);
+        let subs = self.subs.take(&result.id);
         if !result.outcome.is_bad() {
             return;
         }
         if let Some(lifetime) = &result.cause {
-            self.blocked
-                .entry(lifetime.clone())
-                .or_insert_with(|| (result.id.clone(), 0))
-                .1 += 1;
+            self.blocked.hold(lifetime, result.id.clone());
             return;
         }
         // What its bad sub-outcomes were annotated with isn't annotated
         // again: the unittest and doctest adapters fail the test with
         // their failures.
-        let failure = match &subs {
-            Some(subs) => match result
-                .failures
-                .iter()
-                .find(|failure| !shared::repeats_subs(failure, subs))
-            {
-                Some(own) => Some(own),
-                None => return,
-            },
-            None => result.failure(),
-        };
+        let failure = aye_stream::own_failures(result, &subs, Repeats::SameOrBare).next();
+        if failure.is_none() && !subs.is_empty() {
+            return;
+        }
         self.annotate(
             result.id.as_str().to_owned(),
             &result.id,
@@ -159,19 +145,17 @@ impl<W: Write> GithubAnnotations<W> {
         );
     }
 
-    /// A bad sub-outcome (a failed subtest or doctest example), annotated
-    /// where it failed and named after it.
+    /// A bad sub-outcome (a failed subtest or doctest example), `record`,
+    /// annotated where it failed and named after it.
     fn sub_outcome(
         &mut self,
+        record: &Record,
         id: &TestId,
         name: &str,
         outcome: Outcome,
         failure: Option<&Failure>,
     ) {
-        let subs = self.subs.entry(id.clone()).or_default();
-        if let Some(failure) = failure {
-            subs.push(failure.clone());
-        }
+        self.subs.hold(record);
         self.annotate(format!("{id} › {name}"), id, failure, outcome);
     }
 
@@ -185,16 +169,15 @@ impl<W: Write> GithubAnnotations<W> {
         outcome: Outcome,
     ) {
         let signature = failure.and_then(|failure| failure.signature.as_ref());
-        if let Some(&at) = signature.and_then(|signature| self.signatures.get(signature)) {
+        let next = self.annotations.len();
+        if let Some(&at) =
+            signature.and_then(|signature| self.signatures.first_or_keep(signature, || next))
+        {
             self.annotations[at].repeats += 1;
             return;
         }
         let (file, line) = self.locate(failure, id);
         let message = failure.map_or_else(|| outcome.as_str().to_owned(), message);
-        if let Some(signature) = signature {
-            self.signatures
-                .insert(signature.clone(), self.annotations.len());
-        }
         self.annotations.push(Annotation {
             title,
             file,
@@ -206,11 +189,11 @@ impl<W: Write> GithubAnnotations<W> {
     }
 
     fn lifetime(&mut self, lifetime: &LifetimeId, failure: &Failure) {
-        if self.lifetimes.contains_key(lifetime) {
+        if !self.blocked.failed(lifetime, failure, Again::Never) {
             return;
         }
-        let (file, line) = match self.blocked.get(lifetime) {
-            Some((first, _)) => self.locate(Some(failure), first),
+        let (file, line) = match self.blocked.held(lifetime).first() {
+            Some(first) => self.locate(Some(failure), first),
             None => shared::origin(failure)
                 .filter(|(path, _)| path.is_project())
                 .map_or((None, None), |(path, line)| {
@@ -221,8 +204,6 @@ impl<W: Write> GithubAnnotations<W> {
             Some(Phase::Teardown) => "teardown",
             _ => "setup",
         };
-        self.lifetimes
-            .insert(lifetime.clone(), self.annotations.len());
         self.annotations.push(Annotation {
             title: format!("{phase} of {lifetime}"),
             file,
@@ -272,8 +253,10 @@ impl<W: Write> GithubAnnotations<W> {
         self.written = true;
         let mut annotations = std::mem::take(&mut self.annotations);
         // Tests blocked by a lifetime that never reported its failure.
-        for (lifetime, (first, _)) in &self.blocked {
-            if !self.lifetimes.contains_key(lifetime) {
+        for (lifetime, blocked) in self.blocked.by_lifetime() {
+            if let Some(first) = blocked.first()
+                && !self.blocked.has_failed(lifetime)
+            {
                 annotations.push(Annotation {
                     title: format!("setup of {lifetime}"),
                     file: Some(first.path().as_str().to_owned()),
@@ -293,15 +276,16 @@ impl<W: Write> GithubAnnotations<W> {
                     shared::plural(annotation.repeats, "more test", "more tests")
                 );
             }
-            if let Some((_, count)) = annotation
+            if let Some(count) = annotation
                 .lifetime
                 .as_ref()
-                .and_then(|lifetime| self.blocked.get(lifetime))
+                .map(|lifetime| self.blocked.held(lifetime).len())
+                .filter(|count| *count > 0)
             {
                 let _ = write!(
                     message,
                     "\n{} not run",
-                    shared::plural(*count, "test", "tests")
+                    shared::plural(count, "test", "tests")
                 );
             }
             let file = annotation.file.as_deref().map(|file| self.file(file));
@@ -369,15 +353,10 @@ fn property(value: &str) -> String {
     data(value).replace(':', "%3A").replace(',', "%2C")
 }
 
-impl<W: Write> Reporter for GithubAnnotations<W> {
-    fn report(&mut self, record: &Record) -> io::Result<()> {
+impl<W: Write> Consumer for GithubAnnotations<W> {
+    fn consume(&mut self, record: &Record) -> io::Result<()> {
+        self.lines.note(record);
         match &record.event {
-            Event::CaseCollected(case) => {
-                if let Some(line) = case.span.as_ref().and_then(|span| span.line) {
-                    self.lines.insert(case.id.as_str().to_owned(), line);
-                }
-                Ok(())
-            }
             Event::Diagnostic(diagnostic) => self.diagnostic(diagnostic),
             Event::LifetimeFinished {
                 lifetime,
@@ -394,7 +373,7 @@ impl<W: Write> Reporter for GithubAnnotations<W> {
                 failure,
                 ..
             } if outcome.is_bad() => {
-                self.sub_outcome(id, name, *outcome, failure.as_ref());
+                self.sub_outcome(record, id, name, *outcome, failure.as_ref());
                 Ok(())
             }
             Event::TestFinished(result) => {

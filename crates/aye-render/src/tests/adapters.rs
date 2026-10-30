@@ -4,9 +4,10 @@
 //! show what the renderers fall back to without them.
 
 use aye_events::Record;
+use aye_stream::Consumer;
 
 use super::{feed, lines};
-use crate::{ColorChoice, GithubAnnotations, JsonLines, Junit, Level, Reporter, Text, TextOptions};
+use crate::{ColorChoice, GithubAnnotations, JsonLines, Junit, Level, Text, TextOptions};
 
 /// The log (`aye --output json -vvv docs/test_failure.txt`) of
 /// `examples/doctest` with `AYE_EXAMPLE_FAIL=1`: one text file whose last
@@ -87,7 +88,7 @@ fn verbose_json(jsonl: &str) -> String {
 fn junit(jsonl: &str) -> String {
     let mut junit = Junit::new("unused.xml");
     for record in &log(jsonl) {
-        junit.report(record).unwrap();
+        junit.consume(record).unwrap();
     }
     junit.xml()
 }

@@ -1,9 +1,10 @@
 use aye_events::{
     DiagnosticCode, Event, Failure, FailureSignature, Outcome, Record, TestId, TestResult,
 };
+use aye_stream::Consumer;
 
 use super::{feed, lines, streams};
-use crate::{GithubAnnotations, Reporter};
+use crate::GithubAnnotations;
 
 fn github(records: &[Record]) -> String {
     let mut github = GithubAnnotations::new(Vec::new());
@@ -55,7 +56,7 @@ fn error_diagnostics_are_annotated_at_once() {
     let records = streams::diagnostics();
     let mut github = GithubAnnotations::new(Vec::new()).with_path_prefix("backend/");
     for record in &records[..3] {
-        github.report(record).unwrap();
+        github.consume(record).unwrap();
     }
     let early = String::from_utf8(github.into_inner()).unwrap();
     assert_eq!(
@@ -140,8 +141,8 @@ fn a_diagnostic_about_no_file_is_annotated_on_none() {
     }));
     let mut github = GithubAnnotations::new(Vec::new()).with_path_prefix("backend");
     // Every batch reports it; it is annotated once.
-    github.report(&record).unwrap();
-    github.report(&record).unwrap();
+    github.consume(&record).unwrap();
+    github.consume(&record).unwrap();
     assert_eq!(
         String::from_utf8(github.into_inner()).unwrap(),
         "::error title=usage-error::unrecognized arguments: --bogus\n"

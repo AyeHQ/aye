@@ -13,6 +13,7 @@ use aye_events::{
 };
 use aye_history::{Change, RunMeta};
 use aye_render::{ShowContext, ShowMode};
+use aye_stream::module_skip;
 
 /// A result of the run, as `aye show` lists and selects them.
 pub(super) struct Item<'a> {
@@ -129,7 +130,7 @@ impl<'a> Log<'a> {
                     }
                 }
                 Event::Diagnostic(diagnostic) => {
-                    let outcome = if aye_render::module_skip(record).is_some() {
+                    let outcome = if module_skip(record).is_some() {
                         Outcome::Skipped
                     } else if diagnostic.severity == Severity::Error {
                         Outcome::Error

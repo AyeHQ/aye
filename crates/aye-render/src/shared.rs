@@ -3,12 +3,11 @@
 //! (its one line, [`why`]; its history; its frames, grouped).
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use aye_events::{
-    Assertion, ComparisonOp, Diagnostic, Difference, Event, Failure, Frame, FramePath, LifetimeId,
-    Local, Outcome, Phase, Previous, Record, Reproduce, Resource, Side, TestId,
+    Assertion, ComparisonOp, Difference, Failure, Frame, FramePath, Local, Outcome, Phase,
+    Previous, Reproduce, Resource, Side, TestId,
 };
 
 /// Characters of a value (an operand, a source, a resource) in [`why`].
@@ -445,17 +444,6 @@ pub(crate) fn phase_words(failure: Option<&Failure>) -> Option<&'static str> {
     })
 }
 
-/// The Python version a `worker_started` names: its `version`'s first
-/// word (`3.13.1`), else its `python` when that is a version itself.
-pub(crate) fn python_version(python: &str, version: Option<&str>) -> Option<String> {
-    match version.and_then(|version| version.split_whitespace().next()) {
-        Some(version) => Some(version.to_owned()),
-        None => python
-            .starts_with(|c: char| c.is_ascii_digit())
-            .then(|| python.to_owned()),
-    }
-}
-
 /// `2 ms` below a second, then as [`seconds`].
 pub(crate) fn spaced(duration: Duration) -> String {
     if duration < Duration::from_secs(1) {
@@ -566,34 +554,6 @@ pub(crate) fn message(failure: &Failure) -> &str {
     } else {
         "failed"
     }
-}
-
-/// A failure that says nothing but its message: no exception, place,
-/// frames or comparison, and no framework text beyond the message. The
-/// engine makes one for a test that failed only through its sub-outcomes.
-pub(crate) fn is_bare(failure: &Failure) -> bool {
-    failure.exception.is_none()
-        && failure.location.is_none()
-        && failure.frames.is_empty()
-        && failure.assertion.is_none()
-        && failure
-            .detail
-            .as_deref()
-            .is_none_or(|detail| detail.trim() == failure.message.trim())
-}
-
-/// The same failure, reported twice: equal, or with the same signature and
-/// message. The unittest and doctest adapters fail a test with the very
-/// failures its subtests or examples reported.
-pub(crate) fn same_failure(a: &Failure, b: &Failure) -> bool {
-    a == b || (a.signature.is_some() && a.signature == b.signature && a.message == b.message)
-}
-
-/// Whether a test's own failure only repeats what its bad sub-outcomes
-/// (`subs`, their failures) already said: one of theirs again, or a bare
-/// one (the pytest adapter's "contains 1 failed subtest").
-pub(crate) fn repeats_subs(failure: &Failure, subs: &[Failure]) -> bool {
-    is_bare(failure) || subs.iter().any(|sub| same_failure(sub, failure))
 }
 
 /// The lines of a failure's message after the first, which its one-line
@@ -745,109 +705,6 @@ pub(crate) fn operands_add(failure: &Failure, assertion: &Assertion) -> bool {
     let in_message =
         failure.message.contains(&assertion.left) && failure.message.contains(&assertion.right);
     !(in_message || only_restates(assertion, &explanation))
-}
-
-/// Modules the framework skipped while collecting them (pytest's
-/// `skip(..., allow_module_level=True)` and `importorskip`): collection
-/// reports each as a `skipped` info diagnostic, outside any batch, and no
-/// test of the module reaches the run. pytest counts each as one skipped
-/// item in its summary and its JUnit report, so the renderers do too;
-/// `run_finished`'s counts hold test results only. A collect-only run counts
-/// none, as `pytest --co` doesn't.
-#[derive(Debug, Default)]
-pub(crate) struct ModuleSkips {
-    paths: std::collections::HashSet<String>,
-    collect_only: bool,
-}
-
-impl ModuleSkips {
-    /// The diagnostic, when `record` reports a module skipped and that
-    /// module wasn't counted yet.
-    pub(crate) fn note<'a>(&mut self, record: &'a Record) -> Option<&'a Diagnostic> {
-        if let Event::RunStarted { collect_only, .. } = &record.event {
-            self.collect_only = *collect_only;
-            return None;
-        }
-        let diagnostic = crate::tally::module_skip(record).filter(|_| !self.collect_only)?;
-        self.paths
-            .insert(diagnostic.path.to_string())
-            .then_some(diagnostic)
-    }
-
-    pub(crate) fn count(&self) -> u32 {
-        u32::try_from(self.paths.len()).unwrap_or(u32::MAX)
-    }
-}
-
-/// Failed lifetimes that kept no test from running: a failed
-/// `tearDownClass` or `tearDownModule`, a class or module cleanup that
-/// raised, or a failed setup whose tests the run stopped before (under
-/// `maxfail` the engine reports a failed setup before the tests it blocks,
-/// and the runner keeps what closes a lifetime but drops the tests after
-/// the bad outcome that reaches `maxfail`). The run fails on them, but
-/// `run_finished`'s counts hold test results only, so the summaries count
-/// them from the stream, by the phase that failed: pytest's summary counts
-/// each as an error (`1 passed, 1 error`), unittest's too (`FAILED
-/// (errors=1)`). Each lifetime counts once, however often it failed (a
-/// class split across batches tears down in each), as it is one test case
-/// in the JUnit report; one that some test names as its `cause` counts
-/// through that test instead. Only `lifetime_finished` and `test_finished`
-/// matter: a `lifetime_started` without its `lifetime_finished` (a worker
-/// that crashed or was stopped) counts nothing.
-#[derive(Debug, Default)]
-pub(crate) struct LifetimeErrors {
-    /// The phase each failed lifetime first failed in.
-    failed: HashMap<LifetimeId, Option<Phase>>,
-    /// Lifetimes some test's result names as its `cause`.
-    blocking: HashSet<LifetimeId>,
-}
-
-/// [`LifetimeErrors`], by the phase that failed.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct LifetimeCounts {
-    pub setup: u32,
-    pub teardown: u32,
-    /// A failure that names no phase (or the test's own, which a lifetime
-    /// has none of): no adapter reports one today.
-    pub other: u32,
-}
-
-impl LifetimeErrors {
-    pub(crate) fn note(&mut self, record: &Record) {
-        match &record.event {
-            Event::LifetimeFinished {
-                lifetime,
-                failure: Some(failure),
-                ..
-            } => {
-                self.failed.entry(lifetime.clone()).or_insert(failure.phase);
-            }
-            Event::TestFinished(result) => {
-                if let Some(cause) = &result.cause {
-                    self.blocking.insert(cause.clone());
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// The failed lifetimes that kept no test from running, so far.
-    pub(crate) fn counts(&self) -> LifetimeCounts {
-        let mut counts = LifetimeCounts::default();
-        #[expect(clippy::iter_over_hash_type, reason = "counts, in any order")]
-        for (lifetime, phase) in &self.failed {
-            if self.blocking.contains(lifetime) {
-                continue;
-            }
-            let slot = match phase {
-                Some(Phase::Setup) => &mut counts.setup,
-                Some(Phase::Teardown) => &mut counts.teardown,
-                Some(Phase::Test) | None => &mut counts.other,
-            };
-            *slot = slot.saturating_add(1);
-        }
-        counts
-    }
 }
 
 /// Where to look: where the failure was raised when that is in the project,
@@ -1172,63 +1029,6 @@ mod tests {
             &assertion("a\nb", "a\nc", &[" a", "-b", "+c"])
         ));
         assert!(operands_add(&with("x"), &assertion("a\nb", "a\nc", &[])));
-    }
-
-    #[test]
-    fn failed_lifetimes_count_once_and_only_when_they_blocked_no_test() {
-        use aye_events::{Outcome, TestResult};
-
-        let lifetime = |id: &str, phase: Option<Phase>| {
-            Record::new(Event::LifetimeFinished {
-                lifetime: id.into(),
-                failure: Some(Failure {
-                    phase,
-                    message: "boom".into(),
-                    ..Failure::default()
-                }),
-                duration: Duration::ZERO,
-            })
-        };
-        let blocked = |cause: &str| {
-            let mut result = TestResult::new(TestId::new("t.py::T::test_x"), Outcome::Error);
-            result.cause = Some(cause.into());
-            Record::new(Event::TestFinished(Box::new(result)))
-        };
-        let mut errors = LifetimeErrors::default();
-        for record in [
-            // A class split across batches tears down in each: one count.
-            lifetime("t.py::A", Some(Phase::Teardown)),
-            lifetime("t.py::A", Some(Phase::Teardown)),
-            // Blocking tests before its failure arrives (the engine's
-            // order) or after it (under `maxfail`): no count of its own.
-            blocked("t.py::B"),
-            lifetime("t.py::B", Some(Phase::Setup)),
-            lifetime("t.py::C", Some(Phase::Setup)),
-            blocked("t.py::C"),
-            // A setup whose tests the run dropped.
-            lifetime("t.py::D", Some(Phase::Setup)),
-            lifetime("t.py", None),
-            // Started, never finished (a crash): nothing.
-            Record::new(Event::LifetimeStarted {
-                lifetime: "t.py::E".into(),
-                kind: Scope::Class,
-            }),
-            Record::new(Event::LifetimeFinished {
-                lifetime: "t.py::F".into(),
-                failure: None,
-                duration: Duration::ZERO,
-            }),
-        ] {
-            errors.note(&record);
-        }
-        assert_eq!(
-            errors.counts(),
-            LifetimeCounts {
-                setup: 1,
-                teardown: 1,
-                other: 1,
-            }
-        );
     }
 
     #[test]

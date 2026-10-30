@@ -1,0 +1,16 @@
+[package]
+name = "aye-stream"
+description = "Folds over the aye event stream that aren't presentation: consumers, keys, tallies"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+aye-events = { workspace = true }
+
+[lints]
+workspace = true

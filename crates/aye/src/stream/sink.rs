@@ -4,8 +4,9 @@
 //! and the run store ([`Keep`]).
 //!
 //! Decided (implementation, October 2026):
-//! - **Output.** A stdout reporter that fails (a closed pipe) stops writing,
-//!   and the JUnit report and history still see every record. With `-s`,
+//! - **Output.** A stdout reporter that fails (a closed pipe) stops writing
+//!   (`aye_stream::StopAfterError`), and the JUnit report and history still
+//!   see every record. With `-s`,
 //!   workers' output goes to stdout beside text output and to stderr beside
 //!   `--output json`, so JSON lines stay whole. GitHub annotations go
 //!   beside text output, at every verbosity, never beside JSON. The
@@ -20,7 +21,7 @@
 //!   gives each) shape the report, which is aye's own layout without them.
 //!   The path is checked before anything runs (exit 4); if the report
 //!   still can't be written at the end, the process exits 1 although
-//!   `run_finished` said 0 or 5. GitHub annotation paths are relative to
+//!   `run_finished` said 0 or 5 (`aye_stream::FailOnFinish`). GitHub annotation paths are relative to
 //!   `GITHUB_WORKSPACE` (else the directory holding `.git`).
 //! - **Every run is kept for `aye show`** (October 2026), numbered (`r81`,
 //!   claimed before `run_started`, which says it): the run store
@@ -28,7 +29,7 @@
 //!   record once every reporter has it and compressing the log on a thread
 //!   of its own, so the run doesn't wait on it (on `packaging`'s 62,000
 //!   tests, 57 MB of records, the run takes as long). Beside it the binary
-//!   folds what the summaries count beside the tests (`aye_render::Tally`)
+//!   folds what the summaries count beside the tests (`aye_stream::Tally`)
 //!   and hands it to the store with the end of the stream, for `aye show
 //!   --runs`. A run with nothing to show (no test ran and nothing failed
 //!   but the command line's names: a typo in a path) isn't kept, so `last`
@@ -46,7 +47,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use aye_config::OutputFormat;
 use aye_events::{DiagnosticOrigin, Event, Record};
 use aye_history::{History, RunWriter, StoredRunId};
-use aye_render::{GithubAnnotations, JsonLines, Junit, Reporter, Tally, Tee, Text, TextOptions};
+use aye_render::{GithubAnnotations, JsonLines, Junit, Text, TextOptions};
+use aye_stream::{Consumer, FailOnFinish, StopAfterError, Tally, Tee};
 
 use super::passes::PreviousOutcome;
 use crate::commands::run::Errors;
@@ -61,7 +63,7 @@ use crate::settings::{JunitTarget, RunSettings};
 pub(crate) struct Sink<'a> {
     reporters: Tee<'a>,
     /// Whether a report file could not be written at the end, which its
-    /// reporter ([`File`]) sets.
+    /// reporter ([`FailOnFinish`]) sets.
     report_failed: Arc<AtomicBool>,
     /// History: what each bad outcome says of the test's earlier runs, and
     /// a consumer of every record after the reporters.
@@ -103,7 +105,7 @@ impl<'a> Sink<'a> {
         if let Event::Diagnostic(d) = &record.event {
             self.errors.see(d, DiagnosticOrigin::of(&record.envelope));
         }
-        if let Err(err) = self.reporters.report(record)
+        if let Err(err) = self.reporters.consume(record)
             && err.kind() != io::ErrorKind::BrokenPipe
         {
             self.printer
@@ -160,7 +162,7 @@ pub(crate) fn reporters<'a>(
     let verbosity = settings.output.verbosity.level();
     match settings.output.format.value {
         OutputFormat::Text => {
-            tee.push(Stdout::new(Text::new(
+            tee.push(StopAfterError::new(Text::new(
                 io::stdout(),
                 TextOptions {
                     verbosity,
@@ -171,21 +173,23 @@ pub(crate) fn reporters<'a>(
             if aye_render::github_actions_enabled(&settings.env.vars) {
                 let prefix =
                     repository_prefix(&settings.root, settings.env.github_workspace.as_deref());
-                tee.push(Stdout::new(
+                tee.push(StopAfterError::new(
                     GithubAnnotations::new(io::stdout()).with_path_prefix(prefix),
                 ));
             }
         }
-        OutputFormat::Json => tee.push(Stdout::new(JsonLines::new(io::stdout(), verbosity))),
+        OutputFormat::Json => {
+            tee.push(StopAfterError::new(JsonLines::new(io::stdout(), verbosity)));
+        }
     }
     if let Some(junit) = junit {
-        tee.push(File {
-            inner: Junit::new(junit.path)
+        tee.push(FailOnFinish::new(
+            Junit::new(junit.path)
                 .with_prefix(junit.prefix)
                 .with_options(junit.options),
-            failed: Arc::clone(file_failed),
-            printer,
-        });
+            Arc::clone(file_failed),
+            move |err| printer.error(err),
+        ));
     }
     tee
 }
@@ -217,63 +221,6 @@ impl Keep {
 
     fn finish(self) -> io::Result<Option<StoredRunId>> {
         self.writer.finish(self.tally.extra().named())
-    }
-}
-
-/// A reporter writing to stdout. After its first error (a closed pipe) it
-/// writes nothing more, so the error is reported once and every other
-/// reporter still sees the whole stream.
-pub(crate) struct Stdout<R> {
-    inner: R,
-    failed: bool,
-}
-
-impl<R> Stdout<R> {
-    pub(crate) const fn new(inner: R) -> Self {
-        Self {
-            inner,
-            failed: false,
-        }
-    }
-}
-
-impl<R: Reporter> Reporter for Stdout<R> {
-    fn report(&mut self, record: &Record) -> io::Result<()> {
-        if self.failed {
-            return Ok(());
-        }
-        self.inner
-            .report(record)
-            .inspect_err(|_| self.failed = true)
-    }
-
-    fn finish(&mut self) -> io::Result<()> {
-        if self.failed {
-            return Ok(());
-        }
-        self.inner.finish().inspect_err(|_| self.failed = true)
-    }
-}
-
-/// A reporter writing a file when the stream ends: its error is reported
-/// here, naming the file, and remembered for the exit code.
-pub(crate) struct File<R> {
-    pub(crate) inner: R,
-    pub(crate) failed: Arc<AtomicBool>,
-    pub(crate) printer: Printer,
-}
-
-impl<R: Reporter> Reporter for File<R> {
-    fn report(&mut self, record: &Record) -> io::Result<()> {
-        self.inner.report(record)
-    }
-
-    fn finish(&mut self) -> io::Result<()> {
-        if let Err(err) = self.inner.finish() {
-            self.printer.error(err);
-            self.failed.store(true, Ordering::Relaxed);
-        }
-        Ok(())
     }
 }
 

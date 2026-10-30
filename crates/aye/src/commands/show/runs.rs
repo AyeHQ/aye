@@ -7,7 +7,8 @@ use std::time::Duration;
 use aye_config::OutputFormat;
 use aye_events::Counts;
 use aye_history::{RunMeta, RunStore};
-use aye_render::{Extra, summary_words};
+use aye_render::summary_words;
+use aye_stream::Extra;
 
 use super::no_run;
 use crate::error::AyeError;

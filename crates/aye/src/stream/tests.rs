@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use aye_events::RunNumber;
 use aye_history::{History, RunWriter};
-use aye_render::{Junit, Reporter, Tee};
+use aye_render::Junit;
+use aye_stream::{Consumer, FailOnFinish, StopAfterError, Tee};
 
-use super::sink::{File, Stdout};
 use super::*;
 use crate::printer::Printer;
 
@@ -32,8 +32,8 @@ struct Closing {
     calls: Arc<AtomicU32>,
 }
 
-impl Reporter for Closing {
-    fn report(&mut self, _: &Record) -> io::Result<()> {
+impl Consumer for Closing {
+    fn consume(&mut self, _: &Record) -> io::Result<()> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         if self.ok == 0 {
             return Err(io::Error::from(io::ErrorKind::BrokenPipe));
@@ -46,8 +46,8 @@ impl Reporter for Closing {
 /// Counts what it sees.
 struct Counting(Arc<AtomicU32>);
 
-impl Reporter for Counting {
-    fn report(&mut self, _: &Record) -> io::Result<()> {
+impl Consumer for Counting {
+    fn consume(&mut self, _: &Record) -> io::Result<()> {
         self.0.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -61,7 +61,7 @@ fn a_closed_stdout_starves_no_other_reporter() {
     let mut stream = stream_of(
         "r",
         Tee::new()
-            .with(Stdout::new(Closing {
+            .with(StopAfterError::new(Closing {
                 ok: 1,
                 calls: Arc::clone(&stdout_calls),
             }))
@@ -154,8 +154,8 @@ fn the_run_store_keeps_every_record_of_the_stream() {
 /// Keeps every record it sees.
 struct Keeping(Arc<std::sync::Mutex<Vec<Record>>>);
 
-impl Reporter for Keeping {
-    fn report(&mut self, record: &Record) -> io::Result<()> {
+impl Consumer for Keeping {
+    fn consume(&mut self, record: &Record) -> io::Result<()> {
         self.0.lock().unwrap().push(record.clone());
         Ok(())
     }
@@ -290,11 +290,11 @@ fn a_report_that_fails_at_the_end_fails_the_run() {
     fs::write(&blocker, "").unwrap();
     let stream = stream_of(
         "r",
-        Tee::new().with(File {
-            inner: Junit::new(blocker.join("out.xml")),
-            failed: Arc::clone(&failed),
-            printer: Printer,
-        }),
+        Tee::new().with(FailOnFinish::new(
+            Junit::new(blocker.join("out.xml")),
+            Arc::clone(&failed),
+            |err| Printer.error(err),
+        )),
         &failed,
         None,
         Keep::new(RunWriter::new(std::env::temp_dir().join("aye-no-store"), 0)),

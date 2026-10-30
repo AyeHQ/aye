@@ -4,6 +4,7 @@
 
 use std::fs;
 
+use aye_events::TestId;
 use aye_test::{code, project, stderr, stdout};
 use serde_json::Value;
 
@@ -23,7 +24,7 @@ fn show_gives_the_details_of_tests_by_key_id_dotted_name_or_path() {
     let dir = suite();
     run(&python, dir.path(), &[]);
     let keys = keys(dir.path(), "r1");
-    let fail = keys.key(FAIL).unwrap().to_owned();
+    let fail = keys.key(&TestId::new(FAIL)).unwrap().to_string();
     assert_eq!(fail.len(), 5);
     assert!(full_key(FAIL).starts_with(&fail));
     // By its key, as the run printed it, its whole hash, its id or its
@@ -38,7 +39,7 @@ fn show_gives_the_details_of_tests_by_key_id_dotted_name_or_path() {
     // The start of its key, from 4 digits, when it names it alone.
     if let Some(start) = (4..5)
         .map(|len| full_key(FAIL)[..len].to_owned())
-        .find(|start| keys.resolve(start).len() == 1)
+        .find(|start| keys.resolve(&start.parse().unwrap()).len() == 1)
     {
         selectors.push(start);
     }
@@ -54,10 +55,10 @@ fn show_gives_the_details_of_tests_by_key_id_dotted_name_or_path() {
         assert_eq!(show_json(dir.path(), &[selector]), first, "{selector}");
     }
     // Text: each test named, a failure or not.
-    let inner = keys.key(INNER).unwrap();
+    let inner = keys.key(&TestId::new(INNER)).unwrap().to_string();
     let output = show(
         dir.path(),
-        &[inner, "tests.test_b.test_ok", "--color", "never"],
+        &[&inner, "tests.test_b.test_ok", "--color", "never"],
     );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let out = stdout(&output);
@@ -202,14 +203,14 @@ fn the_start_of_several_keys_lists_them() {
     );
     let keys = keys(dir.path(), "r1");
     for id in [&a, &b] {
-        let key = keys.key(id).unwrap();
+        let key = keys.key(&TestId::new(id)).unwrap().to_string();
         assert!(
             err.lines()
-                .any(|line| line.split_whitespace().eq([key, id.as_str()])),
+                .any(|line| line.split_whitespace().eq([key.as_str(), id.as_str()])),
             "{err}"
         );
         // Each key names its test.
-        assert_eq!(code(&show(dir.path(), &[key])), 0);
+        assert_eq!(code(&show(dir.path(), &[&key])), 0);
     }
     assert_eq!(stdout(&output), "");
 }

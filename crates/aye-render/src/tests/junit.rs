@@ -1,12 +1,13 @@
 use aye_events::{Captured, Event, Failure, Outcome, Phase, Record, TestId, TestResult};
+use aye_stream::Consumer;
 
 use super::{feed, lines, streams};
-use crate::{Junit, Reporter};
+use crate::Junit;
 
 fn junit(records: &[Record]) -> String {
     let mut junit = Junit::new("unused.xml");
     for record in records {
-        junit.report(record).unwrap();
+        junit.consume(record).unwrap();
     }
     junit.xml()
 }
@@ -279,7 +280,7 @@ fn a_prefix_goes_before_every_classname() {
     let prefixed = |prefix: &str, records: &[Record]| {
         let mut junit = Junit::new("unused.xml").with_prefix(prefix);
         for record in records {
-            junit.report(record).unwrap();
+            junit.consume(record).unwrap();
         }
         junit.xml()
     };
@@ -394,7 +395,7 @@ fn recorded() -> Vec<Record> {
 fn junit_with(options: crate::JunitOptions, records: &[Record]) -> String {
     let mut junit = Junit::new("unused.xml").with_options(options);
     for record in records {
-        junit.report(record).unwrap();
+        junit.consume(record).unwrap();
     }
     junit.xml()
 }

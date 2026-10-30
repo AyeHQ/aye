@@ -1,32 +1,31 @@
 //! What a run's summary counts beside `run_finished`'s counts, which hold
-//! test results only ([`Tally`], [`Extra`]), and how the summary line
-//! words them all ([`summary_words`]).
+//! test results only ([`Tally`], [`Extra`]): modules skipped while
+//! collecting ([`ModuleSkips`]), failed lifetimes that kept no test from
+//! running ([`LifetimeErrors`]), and error diagnostics by kind.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use aye_events::{
-    Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, Event, Record, Severity, SummaryKind,
+    Diagnostic, DiagnosticCode, DiagnosticOrigin, Event, LifetimeId, Phase, Record, Severity,
+    SummaryKind,
 };
 
-use crate::shared;
-
 /// Folds what the summaries count beside `run_finished`'s test counts, as
-/// [`Text`](crate::Text) and [`JsonLines`](crate::JsonLines) count it:
-/// modules skipped while collecting (each once), failed lifetimes that
-/// kept no test from running (each once, by the phase that failed), and
-/// error diagnostics (each once, by kind). See the crate's docs for each
-/// rule. The renderers fold their own; one on its own keeps a run's
-/// summary without them (the run store, for `aye show --runs`).
+/// text and JSON lines count it: modules skipped while collecting (each
+/// once), failed lifetimes that kept no test from running (each once, by
+/// the phase that failed), and error diagnostics (each once, by kind). The
+/// renderers fold their own; one on its own keeps a run's summary without
+/// them (the run store, for `aye show --runs`).
 #[derive(Debug, Default)]
 pub struct Tally {
-    module_skips: shared::ModuleSkips,
-    lifetime_errors: shared::LifetimeErrors,
+    module_skips: ModuleSkips,
+    lifetime_errors: LifetimeErrors,
     errors: ErrorKinds,
 }
 
 /// What a record added to a [`Tally`] that a renderer shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Noted<'a> {
+pub enum Noted<'a> {
     /// A module skipped while collecting, counted for the first time.
     ModuleSkip(&'a Diagnostic),
     /// An error diagnostic, counted for the first time.
@@ -39,7 +38,7 @@ impl Tally {
     }
 
     /// Folds `record`, and says what it added that is shown once.
-    pub(crate) fn count<'a>(&mut self, record: &'a Record) -> Option<Noted<'a>> {
+    pub fn count<'a>(&mut self, record: &'a Record) -> Option<Noted<'a>> {
         if let Some(skipped) = self.module_skips.note(record) {
             return Some(Noted::ModuleSkip(skipped));
         }
@@ -145,96 +144,14 @@ impl Extra {
     }
 }
 
-/// How the text summary line colours a count.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Tone {
-    Bad,
-    Good,
-    Warn,
-    Dim,
-}
-
-/// One count of the text summary line: how many, its words for one and
-/// for more, and its tone.
-pub(crate) type Part = (u32, &'static str, &'static str, Tone);
-
-/// The non-zero counts of the text summary line, in its order: the tests'
-/// outcomes (`skipped` with the modules skipped while collecting), then
-/// the failed lifetimes and the error diagnostics.
-pub(crate) fn parts(counts: &Counts, extra: &Extra) -> Vec<Part> {
-    [
-        (counts.failed, "failed", "failed", Tone::Bad),
-        (counts.error, "error", "errors", Tone::Bad),
-        (counts.passed, "passed", "passed", Tone::Good),
-        (
-            counts.skipped + extra.skipped_modules,
-            "skipped",
-            "skipped",
-            Tone::Warn,
-        ),
-        (
-            counts.expected_failure,
-            "expected failure",
-            "expected failures",
-            Tone::Warn,
-        ),
-        (
-            counts.unexpected_pass,
-            "unexpected pass",
-            "unexpected passes",
-            Tone::Warn,
-        ),
-        (counts.deselected, "deselected", "deselected", Tone::Dim),
-        (extra.setup_error, "setup error", "setup errors", Tone::Bad),
-        (
-            extra.teardown_error,
-            "teardown error",
-            "teardown errors",
-            Tone::Bad,
-        ),
-        (
-            extra.lifetime_error,
-            "lifetime error",
-            "lifetime errors",
-            Tone::Bad,
-        ),
-        (
-            extra.collection_error,
-            "collection error",
-            "collection errors",
-            Tone::Bad,
-        ),
-        (extra.usage_error, "usage error", "usage errors", Tone::Bad),
-        (
-            extra.internal_error,
-            "internal error",
-            "internal errors",
-            Tone::Bad,
-        ),
-    ]
-    .into_iter()
-    .filter(|(n, ..)| *n > 0)
-    .collect()
-}
-
-/// The counts as the text summary line words them, without colour
-/// (`1 failed`, `2 passed`, `1 teardown error`): the non-zero ones, in its
-/// order.
-pub fn summary_words(counts: &Counts, extra: &Extra) -> Vec<String> {
-    parts(counts, extra)
-        .into_iter()
-        .map(|(n, one, many, _)| shared::plural(n, one, many))
-        .collect()
-}
-
 /// Error diagnostics, by what the text summary line calls them
 /// ([`aye_events::ErrorClass::summary`]), each once however many batches
 /// repeat it (a framework rejecting its arguments).
 #[derive(Debug, Default)]
-pub(crate) struct ErrorKinds {
-    pub collection: u32,
-    pub usage: u32,
-    pub internal: u32,
+struct ErrorKinds {
+    collection: u32,
+    usage: u32,
+    internal: u32,
     /// Counted, by code, path and message.
     seen: HashSet<(DiagnosticCode, String, String)>,
 }
@@ -243,7 +160,7 @@ impl ErrorKinds {
     /// Counts an error diagnostic the first time it comes from `origin`:
     /// whether it was. A batch stopped early is seen, but not counted: the
     /// summary's verdict and the stop notice say so.
-    pub(crate) fn count(&mut self, diagnostic: &Diagnostic, origin: DiagnosticOrigin) -> bool {
+    fn count(&mut self, diagnostic: &Diagnostic, origin: DiagnosticOrigin) -> bool {
         let key = (
             diagnostic.code.clone(),
             diagnostic.path.to_string(),
@@ -262,9 +179,114 @@ impl ErrorKinds {
     }
 }
 
+/// Modules the framework skipped while collecting them (pytest's
+/// `skip(..., allow_module_level=True)` and `importorskip`): collection
+/// reports each as a `skipped` info diagnostic, outside any batch, and no
+/// test of the module reaches the run. pytest counts each as one skipped
+/// item in its summary and its JUnit report, so the renderers do too;
+/// `run_finished`'s counts hold test results only. A collect-only run counts
+/// none, as `pytest --co` doesn't.
+#[derive(Debug, Default)]
+pub struct ModuleSkips {
+    paths: HashSet<String>,
+    collect_only: bool,
+}
+
+impl ModuleSkips {
+    /// The diagnostic, when `record` reports a module skipped and that
+    /// module wasn't counted yet.
+    pub fn note<'a>(&mut self, record: &'a Record) -> Option<&'a Diagnostic> {
+        if let Event::RunStarted { collect_only, .. } = &record.event {
+            self.collect_only = *collect_only;
+            return None;
+        }
+        let diagnostic = module_skip(record).filter(|_| !self.collect_only)?;
+        self.paths
+            .insert(diagnostic.path.to_string())
+            .then_some(diagnostic)
+    }
+
+    pub fn count(&self) -> u32 {
+        u32::try_from(self.paths.len()).unwrap_or(u32::MAX)
+    }
+}
+
+/// Failed lifetimes that kept no test from running: a failed
+/// `tearDownClass` or `tearDownModule`, a class or module cleanup that
+/// raised, or a failed setup whose tests the run stopped before (under
+/// `maxfail` the engine reports a failed setup before the tests it blocks,
+/// and the runner keeps what closes a lifetime but drops the tests after
+/// the bad outcome that reaches `maxfail`). The run fails on them, but
+/// `run_finished`'s counts hold test results only, so the summaries count
+/// them from the stream, by the phase that failed: pytest's summary counts
+/// each as an error (`1 passed, 1 error`), unittest's too (`FAILED
+/// (errors=1)`). Each lifetime counts once, however often it failed (a
+/// class split across batches tears down in each), as it is one test case
+/// in the JUnit report; one that some test names as its `cause` counts
+/// through that test instead. Only `lifetime_finished` and `test_finished`
+/// matter: a `lifetime_started` without its `lifetime_finished` (a worker
+/// that crashed or was stopped) counts nothing.
+#[derive(Debug, Default)]
+struct LifetimeErrors {
+    /// The phase each failed lifetime first failed in.
+    failed: HashMap<LifetimeId, Option<Phase>>,
+    /// Lifetimes some test's result names as its `cause`.
+    blocking: HashSet<LifetimeId>,
+}
+
+/// [`LifetimeErrors`], by the phase that failed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct LifetimeCounts {
+    setup: u32,
+    teardown: u32,
+    /// A failure that names no phase (or the test's own, which a lifetime
+    /// has none of): no adapter reports one today.
+    other: u32,
+}
+
+impl LifetimeErrors {
+    fn note(&mut self, record: &Record) {
+        match &record.event {
+            Event::LifetimeFinished {
+                lifetime,
+                failure: Some(failure),
+                ..
+            } => {
+                self.failed.entry(lifetime.clone()).or_insert(failure.phase);
+            }
+            Event::TestFinished(result) => {
+                if let Some(cause) = &result.cause {
+                    self.blocking.insert(cause.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The failed lifetimes that kept no test from running, so far.
+    fn counts(&self) -> LifetimeCounts {
+        let mut counts = LifetimeCounts::default();
+        #[expect(clippy::iter_over_hash_type, reason = "counts, in any order")]
+        for (lifetime, phase) in &self.failed {
+            if self.blocking.contains(lifetime) {
+                continue;
+            }
+            let slot = match phase {
+                Some(Phase::Setup) => &mut counts.setup,
+                Some(Phase::Teardown) => &mut counts.teardown,
+                Some(Phase::Test) | None => &mut counts.other,
+            };
+            *slot = slot.saturating_add(1);
+        }
+        counts
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use aye_events::{BatchIndex, DiagnosticPath};
+    use std::time::Duration;
+
+    use aye_events::{BatchIndex, DiagnosticPath, Failure, Outcome, Scope, TestId, TestResult};
 
     use super::*;
 
@@ -338,5 +360,60 @@ mod tests {
                 "{code}"
             );
         }
+    }
+
+    #[test]
+    fn failed_lifetimes_count_once_and_only_when_they_blocked_no_test() {
+        let lifetime = |id: &str, phase: Option<Phase>| {
+            Record::new(Event::LifetimeFinished {
+                lifetime: id.into(),
+                failure: Some(Failure {
+                    phase,
+                    message: "boom".into(),
+                    ..Failure::default()
+                }),
+                duration: Duration::ZERO,
+            })
+        };
+        let blocked = |cause: &str| {
+            let mut result = TestResult::new(TestId::new("t.py::T::test_x"), Outcome::Error);
+            result.cause = Some(cause.into());
+            Record::new(Event::TestFinished(Box::new(result)))
+        };
+        let mut errors = LifetimeErrors::default();
+        for record in [
+            // A class split across batches tears down in each: one count.
+            lifetime("t.py::A", Some(Phase::Teardown)),
+            lifetime("t.py::A", Some(Phase::Teardown)),
+            // Blocking tests before its failure arrives (the engine's
+            // order) or after it (under `maxfail`): no count of its own.
+            blocked("t.py::B"),
+            lifetime("t.py::B", Some(Phase::Setup)),
+            lifetime("t.py::C", Some(Phase::Setup)),
+            blocked("t.py::C"),
+            // A setup whose tests the run dropped.
+            lifetime("t.py::D", Some(Phase::Setup)),
+            lifetime("t.py", None),
+            // Started, never finished (a crash): nothing.
+            Record::new(Event::LifetimeStarted {
+                lifetime: "t.py::E".into(),
+                kind: Scope::Class,
+            }),
+            Record::new(Event::LifetimeFinished {
+                lifetime: "t.py::F".into(),
+                failure: None,
+                duration: Duration::ZERO,
+            }),
+        ] {
+            errors.note(&record);
+        }
+        assert_eq!(
+            errors.counts(),
+            LifetimeCounts {
+                setup: 1,
+                teardown: 1,
+                other: 1,
+            }
+        );
     }
 }

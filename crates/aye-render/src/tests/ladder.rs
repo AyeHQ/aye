@@ -5,9 +5,10 @@
 use std::collections::BTreeMap;
 
 use aye_events::{Event, Record, RunNumber};
+use aye_stream::Keys;
 
 use super::{feed, lines, streams};
-use crate::{ColorChoice, JsonLines, Keys, Level, ShowContext, ShowMode, Text, TextOptions};
+use crate::{ColorChoice, JsonLines, Level, ShowContext, ShowMode, Text, TextOptions};
 
 fn text(records: &[Record], verbosity: i8) -> String {
     let mut text = Text::new(

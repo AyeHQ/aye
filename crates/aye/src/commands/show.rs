@@ -62,7 +62,8 @@ use std::io::{self, Write as _};
 use aye_config::OutputFormat;
 use aye_events::RunNumber;
 use aye_history::{Change, RunMeta, RunStore, StoredRunId};
-use aye_render::{JsonLines, Keys, Reporter, ShowMode, Text, TextOptions};
+use aye_render::{JsonLines, ShowMode, Text, TextOptions};
+use aye_stream::{Consumer, Keys};
 
 use crate::cli::ShowArgs;
 use crate::error::AyeError;
@@ -156,7 +157,7 @@ pub(crate) fn show(args: &ShowArgs, printer: Printer) -> Result<(), AyeError> {
     let stale = stale(&meta, root, &shown);
     let context = context(&meta, &stale, now_ms());
     let verbosity = settings.level(details);
-    let mut out: Box<dyn Reporter> = match format {
+    let mut out: Box<dyn Consumer> = match format {
         OutputFormat::Text => {
             let mut text = Text::new(
                 io::stdout(),
@@ -181,7 +182,7 @@ pub(crate) fn show(args: &ShowArgs, printer: Printer) -> Result<(), AyeError> {
         }
     };
     for record in &feed {
-        match out.report(record) {
+        match out.consume(record) {
             Err(err) if err.kind() == io::ErrorKind::BrokenPipe => return Ok(()),
             other => other?,
         }

@@ -21,7 +21,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use aye_render::Keys;
+use aye_events::TestId;
+use aye_stream::Keys;
 use aye_test::{Needs, TestContext, code, json_lines, project, runs_dir, stderr};
 use serde_json::Value;
 
@@ -161,7 +162,10 @@ fn keys(dir: &Path, run: &str) -> Keys {
 
 /// The key the last run gave `id`.
 fn key(dir: &Path, id: &str) -> String {
-    keys(dir, &last(dir)).key(id).unwrap().to_owned()
+    keys(dir, &last(dir))
+        .key(&TestId::new(id))
+        .unwrap()
+        .to_string()
 }
 
 /// A unittest project: `files` beside a `tests` package, run by the

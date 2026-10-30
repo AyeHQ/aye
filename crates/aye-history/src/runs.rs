@@ -23,7 +23,7 @@
 //!   duration from `run_finished`, what its summary counts beside those
 //!   (`extra`: modules skipped while collecting, failed lifetimes that kept
 //!   no test from running, error diagnostics; the binary hands them over,
-//!   as `aye_render::Tally` counts them), and the digest of each file
+//!   as `aye_stream::Tally` counts them), and the digest of each file
 //!   holding a test it collected (or that collection reported an error on,
 //!   or skipped), read when `collection_finished` arrives, so that `aye
 //!   show` can tell a file that changed since. Written when
@@ -116,7 +116,7 @@ pub struct RunMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopped: Option<StopReason>,
     /// What the run's summary counts beside `counts`, by name, the non-zero
-    /// ones (`aye_render::Extra::named`: `skipped_modules`, `setup_error`,
+    /// ones (`aye_stream::Extra::named`: `skipped_modules`, `setup_error`,
     /// `teardown_error`, `lifetime_error`, `collection_error`,
     /// `usage_error`, `internal_error`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

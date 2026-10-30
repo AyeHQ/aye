@@ -4,11 +4,15 @@
 //! everything about each bad outcome, bounded), JUnit XML, GitHub
 //! annotations, and later the TUI.
 //!
-//! Owns: presentation. If a renderer needs more, the schema grows; runner state
-//! never passes around it.
+//! Owns: presentation: what each format shows of a record, in what words,
+//! layout and limits. If a renderer needs more, the schema grows; runner
+//! state never passes around it. What the renderers derive from the log
+//! alike (keys, the tally, held sub-outcomes and blocked tests, the first of
+//! each signature, definition lines, the run's facts) are aye-stream's
+//! folds, and each renderer is an `aye_stream::Consumer`.
 //!
-//! Depends on: aye-events, and aye-static for the one variable it reads,
-//! `GITHUB_ACTIONS`.
+//! Depends on: aye-stream, aye-events, and aye-static for the one variable
+//! it reads, `GITHUB_ACTIONS`.
 //!
 //! Decided (implementation, October 2026):
 //! - **Two formats, one ladder.** `--output text` ([`Text`]) and
@@ -25,10 +29,8 @@
 //!   the keys of what failed), L1 lines at `-v`, L2 at `-vv`, L3 at
 //!   `-vvv`. `aye show` takes the same flags with the same meaning. Each
 //!   module's docs give its format exactly.
-//! - **Keys** ([`Keys`]): every test and lifetime is named by its key, the
-//!   start of its `TestKey` (5 hex digits, more when an earlier id starts
-//!   the same way), a fold over the log alone, so a run's lines and `aye
-//!   show` later, given the whole log's keys, name a test alike.
+//! - **Keys** (`aye_stream::Keys`): every test and lifetime is named by its
+//!   key, the same in every format and in `aye show` later.
 //! - **Why, in one line** (`shared::why`), the same in both formats: a
 //!   test's failed teardown says it passed, a fixture's failed setup names
 //!   it, a comparison says what was expected and what was got, and
@@ -39,10 +41,9 @@
 //!   with colour off, and the line is blanked before anything else is
 //!   written. Off a terminal, and in every other renderer, the event changes
 //!   nothing.
-//! - **The fold.** A [`Reporter`] receives every [`Record`] in log order and
-//!   is told when the stream ends ([`Reporter::finish`]); [`Tee`] fans one
-//!   stream out to several and keeps going when one of them fails, returning
-//!   the first error. Records of kinds a renderer does not know are ignored.
+//! - **The fold.** Each renderer receives every record in log order and is
+//!   told when the stream ends (`aye_stream::Consumer`). Records of kinds a
+//!   renderer does not know are ignored.
 //! - **Colour** goes through `anstream`, so [`ColorChoice::Auto`] honours the
 //!   terminal, `NO_COLOR` and `CLICOLOR_FORCE`, and `Never` strips every
 //!   escape, including any in captured output.
@@ -125,13 +126,14 @@
 //!   `<system-out>`, stderr in `<system-err>`, only when there is some.
 //! - **What the summaries count beside the tests** (modules skipped while
 //!   collecting, failed lifetimes that kept no test from running, error
-//!   diagnostics by kind; see above) is one fold, [`Tally`], which both
-//!   summaries keep, and which the binary keeps beside a stored run
-//!   ([`Extra`], worded by [`summary_words`] for `aye show --runs`).
+//!   diagnostics by kind; see above) is one fold, `aye_stream::Tally`,
+//!   which both summaries keep, and which the binary keeps beside a stored
+//!   run (`aye_stream::Extra`, worded by [`summary_words`] for `aye show
+//!   --runs`).
 //! - **`aye show`** ([`ShowMode`], [`Text::for_show`],
 //!   [`JsonLines::for_show`]): the binary feeds a renderer part of a stored
-//!   log with the whole log's [`Keys`] and what the run store knows beside
-//!   it ([`ShowContext`]: the run's number, how long ago it finished, the
+//!   log with the whole log's keys and what the run store knows beside it
+//!   ([`ShowContext`]: the run's number, how long ago it finished, the
 //!   files changed since), so a test shows the key it had in the run.
 //!   [`ShowMode::List`] makes a line per result then the summary;
 //!   [`ShowMode::Details`] shows the records as a run does, adding to a
@@ -149,126 +151,23 @@
 //!   The binary enables them when [`github_actions_enabled`] says of the
 //!   environment it read.
 
-use std::io;
-
-use aye_events::Record;
-
 mod github;
 mod json;
 mod junit;
-mod keys;
 mod level;
 mod shared;
-mod tally;
+mod show;
+mod summary;
 mod text;
 
 pub use anstream::ColorChoice;
 pub use github::{GithubAnnotations, github_actions_enabled};
 pub use json::JsonLines;
 pub use junit::{Junit, JunitDuration, JunitFamily, JunitLogging, JunitOptions};
-pub use keys::{Keys, ShowContext};
 pub use level::Level;
-pub use tally::{Extra, Tally, module_skip, summary_words};
+pub use show::{ShowContext, ShowMode};
+pub use summary::summary_words;
 pub use text::{Text, TextOptions};
-
-/// What [`Text`] and [`JsonLines`] make of a stored run's records, for `aye
-/// show`, which feeds them part of a log with the whole log's [`Keys`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShowMode {
-    /// One line per `test_finished` and the summary: text's result line
-    /// (a bad outcome's with its key and why), JSON's `test` line.
-    List,
-    /// The tests as the run showed them, at the verbosity asked for; in
-    /// text, a test that didn't fail has its result line.
-    Details,
-}
-
-/// A consumer of the run's log.
-pub trait Reporter {
-    /// Fold one record into the output.
-    fn report(&mut self, record: &Record) -> io::Result<()>;
-
-    /// The stream has ended: write anything held back and flush.
-    fn finish(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<R: Reporter + ?Sized> Reporter for Box<R> {
-    fn report(&mut self, record: &Record) -> io::Result<()> {
-        (**self).report(record)
-    }
-
-    fn finish(&mut self) -> io::Result<()> {
-        (**self).finish()
-    }
-}
-
-impl<R: Reporter + ?Sized> Reporter for &mut R {
-    fn report(&mut self, record: &Record) -> io::Result<()> {
-        (**self).report(record)
-    }
-
-    fn finish(&mut self) -> io::Result<()> {
-        (**self).finish()
-    }
-}
-
-/// Fans one stream out to several reporters. Every reporter sees every
-/// record even when another fails; the first error is returned.
-#[derive(Default)]
-pub struct Tee<'a> {
-    reporters: Vec<Box<dyn Reporter + Send + 'a>>,
-}
-
-impl<'a> Tee<'a> {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn push(&mut self, reporter: impl Reporter + Send + 'a) {
-        self.reporters.push(Box::new(reporter));
-    }
-
-    #[must_use]
-    pub fn with(mut self, reporter: impl Reporter + Send + 'a) -> Self {
-        self.push(reporter);
-        self
-    }
-
-    pub fn len(&self) -> usize {
-        self.reporters.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.reporters.is_empty()
-    }
-
-    fn each(
-        &mut self,
-        mut call: impl FnMut(&mut (dyn Reporter + Send + 'a)) -> io::Result<()>,
-    ) -> io::Result<()> {
-        let mut first = Ok(());
-        for reporter in &mut self.reporters {
-            if let Err(error) = call(reporter.as_mut())
-                && first.is_ok()
-            {
-                first = Err(error);
-            }
-        }
-        first
-    }
-}
-
-impl Reporter for Tee<'_> {
-    fn report(&mut self, record: &Record) -> io::Result<()> {
-        self.each(|reporter| reporter.report(record))
-    }
-
-    fn finish(&mut self) -> io::Result<()> {
-        self.each(Reporter::finish)
-    }
-}
 
 #[cfg(test)]
 mod tests;

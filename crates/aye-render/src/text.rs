@@ -136,8 +136,7 @@
 //! the summary says `no tests shown`. [`Text::stale`] warns of a file that
 //! changed since the run, before anything else.
 
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::time::Duration;
 
@@ -146,12 +145,16 @@ use anstream::stream::{AsLockedWrite, RawStream};
 use anstyle::{AnsiColor, Style};
 use aye_events::{
     Assertion, Captured, Certainty, Columns, Compare, CompareKind, Counts, Diagnostic,
-    DiagnosticCode, Event, ExitCode, Failure, FailureSignature, Frame, LifetimeId, Local, Outcome,
-    Phase, Record, RunNumber, Severity, StopReason, TestId, TestResult, WorkerIndex,
+    DiagnosticCode, Event, ExitCode, Failure, Frame, LifetimeId, Local, Outcome, Phase, Record,
+    Severity, StopReason, TestId, TestResult, WorkerIndex,
+};
+use aye_stream::{
+    Again, BlockedTests, Consumer, FirstBySignature, HeldSub, Keys, Left, Noted, Repeats, RunFacts,
+    SubOutcomes, Subject, Tally,
 };
 
-use crate::tally::{self, Noted, Tally, Tone};
-use crate::{ColorChoice, Keys, Reporter, ShowContext, ShowMode, shared};
+use crate::summary::{self, Tone};
+use crate::{ColorChoice, ShowContext, ShowMode, shared};
 
 const BOLD: Style = Style::new().bold();
 const DIM: Style = Style::new().dimmed();
@@ -243,40 +246,30 @@ enum Group {
 pub struct Text<W: RawStream> {
     out: Out<W>,
     verbosity: i8,
-    collect_only: bool,
     live: bool,
     /// Locations are OSC 8 hyperlinks: a live terminal, with colour.
     links: bool,
     /// The width of the progress line on screen, 0 when none is.
     progress: usize,
-    /// From `run_started`: the project root, the workers, the run's
-    /// number.
-    root: Option<String>,
-    workers: u32,
-    run: Option<RunNumber>,
-    /// From `collection_finished`.
-    selected: Option<u32>,
+    /// From `run_started`, `collection_finished` and each
+    /// `worker_started`.
+    facts: RunFacts,
     header_shown: bool,
     /// From `-vv`, the `collected` line, held to follow the header.
     collected: Option<String>,
-    /// Each worker's Python version, from its `worker_started`.
-    pythons: HashMap<Option<WorkerIndex>, String>,
     /// The first bad outcome shown with each signature: its key and
     /// message.
-    signatures: HashMap<FailureSignature, (String, String)>,
+    signatures: FirstBySignature<(String, String)>,
     warnings: Vec<Diagnostic>,
     /// Skip reasons, with how many tests (or modules) each, in order.
     skips: Vec<(String, u32)>,
     /// Tests kept from running by a lifetime whose failure hasn't arrived
     /// (the engine reports it after them, except under `maxfail`), in the
-    /// order they finished, to be listed under it.
-    pending: Vec<(LifetimeId, Vec<NotRun>)>,
-    /// Lifetime failures already shown, by lifetime and signature.
-    lifetimes: HashSet<(LifetimeId, Option<FailureSignature>)>,
-    /// Lifetimes whose failure was shown.
-    shown_lifetimes: HashSet<LifetimeId>,
+    /// order they finished, to be listed under it; and the lifetimes whose
+    /// failure was shown, each again with a signature it wasn't shown with.
+    blocked: BlockedTests<NotRun>,
     /// Bad sub-outcomes held until their test finishes, by test.
-    subs: HashMap<TestId, Subs>,
+    subs: SubOutcomes,
     /// What the summary counts beside the tests' counts: modules skipped
     /// while collecting, failed lifetimes that kept no test from running,
     /// error diagnostics (each shown and counted once, however many
@@ -297,27 +290,6 @@ pub struct Text<W: RawStream> {
 
 /// A test a failed lifetime kept from running, and its key.
 type NotRun = (TestId, String);
-
-/// The bad sub-outcomes of one test.
-#[derive(Default)]
-struct Subs {
-    /// How many there were.
-    count: u32,
-    /// How many were shown as blocks.
-    blocks: u32,
-    /// Their failures, which the test's own may repeat.
-    failures: Vec<Failure>,
-    /// Those not shown yet, held until their test finishes.
-    held: Vec<HeldSub>,
-}
-
-struct HeldSub {
-    name: String,
-    outcome: Outcome,
-    failure: Option<Failure>,
-    duration: Duration,
-    worker: Option<WorkerIndex>,
-}
 
 /// A bad outcome to show.
 struct Bad<'a> {
@@ -389,24 +361,17 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
                 tail: *b"\n\n",
             },
             verbosity,
-            collect_only: false,
             live: options.live,
             links,
             progress: 0,
-            root: None,
-            workers: 0,
-            run: None,
-            selected: None,
+            facts: RunFacts::new(),
             header_shown: false,
             collected: None,
-            pythons: HashMap::new(),
-            signatures: HashMap::new(),
+            signatures: FirstBySignature::new(),
             warnings: Vec::new(),
             skips: Vec::new(),
-            pending: Vec::new(),
-            lifetimes: HashSet::new(),
-            shown_lifetimes: HashSet::new(),
-            subs: HashMap::new(),
+            blocked: BlockedTests::new(),
+            subs: SubOutcomes::new(),
             tally: Tally::default(),
             keys: Keys::new(),
             bad_keys: Vec::new(),
@@ -530,12 +495,9 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         Ok(())
     }
 
-    /// The key of a test's or a lifetime's id.
-    fn key(&self, id: &str) -> String {
-        self.keys.key(id).map_or_else(
-            || aye_events::TestKey::of(id).prefix(crate::keys::MIN),
-            str::to_owned,
-        )
+    /// The key of a test or a lifetime.
+    fn key<'s>(&self, subject: impl Into<Subject<'s>>) -> String {
+        self.keys.shown(subject).to_string()
     }
 
     /// `key` is a bad outcome's: the details hint counts it.
@@ -548,25 +510,29 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// The header, once, at the first worker: `aye · <root> · python 3.13.1
     /// · 15 tests · 1 worker`.
     fn header(&mut self, worker: Option<WorkerIndex>) -> io::Result<()> {
-        if self.header_shown || self.show.is_some() || self.collect_only || self.quiet() {
+        if self.header_shown || self.show.is_some() || self.facts.collect_only || self.quiet() {
             return Ok(());
         }
         self.header_shown = true;
         let mut parts = vec!["aye".to_owned()];
-        if let Some(root) = &self.root {
+        if let Some(root) = &self.facts.root {
             let trimmed = root.trim_end_matches(['/', '\\']);
             let name = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
             if !name.is_empty() {
                 parts.push(name.to_owned());
             }
         }
-        if let Some(python) = self.pythons.get(&worker) {
+        if let Some(python) = self.facts.python(worker) {
             parts.push(format!("python {python}"));
         }
-        if let Some(selected) = self.selected {
+        if let Some(selected) = self.facts.selected {
             parts.push(shared::plural(selected, "test", "tests"));
         }
-        parts.push(shared::plural(self.workers.max(1), "worker", "workers"));
+        parts.push(shared::plural(
+            self.facts.workers.max(1),
+            "worker",
+            "workers",
+        ));
         self.out.paragraph()?;
         writeln!(self.out, "{DIM}{}{DIM:#}", parts.join(" · "))?;
         self.group = Group::Header;
@@ -763,8 +729,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         refined_files: u32,
         duration: Duration,
     ) -> io::Result<()> {
-        self.selected = Some(selected);
-        if !(self.full() || self.collect_only) {
+        if !(self.full() || self.facts.collect_only) {
             return Ok(());
         }
         let mut notes = Vec::new();
@@ -789,7 +754,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             shared::spaced(duration)
         );
         // In a run, it follows the header (when a worker starts).
-        if !self.collect_only && self.show.is_none() && !self.quiet() {
+        if !self.facts.collect_only && self.show.is_none() && !self.quiet() {
             self.collected = Some(line);
             return Ok(());
         }
@@ -811,7 +776,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// its id, its duration, and why it went bad or was skipped.
     fn list_line(&mut self, result: &TestResult) -> io::Result<()> {
         let bad = result.outcome.is_bad();
-        let key = bad.then(|| self.key(result.id.as_str()));
+        let key = bad.then(|| self.key(&result.id));
         let note = if bad {
             match (&result.cause, result.failure()) {
                 (Some(lifetime), _) => Some(format!("setup of {lifetime} failed")),
@@ -834,12 +799,10 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     fn test(&mut self, result: &TestResult, worker: Option<WorkerIndex>) -> io::Result<()> {
         let outcome = result.outcome;
         let id = result.id.as_str();
-        let key = self.key(id);
+        let key = self.key(&result.id);
         let rerun = shared::rerun(&result.id, result.reproduce.as_ref());
-        let mut subs = self.subs.remove(&result.id);
-        if let Some(subs) = &mut subs {
-            self.show_subs(&result.id, &key, subs, Some(&rerun))?;
-        }
+        let subs = self.subs.take(&result.id);
+        let blocks = self.show_subs(&result.id, &key, &subs, Some(&rerun))?;
         if !outcome.is_bad() {
             if outcome == Outcome::Skipped && self.show.is_none() {
                 self.skipped(result.reason.as_deref().unwrap_or_default());
@@ -866,19 +829,11 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         // What the test's bad sub-outcomes already showed isn't shown
         // again: a test failed only by them gets a block of its own only
         // for what theirs lack.
-        let own: Vec<Failure> = match &subs {
-            Some(subs) => result
-                .failures
-                .iter()
-                .filter(|failure| !shared::repeats_subs(failure, &subs.failures))
-                .cloned()
-                .collect(),
-            None => result.failures.clone(),
-        };
-        if own.is_empty()
-            && let Some(subs) = &subs
-        {
-            return self.after_subs(result, &key, &rerun, subs);
+        let own: Vec<Failure> = aye_stream::own_failures(result, &subs, Repeats::SameOrBare)
+            .cloned()
+            .collect();
+        if own.is_empty() && !subs.is_empty() {
+            return self.after_subs(result, &key, &rerun, subs.len(), blocks);
         }
         self.bad(&Bad {
             outcome,
@@ -907,14 +862,10 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         result: &TestResult,
         key: String,
     ) -> io::Result<()> {
-        if self.shown_lifetimes.contains(lifetime) {
+        if self.blocked.has_failed(lifetime) {
             return self.blocked_line(lifetime, &result.id, &key);
         }
-        let entry = (result.id.clone(), key);
-        match self.pending.iter_mut().find(|(held, _)| held == lifetime) {
-            Some((_, ids)) => ids.push(entry),
-            None => self.pending.push((lifetime.clone(), vec![entry])),
-        }
+        self.blocked.hold(lifetime, (result.id.clone(), key));
         Ok(())
     }
 
@@ -931,11 +882,10 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// Blocked tests whose lifetime reported no failure (or none yet, when
     /// `lifetime` is `None`): a line each.
     fn flush_pending(&mut self, lifetime: Option<&LifetimeId>) -> io::Result<()> {
-        let pending = std::mem::take(&mut self.pending);
-        let (flushed, kept): (Vec<_>, Vec<_>) = pending
-            .into_iter()
-            .partition(|(held, _)| lifetime.is_none_or(|lifetime| held == lifetime));
-        self.pending = kept;
+        let flushed = match lifetime {
+            Some(lifetime) => vec![(lifetime.clone(), self.blocked.take(lifetime))],
+            None => self.blocked.take_left(Left::Blocked),
+        };
         for (held, ids) in flushed {
             for (id, key) in &ids {
                 self.blocked_line(&held, id, key)?;
@@ -954,23 +904,24 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         result: &TestResult,
         key: &str,
         rerun: &str,
-        subs: &Subs,
+        count: usize,
+        blocks: u32,
     ) -> io::Result<()> {
         let level = self.level();
         let has_output = level == Level::L3 && !result.output.is_empty();
         let has_rerun =
-            level >= Level::L2 && subs.blocks == 0 && rerun != shared::rerun(&result.id, None);
+            level >= Level::L2 && blocks == 0 && rerun != shared::rerun(&result.id, None);
         if !(has_output || has_rerun) {
             return Ok(());
         }
         // The adapter's own word for it ("contains 1 failed subtest"), or
         // how many were shown above.
-        let note = match result.failure().filter(|failure| shared::is_bare(failure)) {
+        let note = match result
+            .failure()
+            .filter(|failure| aye_stream::is_bare(failure))
+        {
             Some(failure) => shared::message(failure).to_owned(),
-            None => format!(
-                "{} above",
-                shared::plural(subs.count, "failure", "failures")
-            ),
+            None => format!("{} above", shared::plural(count, "failure", "failures")),
         };
         self.block()?;
         self.head(result.outcome, key, result.id.as_str(), Some(&note), true)?;
@@ -981,18 +932,20 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         writeln!(self.out)
     }
 
-    /// The bad sub-outcomes of test `id` not shown yet, with `rerun`, its
-    /// rerun, which arrives when it finishes.
+    /// The bad sub-outcomes of test `id`, held until now, with `rerun`, its
+    /// rerun, which arrives when it finishes: how many were shown as
+    /// blocks.
     fn show_subs(
         &mut self,
         id: &TestId,
         key: &str,
-        subs: &mut Subs,
+        subs: &[HeldSub],
         rerun: Option<&str>,
-    ) -> io::Result<()> {
-        for sub in std::mem::take(&mut subs.held) {
+    ) -> io::Result<u32> {
+        let mut blocks = 0;
+        for sub in subs {
             let name = format!("{id} › {}", sub.name);
-            let brief = subs.blocks >= SUB_BLOCKS && self.level() < Level::L3;
+            let brief = blocks >= SUB_BLOCKS && self.level() < Level::L3;
             let fresh = self.bad(&Bad {
                 outcome: sub.outcome,
                 key,
@@ -1009,46 +962,29 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
                 sub: Some(&sub.name),
             })?;
             if fresh && !brief {
-                subs.blocks += 1;
+                blocks += 1;
             }
         }
-        Ok(())
+        Ok(blocks)
     }
 
     /// Bad sub-outcomes whose test never finished (the run stopped), with
     /// the plain rerun.
     fn flush_subs(&mut self) -> io::Result<()> {
-        let mut held: Vec<(TestId, Subs)> = self
-            .subs
-            .iter_mut()
-            .filter(|(_, subs)| !subs.held.is_empty())
-            .map(|(id, subs)| {
-                let held = Subs {
-                    held: std::mem::take(&mut subs.held),
-                    ..Subs::default()
-                };
-                (id.clone(), held)
-            })
-            .collect();
-        held.sort_by(|a, b| a.0.cmp(&b.0));
-        for (id, mut subs) in held {
-            let key = self.key(id.as_str());
-            self.show_subs(&id, &key, &mut subs, None)?;
+        for (id, subs) in self.subs.take_left() {
+            let key = self.key(&id);
+            self.show_subs(&id, &key, &subs, None)?;
         }
         Ok(())
     }
 
-    /// A bad sub-outcome (a failed subtest or doctest example), held until
-    /// its test finishes, whose rerun its block shows.
-    fn sub_outcome(&mut self, id: &TestId, sub: HeldSub) {
-        let key = self.key(id.as_str());
+    /// A bad sub-outcome of test `id` (a failed subtest or doctest
+    /// example), `record`, held until its test finishes, whose rerun its
+    /// block shows.
+    fn sub_outcome(&mut self, id: &TestId, record: &Record) {
+        let key = self.key(id);
         self.note_bad(&key);
-        let subs = self.subs.entry(id.clone()).or_default();
-        subs.count += 1;
-        if let Some(failure) = &sub.failure {
-            subs.failures.push(failure.clone());
-        }
-        subs.held.push(sub);
+        self.subs.hold(record);
     }
 
     fn lifetime(
@@ -1058,18 +994,11 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         duration: Duration,
         worker: Option<WorkerIndex>,
     ) -> io::Result<()> {
-        if !self
-            .lifetimes
-            .insert((lifetime.clone(), failure.signature.clone()))
-        {
+        if !self.blocked.failed(lifetime, failure, Again::NewSignature) {
             return Ok(());
         }
-        self.shown_lifetimes.insert(lifetime.clone());
-        let not_run = match self.pending.iter().position(|(held, _)| held == lifetime) {
-            Some(at) => self.pending.remove(at).1,
-            None => Vec::new(),
-        };
-        let key = self.key(lifetime.as_str());
+        let not_run = self.blocked.take(lifetime);
+        let key = self.key(lifetime);
         self.note_bad(&key);
         let name = lifetime_name(lifetime, failure);
         let rerun = not_run.first().map(|(first, _)| shared::rerun(first, None));
@@ -1098,10 +1027,10 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         failure: &Failure,
         duration: Duration,
     ) -> io::Result<()> {
-        if !self.shown_lifetimes.insert(lifetime.clone()) {
+        if !self.blocked.failed(lifetime, failure, Again::Never) {
             return Ok(());
         }
-        let key = self.key(lifetime.as_str());
+        let key = self.key(lifetime);
         let name = lifetime_name(lifetime, failure);
         let why = shared::why(failure, false);
         self.lines()?;
@@ -1123,19 +1052,17 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             && let Some(signature) = &first.signature
             && self.level() < Level::L3
         {
-            match self.signatures.entry(signature.clone()) {
-                Entry::Occupied(seen) => {
-                    let (same, message) = seen.get().clone();
-                    self.same_as(bad, first, &same, &message)?;
-                    return Ok(false);
-                }
-                Entry::Vacant(slot) => {
-                    let label = match bad.sub {
-                        Some(sub) => format!("{} › {sub}", bad.key),
-                        None => bad.key.to_owned(),
-                    };
-                    slot.insert((label, shared::message(first).to_owned()));
-                }
+            let label = || {
+                let label = match bad.sub {
+                    Some(sub) => format!("{} › {sub}", bad.key),
+                    None => bad.key.to_owned(),
+                };
+                (label, shared::message(first).to_owned())
+            };
+            if let Some((same, message)) = self.signatures.first_or_keep(signature, label).cloned()
+            {
+                self.same_as(bad, first, &same, &message)?;
+                return Ok(false);
             }
         }
         if !self.details.iter().any(|key| key == bad.key) {
@@ -1267,13 +1194,13 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             parts.push(shared::spaced(duration));
         }
         if self.show.is_some() {
-            if let Some(python) = self.pythons.get(&bad.worker) {
+            if let Some(python) = self.facts.python(bad.worker) {
                 parts.push(format!("python {python}"));
             }
             let run = self
                 .context
                 .run
-                .or(self.run)
+                .or(self.facts.number)
                 .map(|run| format!("run {run}"));
             match (run, &self.context.ago) {
                 (Some(run), Some(ago)) => parts.push(format!("{run}, {ago}")),
@@ -1743,7 +1670,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// with colour.
     fn location(&self, path: &str, line: u32) -> String {
         let text = format!("{CYAN}{path}:{line}{CYAN:#}");
-        match self.root.as_deref().filter(|_| self.links) {
+        match self.facts.root.as_deref().filter(|_| self.links) {
             Some(root) => format!(
                 "\u{1b}]8;;{}\u{1b}\\{text}\u{1b}]8;;\u{1b}\\",
                 file_url(root, path)
@@ -1795,10 +1722,10 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         // what was asked for say nothing more.
         let tests_shown =
             self.show == Some(ShowMode::Details) && !self.quiet() && counts.total() > 0;
-        let summary = !(tests_shown || (self.collect_only && exit_code == ExitCode::Ok));
+        let summary = !(tests_shown || (self.facts.collect_only && exit_code == ExitCode::Ok));
         let grouped = !self.quiet()
             && ((!self.full() && !self.warnings.is_empty())
-                || (self.show.is_none() && !self.collect_only && !self.skips.is_empty()));
+                || (self.show.is_none() && !self.facts.collect_only && !self.skips.is_empty()));
         if summary || grouped || stopped.is_some() {
             self.out.paragraph()?;
         }
@@ -1839,7 +1766,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             }
             writeln!(self.out, "{YELLOW}warnings{YELLOW:#}  {}", words.join(", "))?;
         }
-        if self.show.is_none() && !self.collect_only && !self.skips.is_empty() {
+        if self.show.is_none() && !self.facts.collect_only && !self.skips.is_empty() {
             let mut skips = self.skips.clone();
             // Most first; a stable sort keeps ties in the order they came.
             skips.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
@@ -1900,7 +1827,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         // A failed teardown blocks no test, so the counts don't hold it,
         // though the run fails on it: the line says so, as it counts the
         // modules skipped while collecting and the error diagnostics.
-        let parts: Vec<String> = tally::parts(counts, &self.tally.extra())
+        let parts: Vec<String> = summary::parts(counts, &self.tally.extra())
             .into_iter()
             .map(|(n, one, many, tone)| {
                 let words = shared::plural(n, one, many);
@@ -1913,7 +1840,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
                 }
             })
             .collect();
-        let none = if self.collect_only {
+        let none = if self.facts.collect_only {
             "no tests collected"
         } else if self.show.is_some() {
             "no tests shown"
@@ -1942,7 +1869,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// `details  aye show 3fae6 4d4f6 c3d4e  ·  every failure: aye show
     /// --failed`, in a run where something failed.
     fn details_line(&mut self) -> io::Result<()> {
-        if self.show.is_some() || self.collect_only || self.bad_keys.is_empty() {
+        if self.show.is_some() || self.facts.collect_only || self.bad_keys.is_empty() {
             return Ok(());
         }
         let source = if self.details.is_empty() {
@@ -2032,10 +1959,11 @@ const fn symbol(outcome: Outcome) -> (&'static str, Style) {
     }
 }
 
-impl<W: RawStream + AsLockedWrite> Reporter for Text<W> {
-    fn report(&mut self, record: &Record) -> io::Result<()> {
+impl<W: RawStream + AsLockedWrite> Consumer for Text<W> {
+    fn consume(&mut self, record: &Record) -> io::Result<()> {
         let noted = self.tally.count(record);
         self.keys.note(record);
+        self.facts.note(record);
         if let Event::CollectionProgress {
             walked,
             test_files,
@@ -2046,13 +1974,7 @@ impl<W: RawStream + AsLockedWrite> Reporter for Text<W> {
         }
         self.clear_progress()?;
         let worker = record.envelope.worker;
-        if let Event::WorkerStarted {
-            python, version, ..
-        } = &record.event
-        {
-            if let Some(python) = shared::python_version(python, version.as_deref()) {
-                self.pythons.insert(worker, python);
-            }
+        if let Event::WorkerStarted { .. } = &record.event {
             self.header(worker)?;
         }
         if self.engine() {
@@ -2068,21 +1990,8 @@ impl<W: RawStream + AsLockedWrite> Reporter for Text<W> {
             return Ok(());
         }
         match &record.event {
-            Event::RunStarted {
-                root,
-                collect_only,
-                workers,
-                run,
-                ..
-            } => {
-                self.collect_only = *collect_only;
-                self.root = Some(root.clone());
-                self.workers = *workers;
-                self.run = *run;
-                Ok(())
-            }
             Event::Diagnostic(diagnostic) => self.diagnostic(diagnostic, noted),
-            Event::CaseCollected(case) if self.collect_only => {
+            Event::CaseCollected(case) if self.facts.collect_only => {
                 let partial = if case.certainty == Certainty::Partial {
                     "[…]"
                 } else {
@@ -2116,22 +2025,8 @@ impl<W: RawStream + AsLockedWrite> Reporter for Text<W> {
                 duration,
             } => self.lifetime(lifetime, failure, *duration, worker),
             Event::LifetimeFinished { lifetime, .. } => self.flush_pending(Some(lifetime)),
-            Event::SubOutcome {
-                id,
-                name,
-                outcome,
-                failure,
-                duration,
-                ..
-            } if outcome.is_bad() => {
-                let sub = HeldSub {
-                    name: name.clone(),
-                    outcome: *outcome,
-                    failure: failure.clone(),
-                    duration: *duration,
-                    worker,
-                };
-                self.sub_outcome(id, sub);
+            Event::SubOutcome { id, outcome, .. } if outcome.is_bad() => {
+                self.sub_outcome(id, record);
                 Ok(())
             }
             Event::TestFinished(result) if self.show == Some(ShowMode::List) => {

@@ -38,6 +38,7 @@ aye-render = { workspace = true }
 aye-runner = { workspace = true }
 aye-select = { workspace = true }
 aye-static = { workspace = true }
+aye-stream = { workspace = true }
 
 [dev-dependencies]
 aye-test = { path = "../aye-test" }
