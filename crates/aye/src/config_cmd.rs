@@ -6,27 +6,38 @@ use anyhow::Result;
 
 use aye_config::ValueSource;
 
-use crate::session::Session;
+use crate::settings::RunSettings;
 
-pub(crate) fn print(session: &Session) -> Result<()> {
+pub(crate) fn print(settings: &RunSettings) -> Result<()> {
     let mut out = io::stdout().lock();
-    let root = session.root();
+    let root = &settings.root;
     writeln!(out, "root     {}", root.display())?;
+    let python = &settings.interpreter;
     writeln!(
         out,
         "python   {}  ({})",
-        session.python().display(),
-        session.python_source().display_for("python")
+        python.value.executable.display(),
+        python.source.display_for("python")
     )?;
-    writeln!(out, "workers  {}", session.workers())?;
+    writeln!(out, "workers  {}", settings.workers)?;
     // The format at its verbosity, as the command line would ask for it.
-    let (output, source) = session.output_shown();
-    writeln!(out, "output   {output}  ({})", source.display_for("output"))?;
-    let (adapters, source) = session.adapters();
-    writeln!(out, "adapters {}  ({})", adapters.join(", "), why(source))?;
+    let output = &settings.output;
+    writeln!(
+        out,
+        "output   {}  ({})",
+        output.shown(),
+        output.format.source.display_for("output")
+    )?;
+    let adapters = settings.adapter_names();
+    writeln!(
+        out,
+        "adapters {}  ({})",
+        adapters.join(", "),
+        why(&settings.adapters_source)
+    )?;
     // Which engine runs the tests: aye's own, whatever the framework.
     writeln!(out, "engine   native")?;
-    let entries = session.tool_aye().entries();
+    let entries = settings.tool_aye.entries();
     writeln!(out)?;
     writeln!(out, "[tool.aye]")?;
     if entries.is_empty() {
@@ -38,7 +49,7 @@ pub(crate) fn print(session: &Session) -> Result<()> {
     for adapter in adapters {
         writeln!(out)?;
         writeln!(out, "[{adapter}]")?;
-        let Some((_, recognizer)) = session.prepared().iter().find(|(name, _)| *name == adapter)
+        let Some((_, recognizer)) = settings.prepared.iter().find(|(name, _)| *name == adapter)
         else {
             // Its `prepare` found nothing for it to collect here (doctest
             // without doctests turned on).

@@ -46,23 +46,23 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{self, Write as _};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use aye_config::{AyeSettings, OutputFormat};
+use aye_config::OutputFormat;
 use aye_events::{
     AdapterName, Case, Certainty, Counts, Diagnostic, Event, ExitCode, LifetimeId, Outcome,
     ProjectPath, Record, RunNumber, Severity, TestId, TestResult, WorkerIndex,
 };
 use aye_history::{Change, RunMeta, RunStore, StoredRunId};
 use aye_render::{
-    ColorChoice, Extra, JsonLines, Keys, Level, Reporter, ShowContext, ShowMode, Text, TextOptions,
-    summary_words,
+    Extra, JsonLines, Keys, Reporter, ShowContext, ShowMode, Text, TextOptions, summary_words,
 };
 use aye_select::Selection;
 
-use crate::cli::{Color, ShowArgs, Verbosity};
-use crate::{framework_args, session};
+use crate::cli::ShowArgs;
+use crate::positional;
+use crate::settings::ShowSettings;
 
 /// How many of the closest names a selector naming nothing lists.
 const CLOSEST: usize = 5;
@@ -110,25 +110,10 @@ enum Wanted {
 }
 
 fn show(args: &ShowArgs) -> Result<(), Problem> {
-    framework_args::check_expressions(args.keyword.as_deref(), args.tags.as_deref())
-        .map_err(Problem::Usage)?;
-    let cwd = std::env::current_dir()
-        .map_err(|err| Problem::Usage(format!("cannot read the current directory: {err}")))?;
-    let given: Vec<PathBuf> = args
-        .tests
-        .iter()
-        .map(|test| session::path_part(test))
-        .filter(|path| session::is_path_like(&cwd, path))
-        .map(|path| aye_fs::normalize_absolute(&cwd.join(path)))
-        .collect();
-    let root = aye_fs::normalize_absolute(&aye_config::project_root(&cwd, &given));
-    let tool_aye = AyeSettings::load(&root).map_err(|err| Problem::Usage(err.to_string()))?;
-    let format = args
-        .output
-        .or_else(|| tool_aye.output.as_ref().map(|output| output.value))
-        .unwrap_or(OutputFormat::Text);
-    let store = RunStore::new(aye_fs::StateDir::for_root(&root).bucket(aye_fs::StateBucket::Runs));
-    let keep = tool_aye.keep_runs();
+    let settings = ShowSettings::resolve(args).map_err(Problem::Usage)?;
+    let (cwd, root, format) = (&settings.cwd, &settings.root, settings.format);
+    let store = RunStore::new(aye_fs::StateDir::for_root(root).bucket(aye_fs::StateBucket::Runs));
+    let keep = settings.keep_runs;
     if args.runs {
         return list_runs(&store, format, keep);
     }
@@ -167,7 +152,7 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
     let wanted: Vec<(&str, Wanted)> = args
         .tests
         .iter()
-        .map(|arg| (arg.as_str(), read(&cwd, &root, arg)))
+        .map(|arg| (arg.as_str(), read(cwd, root, arg)))
         .collect();
     let details = args.failed
         || wanted
@@ -198,21 +183,16 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
         .collect();
 
     let feed = feed(&records, &log, &shown, mode, filtered, meta.exit_code);
-    let stale = stale(&meta, &root, &shown);
+    let stale = stale(&meta, root, &shown);
     let context = context(&meta, &stale, now_ms());
-    let verbosity = level(args, details, format);
+    let verbosity = settings.level(details);
     let mut out: Box<dyn Reporter> = match format {
         OutputFormat::Text => {
-            let color = match args.color {
-                Color::Auto => ColorChoice::Auto,
-                Color::Always => ColorChoice::Always,
-                Color::Never => ColorChoice::Never,
-            };
             let mut text = Text::new(
                 io::stdout(),
                 TextOptions {
                     verbosity,
-                    color,
+                    color: settings.color,
                     live: false,
                 },
             )
@@ -240,21 +220,6 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
         Err(err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
         other => Ok(other?),
     }
-}
-
-/// How much the output shows: as a run's ([`Verbosity::level`]) when `-v`
-/// or `-q` is given. Without either, `details` (of tests named, or
-/// `--failed`) come at the detail ladder's second level, which is text's
-/// `-v` and JSON's `-vv`; the list at a run's default.
-fn level(args: &ShowArgs, details: bool, format: OutputFormat) -> Level {
-    let verbosity = Verbosity::new(args.verbose, args.quiet);
-    if details && verbosity.is_unset() {
-        return match format {
-            OutputFormat::Text => Level::Verbose,
-            OutputFormat::Json => Level::VeryVerbose,
-        };
-    }
-    verbosity.level()
 }
 
 /// No run is stored: why, when the configuration says.
@@ -415,7 +380,7 @@ fn counts(counts: &Counts, extra: &Extra) -> Vec<(&'static str, u32)> {
 /// How `aye show` reads a positional argument: a path (read as a run reads
 /// one), or a test's key or its start, id or dotted name.
 fn read(cwd: &Path, root: &Path, arg: &str) -> Wanted {
-    let positional = session::resolve(cwd, root, arg);
+    let positional = positional::resolve(cwd, root, arg);
     match positional.path {
         Some(_) if !positional.id => Wanted::Path(positional.selector),
         _ => Wanted::Test(positional.selector),

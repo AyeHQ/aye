@@ -68,28 +68,6 @@ fn the_renderers_are_told_the_runs_number_age_and_stale_files() {
 }
 
 #[test]
-fn details_come_at_the_second_level_unless_the_flags_say() {
-    use clap::Parser as _;
-    let verbosity = |argv: &[&str], details, format| {
-        let mut all = vec!["aye show"];
-        all.extend(argv);
-        level(&ShowArgs::try_parse_from(all).unwrap(), details, format).count()
-    };
-    // Details: text's -v, JSON's -vv.
-    assert_eq!(verbosity(&[], true, OutputFormat::Text), 1);
-    assert_eq!(verbosity(&[], true, OutputFormat::Json), 2);
-    // The list: a run's default.
-    assert_eq!(verbosity(&[], false, OutputFormat::Text), 0);
-    assert_eq!(verbosity(&[], false, OutputFormat::Json), 0);
-    // Flags mean what they mean in a run.
-    assert_eq!(verbosity(&["-v"], true, OutputFormat::Json), 1);
-    assert_eq!(verbosity(&["-vvv"], true, OutputFormat::Text), 3);
-    assert_eq!(verbosity(&["-q"], true, OutputFormat::Json), -1);
-    assert_eq!(verbosity(&["-v", "-q"], true, OutputFormat::Text), 0);
-    assert_eq!(verbosity(&["-vv"], false, OutputFormat::Text), 2);
-}
-
-#[test]
 fn a_run_is_picked_by_its_number_or_the_start_of_an_old_id() {
     let dir = tempfile::tempdir().unwrap();
     let runs = dir.path().join("runs");

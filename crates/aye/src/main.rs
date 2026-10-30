@@ -246,14 +246,16 @@ mod cli;
 mod config_cmd;
 mod environment;
 mod framework_args;
+mod positional;
 mod registry;
 mod session;
+mod settings;
 mod show;
 
 use aye_events::ExitCode;
-use cli::{Command, RunArgs};
+use cli::Command;
 use environment::EnvironmentOptions;
-use session::Session;
+use settings::RunSettings;
 
 #[expect(
     clippy::print_stderr,
@@ -276,20 +278,16 @@ fn main() -> process::ExitCode {
         Command::Config(args) => (args, true),
         Command::Run(args) => (args, false),
     };
-    if let Err(err) = check(&args) {
-        eprintln!("aye: error: {err}");
-        return ExitCode::UsageError.into();
-    }
     // The environment is read once, here: everything after reads this.
-    let session = match Session::new(args, EnvironmentOptions::from_process()) {
-        Ok(session) => session,
+    let settings = match RunSettings::resolve(args, EnvironmentOptions::from_process()) {
+        Ok(settings) => settings,
         Err(err) => {
             eprintln!("aye: error: {err:#}");
             return ExitCode::UsageError.into();
         }
     };
     if show_config {
-        return match config_cmd::print(&session) {
+        return match config_cmd::print(&settings) {
             Ok(()) => process::ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("aye: error: {err:#}");
@@ -297,12 +295,5 @@ fn main() -> process::ExitCode {
             }
         };
     }
-    session.run().into()
-}
-
-/// What clap can't check of a run's arguments: aye's own `-k` and `-m`
-/// values, and arguments after `--` that would replace the test run.
-fn check(args: &RunArgs) -> Result<(), String> {
-    framework_args::check_expressions(args.keyword.as_deref(), args.tags.as_deref())?;
-    framework_args::replaced_run(&args.passthrough).map_or(Ok(()), Err)
+    session::run(settings).into()
 }
