@@ -24,7 +24,7 @@ pub(crate) fn print(session: &Session) -> Result<()> {
     writeln!(out, "adapters {}  ({why})", adapters.join(", "))?;
     // Which engine runs the tests: aye's own, whatever the framework.
     writeln!(out, "engine   native")?;
-    let entries = session.config().entries();
+    let entries = session.tool_aye().entries();
     writeln!(out)?;
     writeln!(out, "[tool.aye]")?;
     if entries.is_empty() {

@@ -114,12 +114,9 @@ impl fmt::Display for Why {
 pub(crate) fn choose(project: &Project<'_>, static_listing: bool) -> Result<Chosen> {
     let settings = project.tool_aye;
     let (names, why) = match &settings.adapters {
-        Some(names) => (names.clone(), Why::Configured),
+        Some(names) => (names.value.names().to_vec(), Why::Configured),
         None => (
-            vec![
-                aye_adapter_doctest::NAME.to_string(),
-                aye_adapter_pytest::NAME.to_string(),
-            ],
+            vec![aye_adapter_doctest::NAME, aye_adapter_pytest::NAME],
             Why::Default,
         ),
     };
@@ -129,13 +126,14 @@ pub(crate) fn choose(project: &Project<'_>, static_listing: bool) -> Result<Chos
         .map(|a| a.name())
         .collect::<Vec<_>>()
         .join(", ");
+    // An `AdapterList` names each adapter once.
     let mut adapters: Vec<Box<dyn Adapter>> = Vec::new();
     for name in &names {
-        if adapters.iter().any(|a| a.name() == name.as_str()) {
-            bail!("[tool.aye] adapters: {name:?} is listed twice");
-        }
-        let Some(at) = known.iter().position(|a| a.name() == name.as_str()) else {
-            bail!("[tool.aye] adapters: unknown adapter {name:?} (known: {all})");
+        let Some(at) = known.iter().position(|a| a.name() == *name) else {
+            bail!(
+                "[tool.aye] adapters: unknown adapter {:?} (known: {all})",
+                name.as_str()
+            );
         };
         adapters.push(known.remove(at));
     }
@@ -157,7 +155,7 @@ mod tests {
 
     use aye_adapter::ast::Stmt;
     use aye_adapter::ast::visitor::{self, Visitor};
-    use aye_config::AyeSettings;
+    use aye_config::{AdapterList, AyeSettings, Sourced};
     use aye_protocol::{Request, Runtime, SessionMode};
     use aye_static::EnvVars;
 
@@ -180,7 +178,11 @@ mod tests {
     fn names(chosen: Option<&[&str]>) -> Result<Vec<AdapterName>> {
         let dir = tempfile::tempdir().unwrap();
         let settings = AyeSettings {
-            adapters: chosen.map(|names| names.iter().map(ToString::to_string).collect()),
+            adapters: chosen.map(|names| {
+                Sourced::default_value(
+                    AdapterList::new(names.iter().map(ToString::to_string).collect()).unwrap(),
+                )
+            }),
             ..AyeSettings::default()
         };
         choose(&project(dir.path(), &[], &settings), false).map(|c| c.names())
@@ -196,12 +198,6 @@ mod tests {
         assert_eq!(
             names(Some(&["unittest", "nose"])).unwrap_err().to_string(),
             "[tool.aye] adapters: unknown adapter \"nose\" (known: pytest, unittest, doctest)"
-        );
-        assert_eq!(
-            names(Some(&["unittest", "unittest"]))
-                .unwrap_err()
-                .to_string(),
-            "[tool.aye] adapters: \"unittest\" is listed twice"
         );
     }
 
@@ -516,7 +512,7 @@ mod tests {
                 "pyproject.toml",
                 &format!("[project]\nname = \"p\"\n[tool.aye]\nadapters = [\"pytest\"]\n{table}"),
             );
-            aye_config::AyeConfig::load(root).unwrap().settings
+            aye_config::AyeSettings::load(root).unwrap()
         };
         for table in [
             "[tool.aye.unittest]\nfoo = 1\n",

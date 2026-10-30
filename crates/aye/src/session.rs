@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result};
 use aye_adapter::{Adapter, FrameworkDefaults, Project};
 use aye_collect::{Collector, Environment, Options, Prepared};
-use aye_config::{AyeConfig, WorkerCount};
+use aye_config::{AyeSettings, OutputFormat, WorkerCount};
 use aye_events::{
     AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event,
     ExitCode, ProjectPath, Record, RerunCommand, RunId, SCHEMA_VERSION, Severity, Stamper,
@@ -29,7 +29,7 @@ use aye_runner::{Echo, Plan, Runner, RunnerOptions};
 use aye_select::Selection;
 use aye_static::{EnvVars, ProcessEnv};
 
-use crate::args::{Args, Color, Maxfail, Output, Passed, passed, passed_maxfail};
+use crate::args::{Args, Color, Maxfail, Passed, passed, passed_maxfail};
 use crate::busy::Busy;
 use crate::registry;
 
@@ -48,7 +48,8 @@ pub(crate) struct Session {
     /// Whether every positional argument is a path (collection can then be
     /// limited to them).
     only_paths: bool,
-    config: AyeConfig,
+    /// `[tool.aye]`, the project's.
+    tool_aye: AyeSettings,
     /// The adapters the run uses, in priority order, and why.
     adapters: Vec<Box<dyn Adapter>>,
     adapters_why: registry::Why,
@@ -115,10 +116,13 @@ impl Session {
             }
         }
 
-        let config = AyeConfig::load(&root)?;
+        let tool_aye = AyeSettings::load(&root)?;
         let (python, python_source) = aye_runner::find_python(
             args.python.as_deref(),
-            config.settings.python.as_deref(),
+            tool_aye
+                .python
+                .as_ref()
+                .and_then(|python| python.value.to_str()),
             &root,
             &cwd,
             &env,
@@ -131,7 +135,7 @@ impl Session {
             config_file: args.config_file.as_deref(),
             framework_args: &args.passthrough,
             env: &env,
-            tool_aye: &config.settings,
+            tool_aye: &tool_aye,
         };
         // Before anything walks the tree: pytest would walk all of it, and
         // nobody means that.
@@ -145,7 +149,7 @@ impl Session {
         }
         // Choosing and preparing the adapters can walk the project; on a
         // terminal, say so if it takes a while.
-        let text = output(&args, &config).0 == Output::Text;
+        let text = output(&args, &tool_aye).0 == OutputFormat::Text;
         let busy = Busy::start(text && io::stdout().is_terminal());
         // `--co --no-refine` lists without importing: pytest's cases are the
         // static recognizer's prediction.
@@ -179,12 +183,11 @@ impl Session {
             &defaults,
         )?;
 
-        let workers = match (args.workers, config.settings.workers) {
-            (Some(w), _) => w.resolve(),
-            (None, Some(aye_config::Workers::Count(n))) => n.max(1),
-            (None, Some(aye_config::Workers::Keyword(_))) => WorkerCount::Auto.resolve(),
-            (None, None) => first(&defaults, |d| d.workers).map_or(1, WorkerCount::resolve),
-        };
+        let workers = args
+            .workers
+            .or_else(|| tool_aye.workers.as_ref().map(|workers| workers.value))
+            .or_else(|| first(&defaults, |d| d.workers))
+            .map_or(1, WorkerCount::resolve);
 
         drop(busy);
         Ok(Self {
@@ -194,7 +197,7 @@ impl Session {
             positionals,
             paths,
             only_paths,
-            config,
+            tool_aye,
             adapters,
             adapters_why,
             prepared,
@@ -223,8 +226,8 @@ impl Session {
         self.workers
     }
 
-    pub(crate) const fn config(&self) -> &AyeConfig {
-        &self.config
+    pub(crate) const fn tool_aye(&self) -> &AyeSettings {
+        &self.tool_aye
     }
 
     pub(crate) fn prepared(&self) -> &[Prepared] {
@@ -283,8 +286,8 @@ impl Session {
             )],
             // `-s` output stays off a machine-readable stdout.
             echo: match self.output() {
-                Output::Text => Echo::Stdout,
-                Output::Json => Echo::Stderr,
+                OutputFormat::Text => Echo::Stdout,
+                OutputFormat::Json => Echo::Stderr,
             },
             collect_only: self.args.collect_only,
         });
@@ -301,10 +304,7 @@ impl Session {
         let file_failed = Arc::new(AtomicBool::new(false));
         // The run's number in the store (`r81`), which `run_started` says,
         // when the run will be stored.
-        let mut writer = RunWriter::new(
-            state.bucket(StateBucket::Runs),
-            self.config.settings.keep_runs(),
-        );
+        let mut writer = RunWriter::new(state.bucket(StateBucket::Runs), self.tool_aye.keep_runs());
         let number = if self.args.collect_only {
             None
         } else {
@@ -341,7 +341,7 @@ impl Session {
             config_file: self.args.config_file.as_deref(),
             framework_args: &self.args.passthrough,
             env: &self.env,
-            tool_aye: &self.config.settings,
+            tool_aye: &self.tool_aye,
         };
         // The refinement cache is keyed on what refining depends on: the
         // interpreter and its packages, the arguments after `--`, and the
@@ -652,7 +652,7 @@ impl Session {
             maxfail: self.maxfail(),
             capture: !self.args.no_capture,
             verbosity: self.args.framework_verbosity(),
-            timeout: self.config.settings.timeout(),
+            timeout: self.tool_aye.timeout(),
             keyword: self.args.keyword.clone(),
             tags: self.args.tags.clone(),
             framework_args: self.args.passthrough.clone(),
@@ -682,28 +682,28 @@ impl Session {
     }
 
     /// `--output`, else `[tool.aye] output`, else text.
-    fn output(&self) -> Output {
-        output(&self.args, &self.config).0
+    fn output(&self) -> OutputFormat {
+        output(&self.args, &self.tool_aye).0
     }
 
     /// The output format, at its verbosity (`-v` and `-q`), and where the
     /// format came from, for `aye config`.
     pub(crate) fn output_shown(&self) -> (String, &'static str) {
-        let (format, origin) = output(&self.args, &self.config);
+        let (format, origin) = output(&self.args, &self.tool_aye);
         let verbosity = self.args.verbosity();
         let flags = match verbosity {
             ..0 => " -q".to_string(),
             0 => String::new(),
             n => format!(" -{}", "v".repeat(usize::from(n.unsigned_abs()))),
         };
-        (format!("{}{flags}", format.name()), origin)
+        (format!("{}{flags}", format.as_str()), origin)
     }
 
     fn reporters<'a>(&self, junit: Option<PathBuf>, file_failed: &Arc<AtomicBool>) -> Tee<'a> {
         let mut tee = Tee::new();
         let verbosity = self.args.verbosity();
         match self.output() {
-            Output::Text => {
+            OutputFormat::Text => {
                 let color = match self.args.color {
                     Color::Auto => ColorChoice::Auto,
                     Color::Always => ColorChoice::Always,
@@ -728,7 +728,7 @@ impl Session {
                     ));
                 }
             }
-            Output::Json => tee.push(Stdout::new(JsonLines::new(io::stdout(), verbosity))),
+            OutputFormat::Json => tee.push(Stdout::new(JsonLines::new(io::stdout(), verbosity))),
         }
         if let Some(path) = junit {
             tee.push(File {
@@ -1714,15 +1714,14 @@ fn pick(given: Option<&str>, framework: Passed) -> Pick {
 }
 
 /// The output format, and where it came from: `--output`, else
-/// `[tool.aye] output`, else text. aye-config accepts only the values in
-/// `aye_config::OUTPUTS`, each of which parses.
-fn output(args: &Args, config: &AyeConfig) -> (Output, &'static str) {
+/// `[tool.aye] output`, else text.
+fn output(args: &Args, tool_aye: &AyeSettings) -> (OutputFormat, &'static str) {
     if let Some(output) = args.output {
         return (output, "--output");
     }
-    match config.settings.output.as_deref().map(str::parse) {
-        Some(Ok(output)) => (output, "[tool.aye] output"),
-        _ => (Output::Text, "default"),
+    match &tool_aye.output {
+        Some(output) => (output.value, "[tool.aye] output"),
+        None => (OutputFormat::Text, "default"),
     }
 }
 

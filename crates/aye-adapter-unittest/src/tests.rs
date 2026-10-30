@@ -69,7 +69,7 @@ fn scratch(files: &[(&str, &str)]) -> tempfile::TempDir {
 
 /// `[tool.aye]` as the binary loads it from `root`'s `pyproject.toml`.
 fn tool_aye(root: &Path) -> aye_config::AyeSettings {
-    aye_config::AyeConfig::load(root).unwrap().settings
+    aye_config::AyeSettings::load(root).unwrap()
 }
 
 fn recognizer(root: &Path, args: &[PathBuf]) -> Result<UnittestRecognizer, AdapterError> {

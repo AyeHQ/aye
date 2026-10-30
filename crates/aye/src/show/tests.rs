@@ -78,17 +78,17 @@ fn details_come_at_the_second_level_unless_the_flags_say() {
             .verbosity(details, format)
     };
     // Details: text's -v, JSON's -vv.
-    assert_eq!(verbosity(&[], true, Output::Text), 1);
-    assert_eq!(verbosity(&[], true, Output::Json), 2);
+    assert_eq!(verbosity(&[], true, OutputFormat::Text), 1);
+    assert_eq!(verbosity(&[], true, OutputFormat::Json), 2);
     // The list: a run's default.
-    assert_eq!(verbosity(&[], false, Output::Text), 0);
-    assert_eq!(verbosity(&[], false, Output::Json), 0);
+    assert_eq!(verbosity(&[], false, OutputFormat::Text), 0);
+    assert_eq!(verbosity(&[], false, OutputFormat::Json), 0);
     // Flags mean what they mean in a run.
-    assert_eq!(verbosity(&["-v"], true, Output::Json), 1);
-    assert_eq!(verbosity(&["-vvv"], true, Output::Text), 3);
-    assert_eq!(verbosity(&["-q"], true, Output::Json), -1);
-    assert_eq!(verbosity(&["-v", "-q"], true, Output::Text), 0);
-    assert_eq!(verbosity(&["-vv"], false, Output::Text), 2);
+    assert_eq!(verbosity(&["-v"], true, OutputFormat::Json), 1);
+    assert_eq!(verbosity(&["-vvv"], true, OutputFormat::Text), 3);
+    assert_eq!(verbosity(&["-q"], true, OutputFormat::Json), -1);
+    assert_eq!(verbosity(&["-v", "-q"], true, OutputFormat::Text), 0);
+    assert_eq!(verbosity(&["-vv"], false, OutputFormat::Text), 2);
 }
 
 #[test]

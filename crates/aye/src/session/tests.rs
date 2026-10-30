@@ -783,38 +783,32 @@ fn a_path_through_another_name_of_the_root_is_spelled_from_the_root() {
     );
 }
 
-#[test]
-fn every_output_the_configuration_accepts_parses() {
-    for name in aye_config::OUTPUTS {
-        assert!(name.parse::<Output>().is_ok(), "{name}");
-        assert!(name.to_uppercase().parse::<Output>().is_ok(), "{name}");
-        assert_eq!(name.parse::<Output>().unwrap().name(), name);
-    }
-}
-
 /// `--output`, else `[tool.aye] output`, else text, and where it came
 /// from, as `aye config` shows it.
 #[test]
 fn the_output_is_the_command_lines_else_the_configurations_else_text() {
-    let config = |output: Option<&str>| AyeConfig {
-        settings: aye_config::AyeSettings {
-            output: output.map(str::to_string),
-            ..Default::default()
-        },
-        source: aye_config::ValueSource::Default,
+    let tool_aye = |output: Option<OutputFormat>| aye_config::AyeSettings {
+        output: output.map(aye_config::Sourced::default_value),
+        ..Default::default()
     };
-    assert_eq!(output(&args(&[]), &config(None)), (Output::Text, "default"));
     assert_eq!(
-        output(&args(&[]), &config(Some("json"))),
-        (Output::Json, "[tool.aye] output")
+        output(&args(&[]), &tool_aye(None)),
+        (OutputFormat::Text, "default")
     );
     assert_eq!(
-        output(&args(&["--output", "text"]), &config(Some("json"))),
-        (Output::Text, "--output")
+        output(&args(&[]), &tool_aye(Some(OutputFormat::Json))),
+        (OutputFormat::Json, "[tool.aye] output")
     );
     assert_eq!(
-        output(&args(&["--output", "JSON", "-vv"]), &config(None)),
-        (Output::Json, "--output")
+        output(
+            &args(&["--output", "text"]),
+            &tool_aye(Some(OutputFormat::Json))
+        ),
+        (OutputFormat::Text, "--output")
+    );
+    assert_eq!(
+        output(&args(&["--output", "JSON", "-vv"]), &tool_aye(None)),
+        (OutputFormat::Json, "--output")
     );
 }
 

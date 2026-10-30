@@ -49,7 +49,7 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use aye_config::AyeConfig;
+use aye_config::{AyeSettings, OutputFormat};
 use aye_events::{
     AdapterName, Case, Certainty, Counts, Diagnostic, Event, ExitCode, LifetimeId, Outcome,
     ProjectPath, Record, RunNumber, Severity, TestId, TestResult, WorkerIndex,
@@ -61,7 +61,7 @@ use aye_render::{
 };
 use aye_select::Selection;
 
-use crate::args::{Color, Output, ShowArgs};
+use crate::args::{Color, ShowArgs};
 use crate::session;
 
 /// How many of the closest names a selector naming nothing lists.
@@ -121,13 +121,13 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
         .map(|path| aye_fs::normalize_absolute(&cwd.join(path)))
         .collect();
     let root = aye_fs::normalize_absolute(&aye_config::project_root(&cwd, &given));
-    let config = AyeConfig::load(&root).map_err(|err| Problem::Usage(err.to_string()))?;
+    let tool_aye = AyeSettings::load(&root).map_err(|err| Problem::Usage(err.to_string()))?;
     let format = args
         .output
-        .or_else(|| config.settings.output.as_deref()?.parse().ok())
-        .unwrap_or(Output::Text);
+        .or_else(|| tool_aye.output.as_ref().map(|output| output.value))
+        .unwrap_or(OutputFormat::Text);
     let store = RunStore::new(aye_fs::StateDir::for_root(&root).bucket(aye_fs::StateBucket::Runs));
-    let keep = config.settings.keep_runs();
+    let keep = tool_aye.keep_runs();
     if args.runs {
         return list_runs(&store, format, keep);
     }
@@ -201,7 +201,7 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
     let context = context(&meta, &stale, now_ms());
     let verbosity = args.verbosity(details, format);
     let mut out: Box<dyn Reporter> = match format {
-        Output::Text => {
+        OutputFormat::Text => {
             let color = match args.color {
                 Color::Auto => ColorChoice::Auto,
                 Color::Always => ColorChoice::Always,
@@ -221,7 +221,7 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
             }
             Box::new(text)
         }
-        Output::Json => {
+        OutputFormat::Json => {
             let mut json = JsonLines::new(io::stdout(), verbosity).for_show(mode, keys, context);
             for (path, change) in &stale {
                 json.stale(path.as_str(), *change == Change::Gone)?;
@@ -307,7 +307,7 @@ fn ids(runs: &[RunMeta]) -> String {
 
 /// `aye show --runs`: the stored runs, the last first (the one `aye show`
 /// shows), then the one that finished last.
-fn list_runs(store: &RunStore, format: Output, keep: usize) -> Result<(), Problem> {
+fn list_runs(store: &RunStore, format: OutputFormat, keep: usize) -> Result<(), Problem> {
     let runs = store.runs();
     if runs.is_empty() {
         return Err(no_run(store, keep));
@@ -316,8 +316,8 @@ fn list_runs(store: &RunStore, format: Output, keep: usize) -> Result<(), Proble
     for (at, meta) in runs.iter().enumerate() {
         let is_last = at == 0;
         match format {
-            Output::Json => writeln!(out, "{}", run_line(meta, is_last))?,
-            Output::Text => {
+            OutputFormat::Json => writeln!(out, "{}", run_line(meta, is_last))?,
+            OutputFormat::Text => {
                 let exit = meta.exit_code.map_or_else(
                     || "exit ?".to_owned(),
                     |code| format!("exit {}", u8::from(code)),

@@ -1,7 +1,6 @@
 use std::path::PathBuf;
-use std::str::FromStr;
 
-use aye_config::WorkerCount;
+use aye_config::{OutputFormat, WorkerCount};
 use clap::builder::{PossibleValue, PossibleValuesParser, TypedValueParser};
 use clap::{ArgAction, Parser, ValueEnum};
 
@@ -92,9 +91,9 @@ pub(crate) struct Args {
         long,
         ignore_case = true,
         value_name = "FORMAT",
-        value_parser = Output::parser()
+        value_parser = output_format()
     )]
-    pub output: Option<Output>,
+    pub output: Option<OutputFormat>,
 
     /// Also write a JUnit XML report.
     #[arg(long = "junitxml", visible_alias = "junit-xml", value_name = "PATH")]
@@ -256,9 +255,9 @@ pub(crate) struct ShowArgs {
         long,
         ignore_case = true,
         value_name = "FORMAT",
-        value_parser = Output::parser()
+        value_parser = output_format()
     )]
-    pub output: Option<Output>,
+    pub output: Option<OutputFormat>,
 
     /// When to use colour.
     #[arg(long, value_enum, default_value_t = Color::Auto, value_name = "WHEN")]
@@ -283,11 +282,11 @@ impl ShowArgs {
     /// either, `details` (of tests named, or `--failed`) come at the detail
     /// ladder's second level, which is text's 1 and JSON's 2; the list at a
     /// run's default, 0.
-    pub(crate) fn verbosity(&self, details: bool, format: Output) -> i8 {
+    pub(crate) fn verbosity(&self, details: bool, format: OutputFormat) -> i8 {
         if details && self.verbose == 0 && self.quiet == 0 {
             return match format {
-                Output::Text => 1,
-                Output::Json => 2,
+                OutputFormat::Text => 1,
+                OutputFormat::Json => 2,
             };
         }
         let net = (i16::from(self.verbose) - i16::from(self.quiet)).clamp(-1, 3);
@@ -579,55 +578,22 @@ fn looks_like_negative_number(value: &str) -> bool {
     }
 }
 
-/// The output formats. How much each shows is the verbosity's
+/// `--output`'s parser: the formats in any case, listed in the help, and
+/// the names they had until October 2026 (`human`, `agent`; never
+/// published), hidden, rejected by [`OutputFormat::from_str`] with what to
+/// use instead. How much each shows is the verbosity's
 /// ([`Args::verbosity`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Output {
-    /// For people: quiet on success, readable failures.
-    Text,
-    /// JSON lines, for programs and coding agents.
-    Json,
-}
-
-impl Output {
-    /// Its name, as `--output` and `[tool.aye] output` take it.
-    pub(crate) const fn name(self) -> &'static str {
-        match self {
-            Self::Text => "text",
-            Self::Json => "json",
-        }
-    }
-
-    /// `--output`'s parser: the formats in any case, listed in the help,
-    /// and the names they had until October 2026 (`human`, `agent`; never
-    /// published), hidden, rejected by [`Output::from_str`] with what to
-    /// use instead.
-    fn parser() -> impl TypedValueParser<Value = Self> {
-        PossibleValuesParser::new([
-            PossibleValue::new("text").help("For people: quiet on success, readable failures"),
-            PossibleValue::new("json").help(
-                "JSON lines: the summary with -q, bad outcomes, failures in full with -v \
-                 (for coding agents), every result with -vv, the raw event stream with -vvv",
-            ),
-            PossibleValue::new("human").hide(true),
-            PossibleValue::new("agent").hide(true),
-        ])
-        .try_map(|name| name.parse::<Self>())
-    }
-}
-
-impl FromStr for Output {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "text" => Ok(Self::Text),
-            "json" => Ok(Self::Json),
-            "human" => Err("`human` is now `text`, the default: use `--output text`".into()),
-            "agent" => Err("`agent` is now `json` at `-v`: use `--output json -v`".into()),
-            _ => Err(format!("expected `text` or `json`, got `{s}`")),
-        }
-    }
+fn output_format() -> impl TypedValueParser<Value = OutputFormat> {
+    PossibleValuesParser::new([
+        PossibleValue::new("text").help("For people: quiet on success, readable failures"),
+        PossibleValue::new("json").help(
+            "JSON lines: the summary with -q, bad outcomes, failures in full with -v \
+             (for coding agents), every result with -vv, the raw event stream with -vvv",
+        ),
+        PossibleValue::new("human").hide(true),
+        PossibleValue::new("agent").hide(true),
+    ])
+    .try_map(|name| name.parse::<OutputFormat>())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -865,10 +831,19 @@ mod tests {
 
     #[test]
     fn the_output_format_takes_any_case() {
-        assert_eq!(parse(&["--output", "JSON"]).output, Some(Output::Json));
-        assert_eq!(parse(&["--output=Text"]).output, Some(Output::Text));
-        assert_eq!(parse(&["--output", "text"]).output, Some(Output::Text));
-        assert_eq!(parse(&["--output", "json"]).output, Some(Output::Json));
+        assert_eq!(
+            parse(&["--output", "JSON"]).output,
+            Some(OutputFormat::Json)
+        );
+        assert_eq!(parse(&["--output=Text"]).output, Some(OutputFormat::Text));
+        assert_eq!(
+            parse(&["--output", "text"]).output,
+            Some(OutputFormat::Text)
+        );
+        assert_eq!(
+            parse(&["--output", "json"]).output,
+            Some(OutputFormat::Json)
+        );
         assert_eq!(parse(&[]).output, None);
         let err = Args::try_parse_from(["aye", "--output", "xml"]).unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
@@ -907,7 +882,7 @@ mod tests {
             );
             let err = err.to_string();
             assert!(err.contains(instead), "{name}: {err}");
-            assert_eq!(name.parse::<Output>(), Err(instead.to_string()));
+            assert_eq!(name.parse::<OutputFormat>(), Err(instead.to_string()));
         }
         let help = Args::command().render_long_help().to_string();
         assert!(

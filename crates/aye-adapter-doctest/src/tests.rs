@@ -70,7 +70,7 @@ fn write(root: &Path, rel: &str, body: &str) {
 /// The project at `root`, with `[tool.aye]` as the binary loads it from
 /// its `pyproject.toml` (kept for the rest of the test run).
 fn project<'a>(root: &'a Path, args: &'a [PathBuf], framework_args: &'a [String]) -> Project<'a> {
-    let tool_aye = aye_config::AyeConfig::load(root).unwrap().settings;
+    let tool_aye = aye_config::AyeSettings::load(root).unwrap();
     Project {
         args,
         framework_args,
