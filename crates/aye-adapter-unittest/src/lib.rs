@@ -280,8 +280,10 @@
 
 mod context;
 mod discovery;
+mod loader;
 mod module;
 mod options;
+mod project;
 mod recognizer;
 mod settings;
 

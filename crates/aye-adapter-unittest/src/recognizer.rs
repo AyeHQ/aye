@@ -18,7 +18,9 @@ use aye_python_stdlib::unittest::valid_module_name;
 
 use crate::context::UnittestContext;
 use crate::discovery::{is_package, may_hold_tests};
-use crate::module::{self, Modules};
+use crate::loader::Loaded;
+use crate::module;
+use crate::project::Modules;
 use crate::{NAME, SETS, UnittestConfig};
 
 /// Why a test module with no test aye can see is refined.
@@ -108,7 +110,7 @@ impl UnittestRecognizer {
     fn cases(
         &self,
         file: &SourceFile<'_>,
-        loaded: &[module::Loaded],
+        loaded: &[Loaded],
         package: Option<ProjectPathRef<'_>>,
         certainty: Certainty,
     ) -> Vec<Case> {
@@ -295,7 +297,7 @@ impl Recognizer for UnittestRecognizer {
 
 /// The best static guess for a module only an import can tell: the
 /// classes that are surely test classes, without what made it uncertain.
-fn guess(modules: &Modules, summary: &Arc<module::Summary>) -> Vec<module::Loaded> {
+fn guess(modules: &Modules, summary: &Arc<module::Summary>) -> Vec<Loaded> {
     let mut out = Vec::new();
     for (name, binding) in &summary.names {
         if let module::Binding::Class(index) = binding
