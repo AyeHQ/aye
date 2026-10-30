@@ -12,6 +12,7 @@ authors.workspace = true
 [dependencies]
 aye-adapter = { workspace = true }
 aye-config = { workspace = true }
+aye-events = { workspace = true }
 aye-fs = { workspace = true }
 aye-python-stdlib = { workspace = true }
 aye-static = { workspace = true }

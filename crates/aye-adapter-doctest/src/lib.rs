@@ -331,6 +331,7 @@ use aye_events::{
 };
 use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
 use aye_pytest::conftest;
+use aye_pytest::names;
 use aye_pytest::pathlib::resolve_pkg_root_and_module_name;
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
 use aye_python_stdlib::glob;
@@ -353,11 +354,7 @@ pub const MODULE: ModuleSource = ModuleSource::embedded(
 pub const MODULES: ModuleSet = ModuleSet::new(const { &[MODULE] });
 
 /// The adapter's name, in cases, batches and the registry.
-pub const NAME: AdapterName = AdapterName::new_static("doctest");
-
-/// The pytest adapter's name: beside it, pytest's default text glob
-/// applies without a pytest configuration file.
-const PYTEST: AdapterName = AdapterName::new_static("pytest");
+pub const NAME: AdapterName = names::DOCTEST;
 
 /// How pytest's patterns read `[...]` sets here (`--doctest-glob`,
 /// `norecursedirs`, `--ignore-glob` and `testpaths`): as the pytest
@@ -758,7 +755,7 @@ impl DoctestRecognizer {
             .doctest
             .as_ref()
             .map(|t| (t, pyproject.as_path()));
-        let beside_pytest = adapters.contains(&PYTEST);
+        let beside_pytest = adapters.contains(&names::PYTEST);
         let config =
             DoctestConfig::discover(project, env.pytest_addopts.as_deref(), table, beside_pytest)?;
         // `PYTHONOPTIMIZE=2` is `-OO`; any other non-empty value is `-O`.

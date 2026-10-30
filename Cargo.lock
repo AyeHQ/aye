@@ -340,6 +340,7 @@ version = "0.0.1"
 dependencies = [
  "aye-adapter",
  "aye-config",
+ "aye-events",
  "aye-fs",
  "aye-python-stdlib",
  "aye-static",

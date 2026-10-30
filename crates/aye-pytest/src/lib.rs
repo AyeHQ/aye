@@ -17,4 +17,5 @@ pub mod conftest;
 pub mod env;
 pub mod getini;
 pub mod ini;
+pub mod names;
 pub mod pathlib;

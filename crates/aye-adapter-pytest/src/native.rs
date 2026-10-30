@@ -44,6 +44,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use aye_pytest::getini::{apply_overrides, ini_bool, ini_lines, read_ini};
+use aye_pytest::names::{self, DOCTEST};
 
 use crate::context::PytestContext;
 use crate::{PytestConfig, PytestRecognizer, config::ImportMode};
@@ -96,11 +97,7 @@ pub const ENTRY: EntryPoint = EntryPoint::new("aye_pytest_native", "NativeExecut
 const REFINE_REASON: &str = "aye's pytest front-end reads every test file";
 
 /// The adapter's name.
-pub const NAME: AdapterName = AdapterName::new_static("pytest");
-
-/// The doctest adapter's name: with it in the run, the files pytest's
-/// doctest plugin would collect are its.
-const DOCTEST: AdapterName = AdapterName::new_static("doctest");
+pub const NAME: AdapterName = names::PYTEST;
 
 /// The pytest adapter: pytest's rules, read by aye's front-end, run by
 /// aye's engine, with no pytest installed.
