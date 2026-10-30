@@ -151,6 +151,7 @@ mod class;
 mod closure;
 mod function;
 mod module;
+mod refinement;
 mod reorder;
 mod scope;
 mod unittest;
@@ -182,6 +183,7 @@ use crate::marks::{EmptyMark, Mark};
 use crate::session::plugins::{BUILTIN_PLUGINS, PLUGIN_OF_SCOPED_CONFTEST, SCOPED_CONFTEST};
 use crate::session::scan::MODIFYITEMS;
 use crate::{PYTEST, SETS};
+use refinement::Refinement;
 use reorder::{ParamKey, reorder_items};
 use scope::ProjectImports;
 
@@ -376,7 +378,7 @@ impl PytestRecognizer {
             path_unknown,
             own_dirs: &own_dirs,
         };
-        let mut recognition = recognize(
+        let (mut recognition, mut refinement) = recognize(
             &self.settings,
             &scope,
             &imports,
@@ -384,12 +386,12 @@ impl PytestRecognizer {
             &namespace,
             &self.path_keywords(file),
         );
-        if recognition.cases.is_empty() && recognition.refine.is_none() {
+        if recognition.cases.is_empty() && refinement.is_empty() {
             // Nothing to run statically, but pytest imports the module all
             // the same: an import error is a collection error, and tests
             // may only exist at runtime.
-            recognition.refine =
-                Some("no test is visible statically; pytest imports the module to tell".into());
+            refinement
+                .after("no test is visible statically; pytest imports the module to tell".into());
         }
         let maybe_ignored = file
             .abs
@@ -397,47 +399,20 @@ impl PytestRecognizer {
             .take_while(|dir| dir.starts_with(&self.root) || *dir == file.abs)
             .any(|path| self.ignored(path) == Ignored::Maybe);
         if maybe_ignored {
-            let reason = "collect_ignore may exclude this file at runtime".to_string();
-            recognition.refine = Some(match recognition.refine {
-                Some(existing) => format!("{reason}; {existing}").into(),
-                None => reason.into(),
-            });
             // None of its tests may exist.
-            for case in &mut recognition.cases {
-                if case.certainty == Certainty::Exact {
-                    case.certainty = Certainty::Partial;
-                }
-            }
+            refinement.before("collect_ignore may exclude this file at runtime".into());
         }
         if let Some(changed) = ini_change {
-            let reason = format!(
+            refinement.after(format!(
                 "a conftest.py in scope changes {changed} at runtime, which collection reads"
-            );
-            recognition.refine = Some(match recognition.refine {
-                Some(existing) => format!("{existing}; {reason}").into(),
-                None => reason.into(),
-            });
-            for case in &mut recognition.cases {
-                if case.certainty == Certainty::Exact {
-                    case.certainty = Certainty::Partial;
-                }
-            }
+            ));
         }
         let mut key = self.import_key(file.abs);
         if let Some(name) = self.colliding_import(file) {
-            let reason = format!(
+            refinement.after(format!(
                 "it imports {name}, a module of more than one directory pytest puts on sys.path: \
                  which one it gets depends on what pytest imported before"
-            );
-            recognition.refine = Some(match recognition.refine {
-                Some(existing) => format!("{existing}; {reason}").into(),
-                None => reason.into(),
-            });
-            for case in &mut recognition.cases {
-                if case.certainty == Certainty::Exact {
-                    case.certainty = Certainty::Partial;
-                }
-            }
+            ));
             // Test modules that import it run in one session, as pytest
             // runs them.
             key = AffinityKey::import(&name);
@@ -448,40 +423,21 @@ impl PytestRecognizer {
         if !self.unseen_plugins.is_empty() {
             // A plugin aye can't read may mark, deselect or parametrize any
             // test: the ids stay, pytest has the final word.
-            for case in &mut recognition.cases {
-                if case.certainty == Certainty::Exact {
-                    case.certainty = Certainty::Partial;
-                }
-            }
+            refinement.demote();
         }
         if let Some(who) = &self.scan().adds_items {
             // pytest lists what such a hook adds (`Function.from_parent`),
             // which only the session that runs it can tell.
-            let reason =
-                format!("{who} implements {MODIFYITEMS} and makes items: it may add tests");
-            recognition.refine = Some(match recognition.refine {
-                Some(existing) => format!("{existing}; {reason}").into(),
-                None => reason.into(),
-            });
-            for case in &mut recognition.cases {
-                if case.certainty == Certainty::Exact {
-                    case.certainty = Certainty::Partial;
-                }
-            }
+            refinement.after(format!(
+                "{who} implements {MODIFYITEMS} and makes items: it may add tests"
+            ));
         }
         if doctest == Some(DoctestFile::Module) && may_hold_doctests(file.source) {
-            let reason =
-                format!("pytest's doctest plugin collects its doctests ({PYTEST_DOCTESTS})");
-            recognition.refine = Some(match recognition.refine {
-                Some(existing) => format!("{existing}; {reason}").into(),
-                None => reason.into(),
-            });
-            for case in &mut recognition.cases {
-                if case.certainty == Certainty::Exact {
-                    case.certainty = Certainty::Partial;
-                }
-            }
+            refinement.after(format!(
+                "pytest's doctest plugin collects its doctests ({PYTEST_DOCTESTS})"
+            ));
         }
+        refinement.apply(&mut recognition);
         recognition
     }
 
@@ -517,8 +473,9 @@ pub(crate) struct Settings {
     pub python_blocked: bool,
 }
 
-/// Recognize one test module. `module` is its namespace
-/// ([`Namespace::build`] over its body).
+/// Recognize one test module: its cases and diagnostics, and why it is
+/// refined (the recognition's own reason is the refinement's to say).
+/// `module` is its namespace ([`Namespace::build`] over its body).
 pub(crate) fn recognize<'a>(
     settings: &Settings,
     scope: &Scope,
@@ -526,7 +483,7 @@ pub(crate) fn recognize<'a>(
     file: &SourceFile<'a>,
     module: &Namespace<'a>,
     path_keywords: &[String],
-) -> Recognition {
+) -> (Recognition, Refinement) {
     let mut classes = HashMap::new();
     class_namespaces(&file.module.body, None, &mut classes);
     let empty = Namespace::default();
@@ -580,17 +537,12 @@ pub(crate) fn recognize<'a>(
         }
     }
     diagnostics.sort_by_key(|d| d.span.as_ref().map_or(0, |s| s.start));
-    let mut refine: Vec<String> = Vec::new();
-    for reason in recognizer.refine {
-        if !refine.contains(&reason) {
-            refine.push(reason);
-        }
-    }
-    Recognition {
+    let recognition = Recognition {
         cases: recognizer.cases,
-        refine: (!refine.is_empty()).then(|| refine.join("; ").into()),
+        refine: None,
         diagnostics,
-    }
+    };
+    (recognition, Refinement::of(recognizer.refine))
 }
 
 /// A class body's namespace, and the class body its statement sits in.
@@ -669,6 +621,9 @@ struct ModuleRecognizer<'s, 'a> {
     /// [`ModuleRecognizer::body_facts`], by class (`None` for the module).
     facts: std::cell::RefCell<HashMap<Option<TextSize>, std::rc::Rc<BodyFacts<'a>>>>,
     diagnostics: Vec<Diagnostic>,
+    /// Why the file is refined, as found: a reason may come more than once
+    /// ([`Refinement::of`] keeps each once), and [`Self::trial`] drops those
+    /// a trial found.
     refine: Vec<String>,
     module_marks: Vec<Mark<'s, 'a>>,
     module_marks_unknown: bool,
