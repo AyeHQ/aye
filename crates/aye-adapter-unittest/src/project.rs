@@ -12,12 +12,12 @@ use std::sync::{Arc, Mutex};
 use aye_adapter::LineIndex;
 
 use crate::loader::Loaded;
-use crate::module::{Binding, Summary, Touch, is_stdlib, summarize};
+use crate::module::{Binding, ClassIndex, Summary, Touch, is_stdlib, summarize};
 
 /// Where an imported dotted path leads.
 #[derive(Debug, Clone)]
 pub(crate) enum Target {
-    Class(Arc<Summary>, usize),
+    Class(Arc<Summary>, ClassIndex),
     /// Another binding of a project module.
     Binding(Arc<Summary>, Binding),
     Module,
@@ -47,7 +47,7 @@ pub(crate) struct Modules {
 #[derive(Debug, Clone)]
 enum Effect {
     /// A project class may change.
-    Class(PathBuf, usize, String),
+    Class(PathBuf, ClassIndex, String),
     /// Something aye can't resolve may change: named so (its last name),
     /// or not at all.
     Unknown(Option<String>, String),
@@ -319,7 +319,7 @@ impl Modules {
         if loaded.is_empty() {
             return None;
         }
-        let classes: HashSet<(&Path, usize)> = loaded
+        let classes: HashSet<(&Path, ClassIndex)> = loaded
             .iter()
             .flat_map(|l| l.mro.iter().map(|(path, index)| (path.as_path(), *index)))
             .collect();

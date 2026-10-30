@@ -5,12 +5,14 @@
 
 use aye_adapter::TextRange;
 
+use super::ClassIndex;
+
 /// What a name is bound to when the module has run, as far as the source
 /// tells.
 #[derive(Debug, Clone)]
 pub(crate) enum Binding {
     /// A class of this module.
-    Class(usize),
+    Class(ClassIndex),
     Function(FunctionInfo),
     /// A module (`import a.b` binds `a`): never a class.
     Module(String),
@@ -73,7 +75,7 @@ pub(crate) enum Touch {
 /// A class base, resolved where the class statement runs.
 #[derive(Debug, Clone)]
 pub(crate) enum Base {
-    Local(usize),
+    Local(ClassIndex),
     /// Imported: resolved through [`Modules`](crate::project::Modules).
     Path(String),
     TestCase,

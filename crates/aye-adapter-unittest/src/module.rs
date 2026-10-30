@@ -25,9 +25,16 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use aye_adapter::{LineIndex, TextRange, ast};
+use aye_index::{IndexVec, newtype_index};
 
 pub(crate) use binding::{Base, Binding, FunctionInfo, Member, Touch};
 pub(crate) use tables::{is_dunder, is_stdlib};
+
+newtype_index! {
+    /// A class's place among its module's classes ([`Summary::classes`]),
+    /// in the order their statements are read.
+    pub(crate) struct ClassIndex;
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClassSummary {
@@ -55,7 +62,7 @@ pub(crate) struct Summary {
     /// The namespace when the module has run, sorted by name as `dir()`
     /// sorts it.
     pub names: BTreeMap<String, Binding>,
-    pub classes: Vec<ClassSummary>,
+    pub classes: IndexVec<ClassIndex, ClassSummary>,
     /// Why the namespace can't be read statically.
     pub dynamic: Option<String>,
     /// What importing it may change in other modules.
@@ -71,7 +78,7 @@ pub(crate) fn summarize(path: &Path, module: &ast::ModModule, lines: &LineIndex)
     let mut builder = Builder {
         lines,
         names: BTreeMap::new(),
-        classes: Vec::new(),
+        classes: IndexVec::new(),
         dynamic: None,
         touches: Vec::new(),
         imports: Vec::new(),
@@ -90,7 +97,7 @@ pub(crate) fn summarize(path: &Path, module: &ast::ModModule, lines: &LineIndex)
 struct Builder<'a> {
     lines: &'a LineIndex,
     names: BTreeMap<String, Binding>,
-    classes: Vec<ClassSummary>,
+    classes: IndexVec<ClassIndex, ClassSummary>,
     dynamic: Option<String>,
     touches: Vec<Touch>,
     imports: Vec<String>,

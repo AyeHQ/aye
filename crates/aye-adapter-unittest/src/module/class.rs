@@ -15,10 +15,10 @@ use aye_python_stdlib::unittest::{
 
 use super::builder::{not_callable, pattern_captures};
 use super::tables::classify;
-use super::{Base, Binding, Builder, ClassSummary, Member};
+use super::{Base, Binding, Builder, ClassIndex, ClassSummary, Member};
 
 impl Builder<'_> {
-    pub(super) fn class(&mut self, class: &StmtClassDef) -> usize {
+    pub(super) fn class(&mut self, class: &StmtClassDef) -> ClassIndex {
         let mut summary = ClassSummary {
             name: class.name.id.as_str().to_string(),
             range: class.name.range(),
@@ -88,8 +88,7 @@ impl Builder<'_> {
         if summary.dynamic.is_none() {
             summary.dynamic = dynamic;
         }
-        self.classes.push(summary);
-        self.classes.len() - 1
+        self.classes.push(summary)
     }
 
     fn base(&self, expr: &Expr) -> Result<Base, String> {

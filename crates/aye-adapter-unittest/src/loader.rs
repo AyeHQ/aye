@@ -9,7 +9,7 @@ use aye_adapter::TextRange;
 use aye_python_semantic::c3::{InconsistentMro, linearize};
 use aye_python_stdlib::unittest::{TEST_METHOD_PREFIX, looks_like_tests};
 
-use crate::module::{Base, Binding, Member, Summary, is_dunder};
+use crate::module::{Base, Binding, ClassIndex, Member, Summary, is_dunder};
 use crate::project::{MAX_DEPTH, Modules, Target};
 
 /// A test of a class: its name and where its method is defined.
@@ -31,14 +31,14 @@ pub(crate) struct Loaded {
     pub name: String,
     pub methods: Vec<Method>,
     /// The project classes of its MRO, by file and index.
-    pub mro: Vec<(PathBuf, usize)>,
+    pub mro: Vec<(PathBuf, ClassIndex)>,
 }
 
 /// A class of an MRO.
 #[derive(Clone)]
 enum Node {
     /// A project class: its module's summary and its position there.
-    Class(Arc<Summary>, usize),
+    Class(Arc<Summary>, ClassIndex),
     TestCase,
     Object,
     Plain(String),
@@ -130,7 +130,12 @@ impl Modules {
 
     /// A class's MRO, as C3 linearizes it; external classes count for
     /// themselves and `object`.
-    fn mro(&self, summary: &Arc<Summary>, index: usize, depth: usize) -> Result<Vec<Node>, String> {
+    fn mro(
+        &self,
+        summary: &Arc<Summary>,
+        index: ClassIndex,
+        depth: usize,
+    ) -> Result<Vec<Node>, String> {
         if depth > MAX_DEPTH {
             return Err("classes nest too deep".into());
         }
@@ -199,7 +204,7 @@ impl Modules {
     pub(crate) fn class_tests_for_guess(
         &self,
         summary: &Arc<Summary>,
-        index: usize,
+        index: ClassIndex,
     ) -> Result<Option<Loaded>, String> {
         self.class_tests(summary, index, 0)
     }
@@ -210,7 +215,7 @@ impl Modules {
     fn class_tests(
         &self,
         summary: &Arc<Summary>,
-        index: usize,
+        index: ClassIndex,
         depth: usize,
     ) -> Result<Option<Loaded>, String> {
         let mro = self.mro(summary, index, depth)?;
