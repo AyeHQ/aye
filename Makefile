@@ -4,7 +4,7 @@
 #   UV_PUBLISH_TOKEN      PyPI
 
 .DEFAULT_GOAL := help
-.PHONY: help sync hooks build test expected bench bench-suite lint dist publish publish-crates publish-pypi clean
+.PHONY: help sync hooks build test expected bench bench-suite bench-runners lint dist publish publish-crates publish-pypi clean
 
 help: ## Show this help
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-15s %s\n", $$1, $$2}'
@@ -74,6 +74,13 @@ bench-suite: ## Time a project's suite with pytest and with aye (PROJECT=dir)
 		-n "pytest --co" "$(PYTEST) --co $(ARGS)" \
 		-n "aye --co" "$(AYE) --python $(PY) --co $(ARGS)" \
 		-n "aye --co, first run" "$(AYE) --python $(PY) --co $(ARGS)"
+
+# networkx's pytest suite and sqlglot's unittest unit tests, each timed under its
+# own runner and under aye, then the README's chart redrawn into assets/benchmark/.
+# The projects are cloned at pinned commits into target/bench-runners/:
+#   make bench-runners [RUNS=3]
+bench-runners: ## Time large real suites with their own runners and with aye, redraw the README chart
+	RUNS=$(RUNS) scripts/benchmark/run.sh
 
 lint: sync ## Run every check and formatter in .pre-commit-config.yaml
 	uv run pre-commit run --all-files
