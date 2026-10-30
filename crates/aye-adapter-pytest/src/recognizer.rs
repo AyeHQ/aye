@@ -2,17 +2,193 @@
 //! recognizer's claims, every test file refined (or, for a static listing,
 //! predicted), and the context with its `native` section.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_adapter::{
     Claim, FrameworkDefaults, Project, Recognition, Recognizer, Requested, Setting, SourceFile,
 };
+use aye_config::ValueSource;
 use aye_events::{Diagnostic, DiagnosticCode, Severity};
 use aye_protocol::AdapterContext;
+use aye_pytest::config::{self, ConfigRules};
+use aye_pytest::session::is_virtualenv;
+use aye_python_stdlib::fnmatch;
+use aye_python_stdlib::os_path::normalize_absolute;
 
-use crate::PytestRecognizer;
+use crate::claims::doctest_plugin::PYTEST_DOCTESTS;
+use crate::claims::ignore::Ignored;
+use crate::conftest::{Summary, Supports};
 use crate::context::{PytestContext, native_context};
+use crate::predict;
+use crate::session::scan::Scan;
+use crate::{PytestConfig, SETS};
+
+/// The pytest adapter's static face for one project.
+#[derive(Debug)]
+pub struct PytestRecognizer {
+    pub(crate) root: PathBuf,
+    pub(crate) config: PytestConfig,
+    pub(crate) settings: predict::Settings,
+    pub(crate) supports: Supports,
+    /// Project modules `-p NAME` loads (from addopts or `PYTEST_ADDOPTS`),
+    /// then those `PYTEST_PLUGINS` names, in order: plugins of the whole
+    /// session.
+    pub(crate) preparse: Vec<Arc<Summary>>,
+    /// What loads each of [`Self::preparse`], for messages:
+    /// [`PLUGIN_P`](crate::session::plugins::PLUGIN_P) or
+    /// [`PLUGIN_ENV`](crate::session::plugins::PLUGIN_ENV).
+    pub(crate) preparse_labels: Vec<&'static str>,
+    /// Conftests above the project root that pytest loads, outermost first.
+    pub(crate) outer: Vec<Arc<Summary>>,
+    /// What walking the project once finds (see [`PytestRecognizer::scan`]).
+    pub(crate) scan: OnceLock<Scan>,
+    /// `-p NAME` and `PYTEST_PLUGINS` plugins aye can't read: neither
+    /// pytest's own nor project modules. They may mark, deselect or
+    /// parametrize any test.
+    pub(crate) unseen_plugins: Vec<String>,
+    /// The paths pytest starts collecting from in the user's run
+    /// ([`Recognizer::roots`]: the command-line paths, else `testpaths`,
+    /// else the current directory), absolute.
+    pub(crate) collection_args: Vec<PathBuf>,
+    /// The directories whose conftests pytest loads before
+    /// `pytest_configure` (its "initial conftests"): those of the collection
+    /// arguments and their `test*` subdirectories. Each holds its ancestors
+    /// too.
+    pub(crate) initial_dirs: Vec<PathBuf>,
+    /// Directories already reported for a non-top-level `pytest_plugins`.
+    pub(crate) reported: Mutex<HashSet<PathBuf>>,
+    /// `PYTHONPATH`'s directories, absolute: on `sys.path` in the workers.
+    pub(crate) env_pythonpath: Vec<PathBuf>,
+    /// What pytest's own doctest plugin collects, when it collects doctests
+    /// in this run (no doctest adapter runs beside this one; see
+    /// [`Self::with_pytest_doctests`]).
+    pub(crate) doctests: Option<config::DoctestOptions>,
+    /// The context, built once (see [`Self::pytest_context`]).
+    pub(crate) context: OnceLock<PytestContext>,
+}
+
+impl Recognizer for PytestRecognizer {
+    /// The command-line paths; else `testpaths`, glob-expanded (as they
+    /// are with `--pyargs`), when run from the rootdir; else the current
+    /// directory.
+    fn roots(&self, project: &Project<'_>) -> Vec<PathBuf> {
+        if !project.args.is_empty() {
+            return project.args.iter().map(|a| project.cwd.join(a)).collect();
+        }
+        let testpaths = &self.config.testpaths.value;
+        if project.cwd == self.config.rootdir && !testpaths.is_empty() {
+            let rootdir = &self.config.rootdir;
+            // With `--pyargs`, testpaths are taken as they are: dotted
+            // module names pytest looks up on `sys.path` first, else paths.
+            if self.config.pyargs {
+                return testpaths
+                    .iter()
+                    .map(|entry| {
+                        self.pyarg(entry)
+                            .unwrap_or_else(|| normalize_absolute(&rootdir.join(entry)))
+                    })
+                    .collect();
+            }
+            let roots = ConfigRules::Exact.testpaths(rootdir, testpaths, SETS);
+            if !roots.is_empty() {
+                return roots;
+            }
+        }
+        vec![project.cwd.to_path_buf()]
+    }
+
+    /// `pytest_ignore_collect` for a directory met while walking.
+    /// Directories named on the command line are never ignored by pytest
+    /// and need not be asked.
+    fn descend(&self, dir: &Path) -> bool {
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default();
+        if name == "__pycache__" {
+            return false;
+        }
+        if !self.config.collect_in_virtualenv && is_virtualenv(dir) {
+            return false;
+        }
+        if self
+            .config
+            .norecursedirs
+            .value
+            .iter()
+            .any(|pattern| fnmatch::fnmatch_ex(pattern, dir, SETS))
+        {
+            return false;
+        }
+        self.ignored(dir) != Ignored::Yes
+    }
+
+    /// pytest's `pytest_collect_file`: a `.py` file named on the command
+    /// line, or matching `python_files` and not ignored, is a test module.
+    /// A `conftest.py` is support whatever else it is (ignoring it doesn't
+    /// stop it loading as a conftest), and a test module too when it
+    /// qualifies as one; with `--noconftest` it is only an ordinary file.
+    /// When pytest's doctest plugin collects doctests in this run, the
+    /// files it collects are test files too ([`Self::doctest_file`]).
+    fn claim(&self, rel: &str, requested: Requested) -> Claim {
+        let name = rel.rsplit('/').next().unwrap_or(rel);
+        let support = name == "conftest.py" && !self.config.noconftest;
+        let explicit = requested.is_named();
+        let tests =
+            || self.python_module(rel, explicit) || self.doctest_file(rel, explicit).is_some();
+        match (support, tests()) {
+            (true, true) => Claim::TestsAndSupport,
+            (true, false) => Claim::Support,
+            (false, true) => Claim::Tests,
+            (false, false) => Claim::Ignore,
+        }
+    }
+
+    /// The static prediction ([`Self::predict`]).
+    fn recognize(
+        &self,
+        file: &SourceFile<'_>,
+        requested: Requested,
+        support: &[SourceFile<'_>],
+    ) -> Recognition {
+        self.predict(file, requested, support)
+    }
+
+    fn settings(&self) -> Vec<Setting> {
+        let mut settings = self.config.settings();
+        if let Some(doctests) = &self.doctests {
+            let mut what = Vec::new();
+            if doctests.modules {
+                what.push("modules (--doctest-modules)".to_string());
+            }
+            if doctests.globs.is_empty() {
+                what.push("text files matching test*.txt".to_string());
+            } else {
+                what.push(format!("text files matching {}", doctests.globs.join(" ")));
+            }
+            settings.push(Setting {
+                name: "doctests".into(),
+                value: format!("collected by pytest's doctest plugin: {}", what.join(", ")),
+                source: ValueSource::Rule(PYTEST_DOCTESTS),
+            });
+        }
+        settings
+    }
+
+    /// What the front-end needs to start as pytest would start itself (the
+    /// rest is the native context's: see the adapter's recognizer), and
+    /// what the runner takes from pytest's options: [`PytestContext`].
+    fn context(&self) -> AdapterContext {
+        AdapterContext::of(self.pytest_context())
+    }
+
+    /// What the context's keys for the runner say ([`PytestContext::defaults`]).
+    fn defaults(&self) -> FrameworkDefaults {
+        self.pytest_context().defaults()
+    }
+}
 
 /// Why every test file is refined.
 const REFINE_REASON: &str = "aye's pytest front-end reads every test file";

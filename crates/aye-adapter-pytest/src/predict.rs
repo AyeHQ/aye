@@ -12,10 +12,16 @@ mod scope;
 mod unittest;
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use aye_adapter::ast::{Stmt, StmtClassDef};
-use aye_adapter::{Ranged, Recognition, SourceFile, TextRange, TextSize};
-use aye_events::{Case, Certainty, Diagnostic, DiagnosticCode, Severity};
+use aye_adapter::{Ranged, Recognition, Requested, SourceFile, TextRange, TextSize};
+use aye_events::{
+    AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity,
+};
+use aye_pytest::conftest::in_confcutdir;
+use aye_pytest::doctest::DoctestFile;
 use aye_python_semantic::flow::{BodyFacts, conditional_deletes, guarded_by_try};
 use aye_python_semantic::namespace::Namespace;
 use aye_python_semantic::resolve::Lookup;
@@ -23,11 +29,333 @@ use aye_python_stdlib::fnmatch::matches_prefix_or_glob;
 
 pub(crate) use scope::{Imports, ModuleImports, Scope, names_module, reached};
 
-use crate::conftest::{FixtureDef, MARKING_HOOKS, fixture_of};
+use crate::PytestRecognizer;
+use crate::claims::doctest_plugin::{PYTEST_DOCTESTS, doctest_text, may_hold_doctests};
+use crate::claims::ignore::Ignored;
+use crate::conftest::{self, FixtureDef, MARKING_HOOKS, Summary, fixture_of};
 use crate::marks::ids::IdOptions;
 use crate::marks::{EmptyMark, Mark};
+use crate::session::plugins::{BUILTIN_PLUGINS, PLUGIN_OF_SCOPED_CONFTEST, SCOPED_CONFTEST};
+use crate::session::scan::MODIFYITEMS;
 use crate::{PYTEST, SETS};
 use reorder::{ParamKey, reorder_items};
+use scope::ProjectImports;
+
+impl PytestRecognizer {
+    /// What pytest collects from `file`, predicted without importing
+    /// anything.
+    pub(crate) fn predict(
+        &self,
+        file: &SourceFile<'_>,
+        requested: Requested,
+        support: &[SourceFile<'_>],
+    ) -> Recognition {
+        let explicit = requested.is_named();
+        let doctest = self.doctest_file(file.rel.as_str(), explicit);
+        if self.settings.python_blocked && doctest.is_none() {
+            // `-p no:python`: nothing collects Python files.
+            return Recognition::default();
+        }
+        let bases = self.plugin_bases();
+        let mut local: Vec<(&Path, Arc<Summary>)> = Vec::new();
+        if !self.config.noconftest {
+            for conftest in support {
+                let dir = conftest.abs.parent().unwrap_or(conftest.abs);
+                if in_confcutdir(&self.config.confcutdir, dir) {
+                    local.push((dir, self.supports.of(conftest)));
+                }
+            }
+        }
+        if let Some((dir, message)) = self.non_top_level_plugins(&local) {
+            // pytest fails the directory, so none of the tests below it
+            // exist; the error is reported once.
+            let mut recognition = Recognition::default();
+            if self.reported.lock().expect("lock").insert(dir.clone()) {
+                let rel = dir.strip_prefix(&self.root).map_or_else(
+                    |_| dir.to_string_lossy().into_owned(),
+                    |rel| rel.to_string_lossy().replace('\\', "/"),
+                );
+                recognition.diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: DiagnosticCode::CollectionError,
+                    path: if rel.is_empty() {
+                        DiagnosticPath::Root
+                    } else {
+                        DiagnosticPath::as_written(rel)
+                    },
+                    span: None,
+                    message,
+                });
+            }
+            return recognition;
+        }
+        match doctest {
+            Some(DoctestFile::Text) => return doctest_text(file),
+            Some(DoctestFile::Module)
+                if self.settings.python_blocked
+                    || !self.python_module(file.rel.as_str(), explicit) =>
+            {
+                // Only pytest's doctest plugin collects it, importing it: an
+                // import error is a collection error.
+                return Recognition {
+                    refine: Some(
+                        format!(
+                            "pytest's doctest plugin imports it for its doctests ({PYTEST_DOCTESTS})"
+                        )
+                        .into(),
+                    ),
+                    ..Recognition::default()
+                };
+            }
+            _ => {}
+        }
+        let mut conftests: Vec<Arc<Summary>> = self.outer.clone();
+        conftests.extend(local.into_iter().map(|(_, summary)| summary));
+        // `-p` plugins first, then each conftest's plugins, then the
+        // conftests: the order pytest registers their fixtures in.
+        let mut plugins: Vec<(Arc<Summary>, &str)> = Vec::new();
+        for (summary, label) in self.preparse.iter().zip(&self.preparse_labels) {
+            let expanded = self.supports.expand(summary, &bases);
+            plugins.extend(expanded.into_iter().map(|s| (s, *label)));
+        }
+        for conftest in &conftests {
+            let expanded = self.supports.expand(conftest, &bases).into_iter().skip(1);
+            plugins.extend(expanded.map(|s| (s, PLUGIN_OF_SCOPED_CONFTEST)));
+        }
+        let global = self.global_hooks();
+        let mut scope = Scope {
+            global_hooks: global.keys().cloned().collect(),
+            global_hook_sources: global.clone(),
+            ..Scope::default()
+        };
+        // A collection ini value a support module in scope changes at
+        // runtime (`config.addinivalue_line("python_functions", …)` in a
+        // `pytest_configure`): pytest's reading of the file may differ.
+        let ini_change = plugins
+            .iter()
+            .map(|(s, _)| s)
+            .chain(&conftests)
+            .find_map(|summary| summary.ini.collection.clone());
+        let labelled = conftests.iter().map(|s| (s, SCOPED_CONFTEST));
+        for (summary, source) in plugins.iter().map(|(s, l)| (s, *l)).chain(labelled) {
+            let exports = self.supports.exports(summary, &bases);
+            for hook in &exports.hooks {
+                scope
+                    .hook_sources
+                    .entry(hook.clone())
+                    .or_insert_with(|| source.to_string());
+            }
+            scope.hooks.extend(exports.hooks.iter().cloned());
+            scope.collect_file_touches_py |= exports.collect_file_touches_py;
+            scope.skips_at_import |= exports.skips_at_import;
+            scope.fixtures.extend(exports.fixtures.iter().cloned());
+            scope
+                .maybe_fixtures
+                .extend(exports.maybe_fixtures.iter().cloned());
+            scope.any_fixture |= exports.any_fixture;
+            scope.hooks_unknown |= summary.hooks_unknown();
+            scope.patched.extend(summary.patched.iter().cloned());
+            scope.reflective |= summary.reflective;
+            scope.imports_module |= names_module(&summary.modules, file.rel.as_str());
+        }
+        // Fixtures the test module imports from project files register
+        // with its own.
+        let dir = file.abs.parent().unwrap_or(file.abs);
+        let mut namespace = Namespace::build(&file.module.body, PYTEST);
+        // What support files do to modules holds here too.
+        namespace.assume_patched(scope.patched.iter().cloned(), scope.reflective);
+        if !reached(&namespace, &scope, file.rel.as_str()).is_empty() {
+            // Its names may change in ways the module's code doesn't show:
+            // none is a constant.
+            namespace.assume_reached();
+        }
+        let own = Summary::of_test_module(dir, file.source, file.module, &namespace);
+        // Only names the module may request as fixtures are followed, and
+        // those the fixtures found request in turn.
+        let mut requested = conftest::requested_names(file.module);
+        let exports = loop {
+            let exports = self
+                .supports
+                .exports_of(&own, &bases, |name| requested.contains(name));
+            let before = requested.len();
+            for fixture in &exports.fixtures {
+                requested.extend(fixture.args.iter().cloned());
+            }
+            if requested.len() == before {
+                break exports;
+            }
+        };
+        scope.module_imports = ModuleImports {
+            fixtures: exports.fixtures[own.fixtures.len()..].to_vec(),
+            maybe: exports.maybe_fixtures,
+            any: exports.any_fixture,
+        };
+        if !own.plugins.is_empty() || own.plugins_unknown {
+            scope.module_plugins = true;
+        }
+        // `sys.path` may hold directories aye can't tell: those a conftest
+        // puts there in ways it can't read, or that the module puts there
+        // itself (its own imports would be looked up there).
+        let own_dirs: Vec<PathBuf> = own
+            .sys_path
+            .added
+            .iter()
+            .filter(|d| !bases.contains(d))
+            .cloned()
+            .collect();
+        let path_unknown = self.sys_path().unknown || own.sys_path.unknown;
+        if self.sys_path().unknown {
+            // A plugin a conftest in scope loads that aye can't find may be
+            // a project file there, with fixtures of its own.
+            scope.hidden_fixtures =
+                plugins
+                    .iter()
+                    .map(|(s, _)| s)
+                    .chain(&conftests)
+                    .any(|summary| {
+                        summary
+                            .plugins
+                            .iter()
+                            .chain(&summary.registered)
+                            .any(|name| {
+                                !BUILTIN_PLUGINS.contains(&name.as_str())
+                                    && !conftest::no_tests(name)
+                                    && self.supports.module(name, &summary.dir, &bases).is_none()
+                            })
+                    });
+        }
+
+        let imports = ProjectImports {
+            supports: &self.supports,
+            dir,
+            bases: &bases,
+            path_unknown,
+            own_dirs: &own_dirs,
+        };
+        let mut recognition = recognize(
+            &self.settings,
+            &scope,
+            &imports,
+            file,
+            &namespace,
+            &self.path_keywords(file),
+        );
+        if recognition.cases.is_empty() && recognition.refine.is_none() {
+            // Nothing to run statically, but pytest imports the module all
+            // the same: an import error is a collection error, and tests
+            // may only exist at runtime.
+            recognition.refine =
+                Some("no test is visible statically; pytest imports the module to tell".into());
+        }
+        let maybe_ignored = file
+            .abs
+            .ancestors()
+            .take_while(|dir| dir.starts_with(&self.root) || *dir == file.abs)
+            .any(|path| self.ignored(path) == Ignored::Maybe);
+        if maybe_ignored {
+            let reason = "collect_ignore may exclude this file at runtime".to_string();
+            recognition.refine = Some(match recognition.refine {
+                Some(existing) => format!("{reason}; {existing}").into(),
+                None => reason.into(),
+            });
+            // None of its tests may exist.
+            for case in &mut recognition.cases {
+                if case.certainty == Certainty::Exact {
+                    case.certainty = Certainty::Partial;
+                }
+            }
+        }
+        if let Some(changed) = ini_change {
+            let reason = format!(
+                "a conftest.py in scope changes {changed} at runtime, which collection reads"
+            );
+            recognition.refine = Some(match recognition.refine {
+                Some(existing) => format!("{existing}; {reason}").into(),
+                None => reason.into(),
+            });
+            for case in &mut recognition.cases {
+                if case.certainty == Certainty::Exact {
+                    case.certainty = Certainty::Partial;
+                }
+            }
+        }
+        let mut key = self.import_key(file.abs);
+        if let Some(name) = self.colliding_import(file) {
+            let reason = format!(
+                "it imports {name}, a module of more than one directory pytest puts on sys.path: \
+                 which one it gets depends on what pytest imported before"
+            );
+            recognition.refine = Some(match recognition.refine {
+                Some(existing) => format!("{existing}; {reason}").into(),
+                None => reason.into(),
+            });
+            for case in &mut recognition.cases {
+                if case.certainty == Certainty::Exact {
+                    case.certainty = Certainty::Partial;
+                }
+            }
+            // Test modules that import it run in one session, as pytest
+            // runs them.
+            key = AffinityKey::import(&name);
+        }
+        for case in &mut recognition.cases {
+            case.affinity.insert(0, key.clone());
+        }
+        if !self.unseen_plugins.is_empty() {
+            // A plugin aye can't read may mark, deselect or parametrize any
+            // test: the ids stay, pytest has the final word.
+            for case in &mut recognition.cases {
+                if case.certainty == Certainty::Exact {
+                    case.certainty = Certainty::Partial;
+                }
+            }
+        }
+        if let Some(who) = &self.scan().adds_items {
+            // pytest lists what such a hook adds (`Function.from_parent`),
+            // which only the session that runs it can tell.
+            let reason =
+                format!("{who} implements {MODIFYITEMS} and makes items: it may add tests");
+            recognition.refine = Some(match recognition.refine {
+                Some(existing) => format!("{existing}; {reason}").into(),
+                None => reason.into(),
+            });
+            for case in &mut recognition.cases {
+                if case.certainty == Certainty::Exact {
+                    case.certainty = Certainty::Partial;
+                }
+            }
+        }
+        if doctest == Some(DoctestFile::Module) && may_hold_doctests(file.source) {
+            let reason =
+                format!("pytest's doctest plugin collects its doctests ({PYTEST_DOCTESTS})");
+            recognition.refine = Some(match recognition.refine {
+                Some(existing) => format!("{existing}; {reason}").into(),
+                None => reason.into(),
+            });
+            for case in &mut recognition.cases {
+                if case.certainty == Certainty::Exact {
+                    case.certainty = Certainty::Partial;
+                }
+            }
+        }
+        recognition
+    }
+
+    /// The names `-k` matches for a file's position: the directories
+    /// between the rootdir and the file, and the file name.
+    fn path_keywords(&self, file: &SourceFile<'_>) -> Vec<String> {
+        match file.abs.strip_prefix(&self.config.rootdir) {
+            Ok(rel) => rel
+                .components()
+                .filter_map(|c| match c {
+                    Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
+                    _ => None,
+                })
+                .collect(),
+            Err(_) => file.rel.as_str().split('/').map(str::to_string).collect(),
+        }
+    }
+}
 
 /// The configuration recognition depends on.
 #[derive(Debug, Clone)]

@@ -3,10 +3,13 @@
 //! refer to ([`Imports`]).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
+use aye_python_semantic::module_resolver::found_in;
 use aye_python_semantic::namespace::Namespace;
+use aye_python_stdlib::unittest;
 
-use crate::conftest::FixtureDef;
+use crate::conftest::{self, FixtureDef, Supports};
 
 /// What the support files in scope do.
 #[derive(Debug, Clone, Default)]
@@ -140,4 +143,48 @@ pub(crate) fn names_module(modules: &[String], rel: &str) -> bool {
         .map(|s| s.to_string_lossy())
         .unwrap_or_default();
     modules.iter().any(|m| m.rsplit('.').next() == Some(&*stem))
+}
+
+/// A test module's imports, followed into the project's files.
+pub(super) struct ProjectImports<'r> {
+    pub(super) supports: &'r Supports,
+    /// The test module's directory.
+    pub(super) dir: &'r Path,
+    pub(super) bases: &'r [PathBuf],
+    /// Code that runs before the module's imports (its own, or a
+    /// conftest's) puts directories aye can't tell on `sys.path`: a module
+    /// it can't find may be a project file there.
+    pub(super) path_unknown: bool,
+    /// Directories the module itself puts on `sys.path` that aren't among
+    /// `bases`.
+    pub(super) own_dirs: &'r [PathBuf],
+}
+
+impl Imports for ProjectImports<'_> {
+    fn may_be_unittest(&self, path: &str) -> bool {
+        self.supports.may_be_unittest(path, self.dir, self.bases)
+    }
+
+    /// [`Supports::project_unittest`], and for a module aye can't find
+    /// (an installed package, or a directory put on `sys.path` in a way it
+    /// can't tell): any class when `sys.path` may hold project files it
+    /// can't see, else one named like a unittest case.
+    fn project_unittest(&self, path: &str) -> bool {
+        if self.supports.project_unittest(path, self.dir, self.bases) {
+            return true;
+        }
+        if conftest::no_tests(path) || self.supports.resolvable(path, self.dir, self.bases) {
+            return false;
+        }
+        let name = path.rsplit('.').next().unwrap_or(path);
+        self.path_unknown || found_in(path, self.own_dirs) || unittest::named_like_test_case(name)
+    }
+
+    fn project_test(&self, path: &str) -> bool {
+        self.supports.project_test(path, self.dir, self.bases)
+    }
+
+    fn project_factory(&self, path: &str) -> bool {
+        self.supports.project_factory(path, self.dir, self.bases)
+    }
 }

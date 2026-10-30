@@ -15,6 +15,7 @@ use aye_events::IdPrefix;
 use aye_protocol::MaxFail;
 use aye_pytest::config::ImportMode;
 use aye_pytest::getini::{apply_overrides, ini_bool, ini_lines};
+use aye_pytest::session::deselect_ids;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -277,6 +278,21 @@ pub(crate) fn native_context(config: &PytestConfig) -> NativeContext {
         options: parsed.values,
         unknown_options: parsed.unknown,
         modules_digest: modules_digest(),
+    }
+}
+
+impl PytestRecognizer {
+    /// The context ([`aye_adapter::Recognizer::context`]), built the first
+    /// time it is asked for, which walks the project once for
+    /// [`PytestContext::colliding_modules`].
+    pub(crate) fn pytest_context(&self) -> &PytestContext {
+        self.context.get_or_init(|| PytestContext::new(self))
+    }
+
+    /// `--deselect`'s prefixes as prefixes of aye's ids: relative to the
+    /// project root, when the rootdir is inside it.
+    fn deselect_ids(&self) -> Vec<String> {
+        deselect_ids(&self.config.rootdir, &self.root, &self.config.deselect)
     }
 }
 
