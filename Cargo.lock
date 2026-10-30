@@ -161,6 +161,7 @@ dependencies = [
  "insta",
  "insta-cmd",
  "ruff_python_parser",
+ "serde",
  "serde_json",
  "tempfile",
 ]

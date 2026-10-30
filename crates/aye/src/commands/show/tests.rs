@@ -9,6 +9,7 @@ use aye_events::{
 use aye_stream::{FileChange, ItemIndex};
 
 use super::choose::{closest, distance};
+use super::runs::RunLine;
 use super::*;
 
 #[test]
@@ -546,5 +547,54 @@ fn the_whole_list_has_what_the_summary_counts_beside_the_tests() {
             "t.py::B::test_b",
             "t.py::B"
         ]
+    );
+}
+
+/// `aye show --runs --output json`'s lines, field for field in the order
+/// they are written, with every count, none, and a reason this aye doesn't
+/// know that needs escaping.
+#[test]
+fn a_stored_runs_json_line_keeps_its_fields_order() {
+    let line =
+        |meta: &RunMeta, last: bool| serde_json::to_string(&RunLine::new(meta, last)).unwrap();
+    let mut every = meta("r81");
+    every.started_ms = 1_792_091_602_130;
+    every.exit_code = Some(ExitCode::TestsFailed);
+    every.counts = Counts {
+        passed: 1,
+        failed: 2,
+        error: 3,
+        skipped: 4,
+        expected_failure: 5,
+        unexpected_pass: 6,
+        deselected: 7,
+    };
+    every.extra = [
+        ("skipped_modules", 1),
+        ("setup_error", 2),
+        ("teardown_error", 3),
+        ("lifetime_error", 4),
+        ("collection_error", 5),
+        ("usage_error", 6),
+        ("internal_error", 7),
+    ]
+    .into_iter()
+    .map(|(name, n)| (name.to_owned(), n))
+    .collect();
+    every.ms = 1234;
+    every.stopped = Some(aye_events::StopReason::Maxfail);
+    assert_eq!(
+        line(&every, true),
+        r#"{"type":"run","id":"r81","started":"2026-10-15T19:13:22Z","exit":1,"passed":1,"failed":2,"error":3,"skipped":5,"expected_failure":5,"unexpected_pass":6,"deselected":7,"setup_error":2,"teardown_error":3,"lifetime_error":4,"collection_error":5,"usage_error":6,"internal_error":7,"ms":1234,"stopped":"maxfail","last":true}"#
+    );
+    assert_eq!(
+        line(&meta("r82"), false),
+        r#"{"type":"run","id":"r82","started":"1970-01-01T00:00:00Z","ms":0}"#
+    );
+    let mut odd = meta("0a1b2c3d");
+    odd.stopped = Some(aye_events::StopReason::from("said \"stop\"\n"));
+    assert_eq!(
+        line(&odd, false),
+        r#"{"type":"run","id":"0a1b2c3d","started":"1970-01-01T00:00:00Z","ms":0,"stopped":"said \"stop\"\n"}"#
     );
 }
