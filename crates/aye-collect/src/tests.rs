@@ -2352,6 +2352,87 @@ fn files_the_context_names_are_keyed_by_content() {
     assert_eq!(calls(), 1);
 }
 
+/// The entry a run writes, named by its key, worked out here part by part
+/// from what the run is given: entries an earlier aye wrote must keep
+/// answering, and never answer for anything else.
+#[test]
+fn a_runs_entry_is_named_by_every_part_of_its_key() {
+    fn hashed(parts: &[&[u8]]) -> u128 {
+        let mut hash = aye_events::Fnv128::new();
+        for part in parts {
+            hash.part(part);
+        }
+        hash.finish()
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let cache = tempfile::tempdir().unwrap();
+    let python = interpreter(cache.path());
+    let (test, helpers, init, ini) = (
+        "def dynamic(): pass\n",
+        "X = 1\n",
+        "",
+        "[pytest]\naddopts = -q\n",
+    );
+    write(root, "helpers.py", helpers);
+    write(root, "pkg/__init__.py", init);
+    write(root, "pkg/d_check.py", test);
+    write(root, "pytest.ini", ini);
+    let inifile = root.join("pytest.ini");
+    let inifile = inifile.to_str().unwrap();
+    let mut fake = Fake::new();
+    fake.context = serde_json::json!({"inifile": inifile});
+    let recognizers: Vec<Prepared> = vec![("fake".into(), Box::new(fake))];
+    let args = ["--backends=pg".to_string(), "-v".to_string()];
+    let collection = run_cached_with(
+        root,
+        &recognizers,
+        cache.path(),
+        environment(&python),
+        Some(&FakeRefiner::default()),
+        &args,
+    );
+    assert_eq!(collection.refined_files, 1);
+
+    let environment = environment(&python).digest(root).unwrap();
+    let base = hashed(&[
+        b"refine-2",
+        b"0.0.1",
+        root.as_os_str().as_encoded_bytes(),
+        root.as_os_str().as_encoded_bytes(),
+        &environment.to_le_bytes(),
+        &hashed(&[b"--backends=pg", b"-v"]).to_le_bytes(),
+        b"fake",
+        format!(
+            r#"{{"inifile":{}}}"#,
+            serde_json::to_string(inifile).unwrap()
+        )
+        .as_bytes(),
+        inifile.as_bytes(),
+        ini.as_bytes(),
+        b"setting",
+        b"1",
+    ]);
+    let key = hashed(&[
+        &base.to_le_bytes(),
+        b"pkg/d_check.py",
+        &ContentDigest::of(test.as_bytes()).to_le_bytes(),
+        b"helpers.py",
+        &ContentDigest::of(helpers.as_bytes()).to_le_bytes(),
+        b"pkg/__init__.py",
+        &ContentDigest::of(init.as_bytes()).to_le_bytes(),
+    ]);
+    let names: Vec<String> = fs::read_dir(cache.path().join("refine/fake"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(names, [format!("{key:032x}.json")]);
+    assert_eq!(
+        fs::read_to_string(cache.path().join(format!("refine/fake/{key:032x}.json"))).unwrap(),
+        r#"{"cases":[{"id":"pkg/d_check.py::dynamic[1]","adapter":"fake","certainty":"refined"},{"id":"pkg/d_check.py::dynamic[2]","adapter":"fake","certainty":"refined"}],"diagnostics":[]}"#
+    );
+}
+
 /// Findings 68 and 78: the cache created `.aye` without its markers.
 #[test]
 fn the_state_directory_the_cache_creates_is_marked() {

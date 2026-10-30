@@ -461,7 +461,8 @@ mod tests {
 
     use aye_adapter::Setting;
     use aye_config::ValueSource;
-    use aye_events::{AdapterName, ContentDigest};
+    use aye_events::{AdapterName, ContentDigest, Fnv128};
+    use aye_protocol::Refined;
 
     use super::{Cache, FORMAT};
 
@@ -496,5 +497,155 @@ mod tests {
             "2b8d189545df6dd813e51e0ff1f3a71b"
         );
         assert_eq!(cache.path("k"), Path::new("/cache/refine/pytest/k.json"));
+    }
+
+    /// The hash of `parts`, each after its length, in order: how every key
+    /// is hashed.
+    fn hashed(parts: &[&[u8]]) -> u128 {
+        let mut hash = Fnv128::new();
+        for part in parts {
+            hash.part(part);
+        }
+        hash.finish()
+    }
+
+    /// The bytes a key is hashed from, part by part, as a run gives them
+    /// (with the framework arguments' digest, which `keys_are_pinned`
+    /// leaves out), and the entry its key names: its file's name and the
+    /// bytes in it.
+    #[test]
+    fn a_keys_parts_and_its_entry_are_pinned() {
+        let settings = [
+            Setting {
+                name: "python_files".into(),
+                value: "test_*.py".into(),
+                source: ValueSource::Default,
+            },
+            Setting {
+                name: "python_classes".into(),
+                value: "Test".into(),
+                source: ValueSource::Default,
+            },
+        ];
+        let context = serde_json::json!({"rootdir": "/nowhere", "args": ["-x"]});
+        let args = hashed(&[b"-x", b"--maxfail=2"]);
+        let environment = ContentDigest::of(b"an environment");
+        let cache = Cache::new(
+            Path::new("/cache"),
+            &[
+                FORMAT.as_bytes(),
+                b"0.0.1",
+                b"/root",
+                b"/root/tests",
+                &environment.to_le_bytes(),
+                &args.to_le_bytes(),
+            ],
+            &AdapterName::from("pytest"),
+            &context,
+            &settings,
+        );
+        let base = hashed(&[
+            b"refine-2",
+            b"0.0.1",
+            b"/root",
+            b"/root/tests",
+            &environment.to_le_bytes(),
+            &args.to_le_bytes(),
+            b"pytest",
+            br#"{"args":["-x"],"rootdir":"/nowhere"}"#,
+            b"python_files",
+            b"test_*.py",
+            b"python_classes",
+            b"Test",
+        ]);
+        let file = ContentDigest::of(b"def test_a(): pass\n");
+        let conftest = ContentDigest::of(b"import pytest\n");
+        let init = ContentDigest::of(b"");
+        let key = cache.key(
+            "tests/pkg/test_a.py",
+            file,
+            [("conftest.py", conftest), ("tests/pkg/__init__.py", init)].into_iter(),
+        );
+        let expected = hashed(&[
+            &base.to_le_bytes(),
+            b"tests/pkg/test_a.py",
+            &file.to_le_bytes(),
+            b"conftest.py",
+            &conftest.to_le_bytes(),
+            b"tests/pkg/__init__.py",
+            &init.to_le_bytes(),
+        ]);
+        assert_eq!(key, format!("{expected:032x}"));
+        assert_eq!(key, "2cad17ddd4c487ea6ea24d097c6f0e80");
+
+        // A file the context names, by its path and then its content.
+        let dir = tempfile::tempdir().unwrap();
+        let inifile = dir.path().join("pytest.ini");
+        std::fs::write(&inifile, "[pytest]\naddopts = -x\n").unwrap();
+        let inifile = inifile.to_str().unwrap();
+        let context = serde_json::json!({"inifile": inifile, "rootdir": "/nowhere"});
+        let cache = Cache::new(
+            Path::new("/cache"),
+            &[FORMAT.as_bytes()],
+            &AdapterName::from("pytest"),
+            &context,
+            &[],
+        );
+        let base = hashed(&[
+            b"refine-2",
+            b"pytest",
+            context.to_string().as_bytes(),
+            inifile.as_bytes(),
+            b"[pytest]\naddopts = -x\n",
+        ]);
+        assert_eq!(
+            cache.key("t.py", file, std::iter::empty()),
+            format!(
+                "{:032x}",
+                hashed(&[&base.to_le_bytes(), b"t.py", &file.to_le_bytes()])
+            )
+        );
+
+        // The entry: `<key>.json` under `refine/<adapter>`, holding the
+        // result as its JSON, and the state directory marked as a cache.
+        let state = dir.path().join(".aye");
+        let top = state.join("cache");
+        let cache = Cache {
+            top: top.clone(),
+            dir: top.join("refine").join("pytest"),
+            base: 0,
+        };
+        let mut case = aye_events::Case::new("tests/test_a.py::test_a[1]", "pytest");
+        case.certainty = aye_events::Certainty::Refined;
+        let refined = Refined {
+            cases: vec![case],
+            diagnostics: Vec::new(),
+            digests: None,
+        };
+        cache.write("2cad17ddd4c487ea6ea24d097c6f0e80", &refined);
+        let names = |dir: &Path| {
+            let mut names: Vec<String> = std::fs::read_dir(dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(
+            names(&top.join("refine/pytest")),
+            ["2cad17ddd4c487ea6ea24d097c6f0e80.json"]
+        );
+        assert_eq!(names(&state), [".gitignore", "CACHEDIR.TAG", "cache"]);
+        assert_eq!(
+            std::fs::read_to_string(
+                top.join("refine/pytest/2cad17ddd4c487ea6ea24d097c6f0e80.json")
+            )
+            .unwrap(),
+            r#"{"cases":[{"id":"tests/test_a.py::test_a[1]","adapter":"pytest","certainty":"refined"}],"diagnostics":[]}"#
+        );
+        assert_eq!(
+            cache.read("2cad17ddd4c487ea6ea24d097c6f0e80"),
+            Some(refined)
+        );
     }
 }
