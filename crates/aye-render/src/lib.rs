@@ -158,7 +158,6 @@ mod junit;
 mod level;
 mod rerun;
 mod show;
-mod summary;
 mod text;
 mod words;
 
@@ -168,8 +167,7 @@ pub use json::JsonLines;
 pub use junit::{Junit, JunitDuration, JunitFamily, JunitLogging, JunitOptions};
 pub use level::Level;
 pub use show::{ShowContext, ShowMode};
-pub use summary::summary_words;
-pub use text::{Text, TextOptions};
+pub use text::{Text, TextOptions, summary_words};
 
 #[cfg(test)]
 mod tests;
