@@ -1,5 +1,6 @@
-//! `[tool.aye.unittest]`: where discovery starts, which files it takes and
-//! where imports start, as `python -m unittest discover -s -p -t` take them.
+//! The unittest adapter's settings ([`UnittestConfig`]): `[tool.aye.unittest]`
+//! resolved against the project root, and shown with where each value came
+//! from.
 
 use std::path::{Path, PathBuf};
 
@@ -7,14 +8,9 @@ use aye_adapter::{AdapterError, Setting};
 use aye_config::{AyeSettings, Sourced, ValueSource};
 use aye_python_stdlib::os_path;
 
-/// The table's keys.
-pub(crate) const START_DIRECTORY: &str = "start-directory";
-pub(crate) const PATTERN: &str = "pattern";
-pub(crate) const TOP_LEVEL_DIRECTORY: &str = "top-level-directory";
-
-/// unittest's defaults.
-pub(crate) const DEFAULT_START: &str = ".";
-pub(crate) const DEFAULT_PATTERN: &str = "test*.py";
+use crate::options::{
+    DEFAULT_PATTERN, DEFAULT_START, PATTERN, START_DIRECTORY, TOP_LEVEL_DIRECTORY,
+};
 
 /// The unittest adapter's settings, resolved against the project root.
 #[derive(Debug, Clone, PartialEq, Eq)]

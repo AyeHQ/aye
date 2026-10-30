@@ -278,11 +278,12 @@
 //!
 //! [`may_define_load_tests`]: aye_python_stdlib::unittest::may_define_load_tests
 
-mod config;
 mod context;
 mod discovery;
 mod module;
+mod options;
 mod recognizer;
+mod settings;
 
 #[cfg(test)]
 mod tests;
@@ -292,8 +293,8 @@ use aye_events::AdapterName;
 use aye_protocol::{EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
 use aye_python_stdlib::fnmatch::SetTranslation;
 
-pub use config::UnittestConfig;
 pub use recognizer::UnittestRecognizer;
+pub use settings::UnittestConfig;
 
 /// The unittest adapter's executor module.
 pub const MODULE: ModuleSource = ModuleSource::embedded(
