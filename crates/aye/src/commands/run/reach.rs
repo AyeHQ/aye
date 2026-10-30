@@ -3,6 +3,28 @@
 //! run's: a dotted name's reach into what collection skipped
 //! ([`dotted_reach`]), and the conftests that failed to load
 //! ([`broken_conftest_dirs`]), which explain the files below them.
+//!
+//! Decided (implementation, October 2026):
+//! - **Dotted names and keys stand for the files they select.** They are
+//!   resolved among what collection finds over the whole project, whose
+//!   refinement starts each session from the framework's default (the
+//!   adapters prepared seeing only the path arguments). So the run is the
+//!   user's run of `pytest <the path arguments and those files>`: every
+//!   adapter's context of a batch gets `selected_paths` (the path
+//!   arguments, an id's file, and the files of the cases each other
+//!   argument selects, absolute, in the order of the arguments), which the
+//!   pytest and doctest adapters start their sessions from (start-up
+//!   conftests, initial paths); and of collection's diagnostics, a
+//!   `skipped` info (a module or directory skipped while collecting, which
+//!   the summaries count as a skip) is the run's only where a path argument
+//!   holds it or lies in it, or a dotted name names it, its package or
+//!   something in it (`pytest --pyargs`: a dotted name naming a skipped
+//!   module is found, and no `not-found`), and a `usage-error` on a file (a
+//!   conftest refinement's session loaded at start-up) only where a path
+//!   argument holds it, its directory holds a path the run starts from, or
+//!   some argument named nothing (it may be why). The others are left out
+//!   of the stream. With no positional argument, or only paths, collection
+//!   walks only what the run reaches, and nothing changes.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

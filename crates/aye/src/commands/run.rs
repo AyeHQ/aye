@@ -7,6 +7,26 @@
 //! moment the runner exists (`interrupt.rs`), and every record goes to the
 //! stream (`crate::stream`), the runner's after the passes that rewrite
 //! them.
+//!
+//! Decided (implementation, October 2026):
+//! - **Never silent, always stoppable.** While the run's settings resolve
+//!   (preparing the pytest adapter may walk a big tree), a `collecting…`
+//!   line shows on a terminal after half a second (the printer's `Busy`).
+//!   Collection then sends `collection_progress` (after half a second, at
+//!   most four a second).
+//!   The first Ctrl-C before the run stops collection, which ends as
+//!   interrupted (exit 2); if what is running then isn't watching, aye
+//!   exits 2 after a second and a half anyway, its workers killed.
+//! - **Workers and refinement.** Every worker gets the run's id as
+//!   `PYTEST_XDIST_TESTRUNUID`, so pytest-xdist's `testrun_uid` is shared by
+//!   a run's workers and new each run. The refinement cache is on, keyed on
+//!   the interpreter workers run, the arguments after `--` and aye's own
+//!   environment (which workers inherit; the run's id is left out). The
+//!   plan's session is, by adapter, every file collection found tests in,
+//!   selected or not, in collection order (with dotted names or keys, only
+//!   those in the paths the run starts from): what each worker of an
+//!   executor that lists the session (the pytest adapter's) lists before
+//!   its first batch.
 
 use std::fs;
 use std::io;

@@ -44,6 +44,18 @@
 //! the run, with the closest names; the start of several keys, with them;
 //! a bad expression or option; a run no stored run is); 5 when no run is
 //! stored.
+//!
+//! Decided (implementation, October 2026):
+//! - **`aye show` reads a kept run back** (detected as `aye config` is)
+//!   and never runs anything: the list of a run's results (its tests, and
+//!   its failed lifetimes, error diagnostics and modules skipped while
+//!   collecting, so that the whole list ends with the run's own summary),
+//!   or the details of the results named (by key, id, dotted name or path)
+//!   or of every failure (`--failed`), through the same renderers, fed part
+//!   of the log with the whole log's keys, what the store knows beside it
+//!   and the run's exit code; or the stored log itself (`--log`). It needs
+//!   no interpreter, and prepares no adapter. Its usage lines name it `aye
+//!   show`.
 
 use std::io::{self, Write as _};
 

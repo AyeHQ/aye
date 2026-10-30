@@ -2,6 +2,41 @@
 //! tally, the reporters (the output format's on stdout, GitHub's
 //! annotations, the JUnit report: [`reporters`]), history ([`Remember`])
 //! and the run store ([`Keep`]).
+//!
+//! Decided (implementation, October 2026):
+//! - **Output.** A stdout reporter that fails (a closed pipe) stops writing,
+//!   and the JUnit report and history still see every record. With `-s`,
+//!   workers' output goes to stdout beside text output and to stderr beside
+//!   `--output json`, so JSON lines stay whole. GitHub annotations go
+//!   beside text output, at every verbosity, never beside JSON. The
+//!   JUnit report goes to `--junitxml` (with `$VARIABLES` and `~` expanded,
+//!   as pytest does), else to the framework's own: the `junitxml` path its
+//!   adapter read from pytest's `addopts`, `PYTEST_ADDOPTS` or the
+//!   arguments after `--`. Relative paths are taken from the current
+//!   directory. Its `junit_prefix` (pytest's `--junitprefix`) goes before
+//!   the report's classnames either way, and its JUnit settings
+//!   (`junit_suite_name`, `junit_logging`, `junit_log_passing_tests`,
+//!   `junit_duration_report`, `junit_family`, from the first adapter that
+//!   gives each) shape the report, which is aye's own layout without them.
+//!   The path is checked before anything runs (exit 4); if the report
+//!   still can't be written at the end, the process exits 1 although
+//!   `run_finished` said 0 or 5. GitHub annotation paths are relative to
+//!   `GITHUB_WORKSPACE` (else the directory holding `.git`).
+//! - **Every run is kept for `aye show`** (October 2026), numbered (`r81`,
+//!   claimed before `run_started`, which says it): the run store
+//!   (`aye_history::runs`) is the stream's last consumer, serializing each
+//!   record once every reporter has it and compressing the log on a thread
+//!   of its own, so the run doesn't wait on it (on `packaging`'s 62,000
+//!   tests, 57 MB of records, the run takes as long). Beside it the binary
+//!   folds what the summaries count beside the tests (`aye_render::Tally`)
+//!   and hands it to the store with the end of the stream, for `aye show
+//!   --runs`. A run with nothing to show (no test ran and nothing failed
+//!   but the command line's names: a typo in a path) isn't kept, so `last`
+//!   stays the run before it, and its number is free again. `[tool.aye]
+//!   keep-runs` (10) says how many runs are kept. A store that can't be
+//!   written is a warning, never a failed run. History, folded after the
+//!   reporters, first gives each bad outcome its `history` (how the test
+//!   ended before this run), which reporters and the store see.
 
 use std::io::{self, IsTerminal as _};
 use std::path::{Path, PathBuf};

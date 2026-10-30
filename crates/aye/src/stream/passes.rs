@@ -7,6 +7,30 @@
 //! record, how a bad outcome's test ended before this run
 //! ([`PreviousOutcome`]), which the sink applies first, as it holds the
 //! history.
+//!
+//! Decided (implementation, October 2026):
+//! - **A file's collection errors count as pytest counts them.** pytest
+//!   collects a file's `TestCase` classes and its own tests in one
+//!   `Module`, so the unittest and pytest adapters' batches that both load
+//!   a file failing to import are one collection error: the file shows as
+//!   many as the adapter reporting the most for it, and another adapter's
+//!   beyond those become infos saying so, kept in the stream
+//!   ([`registry::AdapterTraits::one_module`]). The doctest adapter's are
+//!   pytest's `DoctestModule`, another collector, and count apart. A
+//!   conftest pytest fails to load is one error too, however many adapters
+//!   load it (the doctest adapter imports the conftests pytest would): a
+//!   `usage-error` or `collection-error` on a `conftest.py` that another
+//!   adapter (or refinement) already reported with that code becomes an
+//!   info saying so, with its own words when they differ. Files below a
+//!   conftest that failed to load have no tests because of it, which its
+//!   error says: collection's `no-tests` notes on them are left out.
+//! - **Reruns name the test from where aye ran.** Ids are relative to the
+//!   root and a path is read from the current directory first, so from a
+//!   subdirectory holding a path of the same name (`tests/tests/test_a.py`
+//!   under `tests/`) an id would name the other file: there a failed
+//!   test's `reproduce` command names its file relative to the current
+//!   directory (one is added for an adapter that sets none), so what aye
+//!   prints reruns it. Elsewhere the command is the id.
 
 use std::collections::HashMap;
 use std::path::Path;

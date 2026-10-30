@@ -3,6 +3,16 @@
 //! `-m` and `maxfail`, and whether they replace the test run), and the
 //! values aye's own command line gives where pytest's rules decide
 //! (`-k`/`-m` values starting with `-`, `-x` and `--maxfail`).
+//!
+//! Decided (implementation, October 2026):
+//! - **The arguments after `--`** are the framework's: aye's pytest
+//!   front-end parses them after `addopts` and `PYTEST_ADDOPTS`, as pytest
+//!   would, so those that replace a test run (pytest's `-h`, `-V`, `--co`,
+//!   `--fixtures`, `--fixtures-per-test`, `--markers`, also inside a cluster
+//!   such as `-vh`) are usage errors naming the aye equivalent, before
+//!   anything runs. So are `--setup-plan` and `--setup-only`: they run no
+//!   test, and every test would be reported, and remembered for `--lf`, as
+//!   skipped. `--setup-show` runs the tests and is allowed.
 
 /// What the command line says about `maxfail`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

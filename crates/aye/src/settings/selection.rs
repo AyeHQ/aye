@@ -1,6 +1,13 @@
 //! What static selection keeps ([`resolve`]): the positional arguments,
 //! the `-k` and `-m` that count for each adapter's cases, and each
 //! adapter's `--deselect`.
+//!
+//! Decided (implementation, October 2026):
+//! - **The framework's own `--deselect`** (pytest's from `addopts`,
+//!   `PYTEST_ADDOPTS` or after `--`, as id prefixes in its adapter's
+//!   `FrameworkDefaults`) drops that adapter's cases statically and counts
+//!   them as deselected, as pytest's summary does; the adapter no longer
+//!   drops them itself, so they are dropped once.
 
 use aye_adapter::FrameworkDefaults;
 use aye_events::AdapterName;

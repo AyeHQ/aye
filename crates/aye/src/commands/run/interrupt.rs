@@ -1,6 +1,13 @@
 //! What a stop signal does to a run ([`Signals`], [`install_interrupt`]):
 //! the first stops it cleanly, the same one delivered again is ignored
 //! ([`Presses`]), a later one ends aye at once.
+//!
+//! Decided (implementation, October 2026):
+//! - **Signals.** Ctrl-C, SIGTERM or SIGHUP stops the run (exit 2); a second
+//!   one kills every worker, with the processes its tests started, and exits
+//!   at once. A signal within half a second of the first is that one
+//!   delivered again, not a second request: GNU `timeout` signals aye and
+//!   then its process group, aye included, and the run must still report.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

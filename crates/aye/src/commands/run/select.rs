@@ -3,6 +3,23 @@
 //! reaches, a `not-found` for each argument that names nothing, and each
 //! case it runs; and which `-k` and `-m` count for each adapter's cases
 //! ([`Pick`]), which static selection's resolution applies.
+//!
+//! Decided (implementation, October 2026):
+//! - **The framework's own `-k` and `-m`** (pytest's from `addopts` and
+//!   `PYTEST_ADDOPTS`, in its adapter's `FrameworkDefaults`) apply
+//!   statically to that adapter's cases when the command line gives none,
+//!   so `--co` and `deselected` agree with pytest; other adapters' cases
+//!   are left alone unless their frameworks name their own. One after `--` wins over both,
+//!   for every case, since those arguments come last in pytest's. Where
+//!   they can't be read (an `@file`, an unknown short option that might hold
+//!   the letter), every adapter's cases get the command line's, else their
+//!   own: no adapter applies an expression at runtime, so static selection
+//!   is the last word on every case. The command line's must parse.
+//! - **What names nothing** (a missing path; an id, dotted name or key that
+//!   matches no test) is a `not-found` error diagnostic in the stream, and
+//!   the run exits 4 without running, as pytest's `not found:` does. An
+//!   existing file or directory without tests names nothing to run but is
+//!   no error: alone, the run exits 5.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;

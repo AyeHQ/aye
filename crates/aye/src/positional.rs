@@ -1,6 +1,18 @@
 //! The positional arguments, as a run and `aye show` read them
 //! ([`Positional`]): a path taken from the current directory, or from the
 //! project root when only the root has it, else a dotted name or a key.
+//!
+//! Decided (implementation, October 2026):
+//! - **Positional paths** are relative to the current directory, with `.`
+//!   and `..` resolved lexically before the project root is searched for. A
+//!   path only the root has is taken from the root, so the ids aye prints
+//!   rerun from any directory. One spelled through another name of a
+//!   directory in the project (macOS's `/tmp` is `/private/tmp`) is spelled
+//!   from the root, as collection's ids are (`aye_fs::relative_to`).
+//!   Paths mixed with dotted names or keys are collected along with the
+//!   adapters' default roots. Cases are listed in the order of the arguments
+//!   that select them, as pytest orders them (selection and collection do
+//!   it); the runner still keeps a file's cases together in a batch.
 
 use std::path::{Path, PathBuf};
 

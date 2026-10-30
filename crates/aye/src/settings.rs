@@ -5,6 +5,12 @@
 //! adapters' own frameworks ([`FrameworkDefaults`]), in one order, which
 //! decides which usage error a command line and a project with several
 //! report. Nothing after resolution reads the arguments again.
+//!
+//! Decided (implementation, October 2026):
+//! - **No whole-home runs.** With no path, a run from the home directory or
+//!   a filesystem root is a usage error before anything walks (a home
+//!   directory under git is a project root, and pytest would collect every
+//!   project in it); a path given (`aye .`) runs.
 
 use std::fs;
 use std::path::{Path, PathBuf};

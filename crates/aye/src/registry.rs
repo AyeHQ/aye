@@ -8,6 +8,38 @@
 //! engine runs every test: the pytest adapter reads pytest's tests with
 //! its front-end and aye's own `pytest` module, which every adapter's
 //! workers get, so pytest is never imported.
+//!
+//! Decided (implementation, October 2026):
+//! - **Which adapters run** is `[tool.aye] adapters`, in its order (an
+//!   unknown or repeated name, or an empty list, is a usage error). Unset,
+//!   it is doctest then pytest, for every project and whatever the
+//!   interpreter installs (October 2026; it used to fall back to unittest
+//!   where pytest wasn't installed): aye's engine runs pytest's tests
+//!   without pytest, pytest's rules run `TestCase` classes too, pytest
+//!   lists a file's doctests before its other tests, and the doctest
+//!   adapter prepares nothing unless doctests are on. A project that wants
+//!   `python -m unittest discover`'s rules lists `unittest`. Each adapter
+//!   prepares with `prepare_among`, knowing the others. `aye config` shows
+//!   the adapters and why. The table of an adapter that doesn't run
+//!   (`[tool.aye.unittest]`) is still checked: its bad values are usage
+//!   errors too.
+//! - **aye's engine runs every test** (October 2026): pytest suites run
+//!   with aye's own `pytest` module and pytest is never imported. The
+//!   pytest adapter's front-end refines every test file
+//!   ([`AdapterTraits::refines_every_file`]), and every adapter's workers
+//!   get aye's `pytest` module, with what it stands on, before their own
+//!   modules ([`PRELUDE`]: the doctest adapter imports conftests, which
+//!   import it). `aye config` says `engine   native`. `--native`, the
+//!   prototype's switch, is accepted and does nothing (`AYE_NATIVE` is no
+//!   longer read), and reruns leave it out. A run of pytest's tests can't
+//!   do without refinement: `--no-refine` is a usage error, unless with
+//!   `--co`, which lists the static recognizer's prediction without
+//!   importing anything. A `refine-failed` warning is an error: the
+//!   front-end is the only source of pytest's tests, so without it the run
+//!   has no result rather than an empty one. A file's collection error
+//!   refinement reported counts as the pytest adapter's for the one-module
+//!   rule ([`AdapterTraits::one_module`]), since its front-end lists every
+//!   pytest file there.
 
 use anyhow::{Context as _, Result, bail};
 use aye_adapter::{Adapter, Project};

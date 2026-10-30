@@ -4,6 +4,23 @@
 //! names, [`requested_ids`]; the reruns' options; the paths the run starts
 //! from), history's durations, what runs first under `--ff`, and, by
 //! adapter, the session's files ([`session_files`]).
+//!
+//! Decided (implementation, October 2026):
+//! - **Ids with parameters on the command line** (`path::test[x]`) go to
+//!   every adapter's context as `requested_ids`, relative to the root.
+//!   Where collection only knows the test without its parameters
+//!   (`--no-refine`, a failed refinement), the batch gets the typed id, and
+//!   the framework reports it `not-found` when it makes no such test rather
+//!   than run the test's other parameters in its place, as it may for ids
+//!   aye worked out itself.
+//! - **Reruns repeat aye's options that shape the run.** `-c FILE` decides
+//!   which tests exist and how they run, so every adapter's context of a
+//!   batch gets `rerun_args` (`["-c", FILE]`, as given, for the directory
+//!   aye ran in), which adapters put before the id: `aye -c FILE <id> --
+//!   <args>`. `--python` is left out (a rerun finds the interpreter as aye
+//!   did), and so are the options that shape only the output or the
+//!   selection, which a rerun of one id doesn't need, and `--junitxml`,
+//!   whose report it would overwrite.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
