@@ -7,16 +7,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-/// Python's `str()` of a TOML scalar, as `[tool.pytest.ini_options]`
-/// stringifies values.
-fn python_str(value: &toml::Value) -> String {
-    match value {
-        toml::Value::String(s) => s.clone(),
-        toml::Value::Boolean(b) => if *b { "True" } else { "False" }.to_string(),
-        toml::Value::Float(f) => aye_python_stdlib::repr::float_repr(*f),
-        other => other.to_string(),
-    }
-}
+use crate::config::{python_str, strtobool};
 
 /// A native TOML value as JSON (dates as their text).
 fn toml_json(value: &toml::Value) -> Value {
@@ -135,11 +126,7 @@ pub fn apply_overrides(ini: &mut BTreeMap<String, Value>, args: &[String]) {
 pub fn ini_bool(value: &Value) -> Option<bool> {
     match value {
         Value::Bool(b) => Some(*b),
-        Value::String(text) => match text.trim().to_ascii_lowercase().as_str() {
-            "y" | "yes" | "t" | "true" | "on" | "1" => Some(true),
-            "n" | "no" | "f" | "false" | "off" | "0" => Some(false),
-            _ => None,
-        },
+        Value::String(text) => strtobool(text),
         _ => None,
     }
 }

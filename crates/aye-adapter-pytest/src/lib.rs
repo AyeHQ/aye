@@ -484,6 +484,7 @@ use aye_pytest::config::{self, ConfigRules};
 use aye_pytest::conftest::{in_confcutdir, initial_dirs};
 use aye_pytest::doctest::{self, DoctestFile};
 use aye_pytest::pathlib::{compute_module_name, resolve_package_path};
+use aye_pytest::session::{deselect_ids, is_virtualenv};
 use aye_python_semantic::framework::Framework;
 use aye_python_semantic::module_resolver::{absolute_imports, find_module, found_in};
 use aye_python_semantic::namespace::Namespace;
@@ -636,11 +637,6 @@ enum Ignored {
     No,
     Maybe,
     Yes,
-}
-
-/// pytest's `_in_venv`.
-fn is_virtualenv(dir: &Path) -> bool {
-    dir.join("pyvenv.cfg").is_file() || dir.join("conda-meta").join("history").is_file()
 }
 
 /// Where code imports project modules from: the rootdir (on `sys.path`
@@ -1410,21 +1406,7 @@ impl PytestRecognizer {
     /// `--deselect`'s prefixes as prefixes of aye's ids: relative to the
     /// project root, when the rootdir is inside it.
     fn deselect_ids(&self) -> Vec<String> {
-        let Ok(rel) = self.config.rootdir.strip_prefix(&self.root) else {
-            return Vec::new();
-        };
-        let rel = rel.to_string_lossy().replace('\\', "/");
-        self.config
-            .deselect
-            .iter()
-            .map(|prefix| {
-                if rel.is_empty() {
-                    prefix.clone()
-                } else {
-                    format!("{rel}/{prefix}")
-                }
-            })
-            .collect()
+        deselect_ids(&self.config.rootdir, &self.root, &self.config.deselect)
     }
 
     /// The names `-k` matches for a file's position: the directories

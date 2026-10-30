@@ -334,6 +334,7 @@ use aye_pytest::conftest;
 use aye_pytest::doctest;
 use aye_pytest::names;
 use aye_pytest::pathlib::resolve_pkg_root_and_module_name;
+use aye_pytest::session::{deselect_ids, is_virtualenv};
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
 use aye_python_stdlib::os_path;
 
@@ -519,11 +520,6 @@ fn quoted_names(source: &str, out: &mut std::collections::HashSet<String>) {
             out.insert(source[start..at].to_string());
         }
     }
-}
-
-/// pytest's `_in_venv`.
-fn is_virtualenv(dir: &Path) -> bool {
-    dir.join("pyvenv.cfg").is_file() || dir.join("conda-meta").join("history").is_file()
 }
 
 /// Why a module with no doctest aye can see is refined.
@@ -1272,20 +1268,6 @@ impl DoctestRecognizer {
     /// they name and counts them as deselected, as pytest does with its
     /// doctest items.
     fn deselect_ids(&self) -> Vec<String> {
-        let Ok(rel) = self.config.rootdir.strip_prefix(&self.root) else {
-            return Vec::new();
-        };
-        let rel = rel.to_string_lossy().replace('\\', "/");
-        self.config
-            .deselect
-            .iter()
-            .map(|prefix| {
-                if rel.is_empty() {
-                    prefix.clone()
-                } else {
-                    format!("{rel}/{prefix}")
-                }
-            })
-            .collect()
+        deselect_ids(&self.config.rootdir, &self.root, &self.config.deselect)
     }
 }

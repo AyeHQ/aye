@@ -20,3 +20,4 @@ pub mod getini;
 pub mod ini;
 pub mod names;
 pub mod pathlib;
+pub mod session;

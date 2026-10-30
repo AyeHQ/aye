@@ -433,7 +433,7 @@ pub enum ImportMode {
 
 /// Python's `str()` of a TOML scalar, as `[tool.pytest.ini_options]`
 /// stringifies values.
-fn python_str(value: &toml::Value) -> String {
+pub(crate) fn python_str(value: &toml::Value) -> String {
     match value {
         toml::Value::String(s) => s.clone(),
         toml::Value::Boolean(b) => if *b { "True" } else { "False" }.to_string(),
@@ -562,7 +562,7 @@ fn locate_setup(
 }
 
 /// pytest's `_strtobool`.
-fn strtobool(value: &str) -> Option<bool> {
+pub(crate) fn strtobool(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "y" | "yes" | "t" | "true" | "on" | "1" => Some(true),
         "n" | "no" | "f" | "false" | "off" | "0" => Some(false),
