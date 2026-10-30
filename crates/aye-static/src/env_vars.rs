@@ -65,33 +65,34 @@ catalogue! {
     VIRTUAL_ENV;
     /// The home directory: `~` in `--junitxml`, and in pytest's paths
     /// outside Windows; where the user's own `site-packages` are, for the
-    /// refinement cache's key. Read by the binary, aye-provision and the
-    /// pytest adapter, through aye-python-stdlib's `os.path`.
+    /// refinement cache's key. Read by the binary, aye-provision and
+    /// aye-pytest (for the pytest adapter), through aye-python-stdlib's
+    /// `os.path`.
     HOME;
     /// The home directory where `HOME` isn't set, and on Windows in
     /// pytest's paths, as `ntpath.expanduser` reads it. Read by the binary,
-    /// aye-provision and the pytest adapter, through aye-python-stdlib's
-    /// `os.path`.
+    /// aye-provision and aye-pytest (for the pytest adapter), through
+    /// aye-python-stdlib's `os.path`.
     USERPROFILE;
     /// On Windows, the home directory's drive where `USERPROFILE` isn't
-    /// set, as `ntpath.expanduser` reads it. Read by the pytest adapter,
-    /// through aye-python-stdlib's `os.path`.
+    /// set, as `ntpath.expanduser` reads it. Read by aye-pytest (for the
+    /// pytest adapter), through aye-python-stdlib's `os.path`.
     HOMEDRIVE;
     /// On Windows, the home directory's path where `USERPROFILE` isn't set,
-    /// as `ntpath.expanduser` reads it. Read by the pytest adapter, through
-    /// aye-python-stdlib's `os.path`.
+    /// as `ntpath.expanduser` reads it. Read by aye-pytest (for the pytest
+    /// adapter), through aye-python-stdlib's `os.path`.
     HOMEPATH;
     /// On Windows, the user's name, for `~user` in pytest's paths, as
-    /// `ntpath.expanduser` reads it. Read by the pytest adapter, through
-    /// aye-python-stdlib's `os.path`.
+    /// `ntpath.expanduser` reads it. Read by aye-pytest (for the pytest
+    /// adapter), through aye-python-stdlib's `os.path`.
     USERNAME;
     /// Where Python imports from beside the standard library: the modules
     /// there count as installed for the refinement cache, and the pytest
-    /// adapter finds project files there. Read by aye-provision and the
-    /// pytest adapter.
+    /// adapter finds project files there. Read by aye-provision and
+    /// aye-pytest (for the pytest adapter).
     PYTHONPATH;
     /// Python's `-O`: at 2, docstrings are stripped, so they hold no
-    /// doctest. Read by the doctest adapter.
+    /// doctest. Read by aye-pytest (for the doctest adapter).
     PYTHONOPTIMIZE;
     /// `true` in a GitHub Actions step, where aye adds annotations to its
     /// output. Read by the binary.
@@ -116,17 +117,18 @@ catalogue! {
     // pytest's, read as pytest reads them.
 
     /// More of pytest's arguments, after the configuration's `addopts`.
-    /// Read by the pytest and doctest adapters and the pytest front-end.
+    /// Read by aye-pytest (for the pytest and doctest adapters) and the
+    /// pytest front-end.
     PYTEST_ADDOPTS;
-    /// Plugins to load, comma-separated. Read by the pytest and doctest
-    /// adapters and the pytest front-end.
+    /// Plugins to load, comma-separated. Read by aye-pytest (for the pytest
+    /// and doctest adapters) and the pytest front-end.
     PYTEST_PLUGINS;
     /// Set: no plugin is loaded from an entry point. Read by the pytest
     /// front-end.
     PYTEST_DISABLE_PLUGIN_AUTOLOAD;
     /// `1`: a module imported from another file than the one collected is
-    /// no error. Read by the doctest adapter, the doctest executor and the
-    /// pytest front-end.
+    /// no error. Read by aye-pytest (for the doctest adapter), the doctest
+    /// executor and the pytest front-end.
     PY_IGNORE_IMPORTMISMATCH;
     /// Where `tmp_path` and `tmp_path_factory` make their directories,
     /// rather than the system's temporary directory. Read by aye's engine.

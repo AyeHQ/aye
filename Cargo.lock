@@ -194,7 +194,6 @@ dependencies = [
  "aye-pytest",
  "aye-python-semantic",
  "aye-python-stdlib",
- "aye-static",
  "aye-test",
  "ruff_python_parser",
  "serde",

@@ -2147,9 +2147,9 @@ fn ignoring_import_mismatches_refines_modules() {
             .refine
             .is_none()
     );
-    let env = Env {
+    let env = DoctestEnv {
         ignore_import_mismatch: true,
-        ..Env::default()
+        ..DoctestEnv::default()
     };
     let ignoring =
         DoctestRecognizer::with_environment(&project(root, &[], &[]), &[], &env).unwrap();
@@ -2227,9 +2227,9 @@ fn hooks_that_may_mark_items_make_the_cases_partial() {
     let with_plugin =
         DoctestRecognizer::with_env(&project(root, &[], &plugin), None, None).unwrap();
     assert_eq!(certainty(&with_plugin, "lib.py"), Certainty::Partial);
-    let env = Env {
+    let env = DoctestEnv {
         pytest_plugins: Some("myplugin".into()),
-        ..Env::default()
+        ..DoctestEnv::default()
     };
     let env_plugins =
         DoctestRecognizer::with_environment(&project(root, &[], &[]), &[], &env).unwrap();

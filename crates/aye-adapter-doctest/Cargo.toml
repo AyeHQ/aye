@@ -17,7 +17,6 @@ aye-protocol = { workspace = true }
 aye-pytest = { workspace = true }
 aye-python-semantic = { workspace = true }
 aye-python-stdlib = { workspace = true }
-aye-static = { workspace = true }
 ruff_python_parser = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -11,10 +11,9 @@
 //!
 //! Depends on: aye-adapter, aye-config (`[tool.aye.doctest]`, where a
 //! setting came from), aye-events, aye-protocol, aye-pytest (pytest's
-//! configuration, read approximately; its conftest rules),
-//! aye-python-semantic (the `__main__` guard), aye-python-stdlib
-//! (`fnmatch`, `glob`, `os.path`, identifiers), aye-static (the variables
-//! it reads by name).
+//! configuration, read approximately; its conftest rules and module names;
+//! the variables it reads), aye-python-semantic (the `__main__` guard),
+//! aye-python-stdlib (`fnmatch`, `glob`, `os.path`).
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **This crate is the doctest adapter, and it is native**: it maps
@@ -23,10 +22,10 @@
 //!   so plain `pytest --doctest-modules` / `--doctest-glob` is the referee.
 //!   The executor (`python/aye_engine_doctest.py`) imports only the standard
 //!   library and runs on Python 3.10 and later, with or without pytest. The
-//!   crate reads pytest's configuration and conftest rules through
-//!   `aye-pytest`, `[tool.aye]` through `aye-config`, and the variables it
-//!   reads through `aye-static`. Per-example re-runs and `--accept` are not
-//!   implemented yet.
+//!   crate reads pytest's configuration, its conftest rules and the
+//!   variables it reads through `aye-pytest`, and `[tool.aye]` through
+//!   `aye-config`. Per-example re-runs and `--accept` are not implemented
+//!   yet.
 //! - **Ids.** A module gives one case per `DocTest` with examples, named as
 //!   `DocTestFinder().find(module, module.__name__)` names it, in its order
 //!   (sorted by name): `pkg/mod.py::pkg.mod`, `pkg/mod.py::pkg.mod.func`,
@@ -336,8 +335,8 @@ use aye_pytest::pathlib::resolve_pkg_root_and_module_name;
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
 use aye_python_stdlib::glob;
 use aye_python_stdlib::os_path;
-use aye_static::{EnvVars, ProcessEnv};
 
+pub use aye_pytest::env::DoctestEnv;
 pub use config::{DoctestConfig, ImportMode};
 
 use crate::context::DoctestContext;
@@ -449,35 +448,6 @@ impl Walk<'_> {
             }
         }
         Reached::Not
-    }
-}
-
-/// The environment variables the recognizer reads.
-#[derive(Debug, Clone, Default)]
-pub struct Env {
-    /// `PYTEST_ADDOPTS`.
-    pub pytest_addopts: Option<String>,
-    /// `PYTHONOPTIMIZE`.
-    pub python_optimize: Option<String>,
-    /// `PY_IGNORE_IMPORTMISMATCH=1`: pytest skips its "import file
-    /// mismatch" check.
-    pub ignore_import_mismatch: bool,
-    /// `PYTEST_PLUGINS`: plugins aye can't read, which may mark items.
-    pub pytest_plugins: Option<String>,
-}
-
-impl Env {
-    /// The variables, as `env` holds them.
-    pub fn of(env: &ProcessEnv) -> Self {
-        Self {
-            pytest_addopts: env.get(EnvVars::PYTEST_ADDOPTS).map(str::to_string),
-            python_optimize: env.get(EnvVars::PYTHONOPTIMIZE).map(str::to_string),
-            ignore_import_mismatch: env.get(EnvVars::PY_IGNORE_IMPORTMISMATCH) == Some("1"),
-            pytest_plugins: env
-                .get(EnvVars::PYTEST_PLUGINS)
-                .filter(|v| !v.trim().is_empty())
-                .map(str::to_string),
-        }
     }
 }
 
@@ -713,7 +683,7 @@ impl DoctestRecognizer {
     /// `pytest`, `test*.txt` files are doctests without a pytest
     /// configuration file too.
     pub fn among(project: &Project<'_>, adapters: &[AdapterName]) -> Result<Self, AdapterError> {
-        Self::with_environment(project, adapters, &Env::of(project.env))
+        Self::with_environment(project, adapters, &DoctestEnv::of(project.env))
     }
 
     /// [`Self::new`] with `PYTEST_ADDOPTS` and `PYTHONOPTIMIZE` given
@@ -734,10 +704,10 @@ impl DoctestRecognizer {
         pytest_addopts: Option<&str>,
         python_optimize: Option<&str>,
     ) -> Result<Self, AdapterError> {
-        let env = Env {
+        let env = DoctestEnv {
             pytest_addopts: pytest_addopts.map(str::to_string),
             python_optimize: python_optimize.map(str::to_string),
-            ..Env::default()
+            ..DoctestEnv::default()
         };
         Self::with_environment(project, adapters, &env)
     }
@@ -747,7 +717,7 @@ impl DoctestRecognizer {
     pub fn with_environment(
         project: &Project<'_>,
         adapters: &[AdapterName],
-        env: &Env,
+        env: &DoctestEnv,
     ) -> Result<Self, AdapterError> {
         let pyproject = project.root.join("pyproject.toml");
         let table = project
