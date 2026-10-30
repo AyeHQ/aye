@@ -118,18 +118,8 @@ fn expressions_for(
     let selection = select(argv, &from_contexts(contexts)).unwrap();
     let text = |e: Option<&aye_select::Expression>| e.map(|e| e.as_str().to_string());
     (
-        text(
-            selection
-                .keyword
-                .as_ref()
-                .or_else(|| selection.own_keyword.get(adapter)),
-        ),
-        text(
-            selection
-                .tags
-                .as_ref()
-                .or_else(|| selection.own_tags.get(adapter)),
-        ),
+        text(selection.keyword_for(&AdapterName::from(adapter.to_owned()))),
+        text(selection.tags_for(&AdapterName::from(adapter.to_owned()))),
     )
 }
 

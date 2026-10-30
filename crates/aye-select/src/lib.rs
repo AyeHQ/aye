@@ -62,11 +62,11 @@
 //! - **An adapter's own expressions and `--deselect`.** The command line's
 //!   `-k` and `-m` apply to every case; when it gives none, each adapter's
 //!   own (pytest's from its `addopts`) apply to that adapter's cases
-//!   ([`Selection::own_keyword`], [`Selection::own_tags`]). The caller may
-//!   also give some adapters an expression and others none (the binary,
-//!   when the framework's arguments can't be read, leaves pytest's cases to
-//!   pytest and gives the others the command line's). `--deselect`
-//!   prefixes ([`Selection::deselect`]) drop the adapter's cases whose ids
+//!   ([`AdapterSelection`]). The caller may also give some adapters an
+//!   expression and others none (the binary, when the framework's
+//!   arguments can't be read, leaves pytest's cases to pytest and gives the
+//!   others the command line's). `--deselect` prefixes
+//!   ([`AdapterSelection::deselect`]) drop the adapter's cases whose ids
 //!   start with one, as strings, as pytest matches node ids (`test_x` also
 //!   drops `test_x2`), but never a `Partial` case, whose id may not be the
 //!   framework's: the framework deselects that one itself.
@@ -105,7 +105,7 @@ mod truth;
 
 pub use expression::{Expression, Kwarg, ParseError, Value};
 pub use order::failed_first;
-pub use selection::{Selected, Selection};
+pub use selection::{AdapterSelection, Selected, Selection};
 pub use selector::{Named, Selector, dotted_reach};
 pub use truth::Truth;
 

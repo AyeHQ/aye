@@ -25,14 +25,39 @@ pub struct Selection {
     pub tags: Option<Expression>,
     /// The ids that failed last time, when running last-failed (`--lf`).
     pub last_failed: Option<HashSet<TestId>>,
-    /// Id prefixes each adapter drops (pytest's `--deselect`), by adapter.
-    pub deselect: BTreeMap<AdapterName, Vec<IdPrefix>>,
-    /// Each adapter's own `-k` (or one the caller chose for its cases),
-    /// for its cases when `keyword` is unset.
-    pub own_keyword: BTreeMap<AdapterName, Expression>,
-    /// Each adapter's own `-m` (or one the caller chose for its cases), for
-    /// its cases when `tags` is unset.
-    pub own_tags: BTreeMap<AdapterName, Expression>,
+    /// What each adapter's cases get beside the command line's: its own
+    /// `-k` and `-m`, and its `--deselect`. An adapter is here only when it
+    /// has one of them.
+    pub adapters: BTreeMap<AdapterName, AdapterSelection>,
+}
+
+/// What one adapter's cases get beside the command line's `-k` and `-m`:
+/// its framework's own (pytest's from its `addopts`), or one the caller
+/// chose for its cases, each for its cases when the command line gives
+/// none, and the id prefixes its framework deselects (pytest's
+/// `--deselect`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdapterSelection {
+    /// Its own `-k`, for its cases when [`Selection::keyword`] is unset.
+    pub keyword: Option<Expression>,
+    /// Its own `-m`, for its cases when [`Selection::tags`] is unset.
+    pub tags: Option<Expression>,
+    /// The id prefixes that drop its cases (pytest's `--deselect`).
+    pub deselect: Vec<IdPrefix>,
+}
+
+impl AdapterSelection {
+    /// Whether a `--deselect` prefix drops the case: its id starts with
+    /// one, as a string, as pytest's `--deselect` matches node ids. A
+    /// `Partial` case's id may not be the framework's, so the framework
+    /// deselects it itself.
+    fn deselects(&self, case: &Case) -> bool {
+        case.certainty != Certainty::Partial
+            && self
+                .deselect
+                .iter()
+                .any(|prefix| prefix.is_prefix_of(&case.id))
+    }
 }
 
 /// The outcome of [`Selection::apply`].
@@ -103,7 +128,7 @@ impl Selection {
         expr: &str,
     ) -> Result<Self, SelectError> {
         if let Some(parsed) = parse_keyword(expr)? {
-            self.own_keyword.insert(adapter.into(), parsed);
+            self.adapters.entry(adapter.into()).or_default().keyword = Some(parsed);
         }
         Ok(self)
     }
@@ -116,7 +141,7 @@ impl Selection {
         expr: &str,
     ) -> Result<Self, SelectError> {
         if let Some(parsed) = parse_tags(expr)? {
-            self.own_tags.insert(adapter.into(), parsed);
+            self.adapters.entry(adapter.into()).or_default().tags = Some(parsed);
         }
         Ok(self)
     }
@@ -136,9 +161,10 @@ impl Selection {
             .filter(|prefix: &IdPrefix| !prefix.is_empty())
             .collect();
         if !prefixes.is_empty() {
-            self.deselect
+            self.adapters
                 .entry(adapter.into())
                 .or_default()
+                .deselect
                 .extend(prefixes);
         }
         self
@@ -157,9 +183,7 @@ impl Selection {
             && self.keyword.is_none()
             && self.tags.is_none()
             && self.last_failed.is_none()
-            && self.deselect.is_empty()
-            && self.own_keyword.is_empty()
-            && self.own_tags.is_empty()
+            && self.adapters.is_empty()
     }
 
     /// The verdict on one case from the selectors and both expressions.
@@ -282,19 +306,16 @@ impl Selection {
             narrow.clear();
         }
         let mut truth = ids;
-        if !truth.is_false() && self.deselects(case.case) {
+        let adapter = self.adapters.get(&case.case.adapter);
+        if !truth.is_false() && adapter.is_some_and(|adapter| adapter.deselects(case.case)) {
             truth = Truth::False;
         }
-        let adapter = &case.case.adapter;
-        if let Some(expr) = self
-            .keyword
-            .as_ref()
-            .or_else(|| self.own_keyword.get(adapter))
+        if let Some(expr) = self.keyword_for(&case.case.adapter)
             && !truth.is_false()
         {
             truth = truth & keyword_truth(expr, case);
         }
-        if let Some(expr) = self.tags.as_ref().or_else(|| self.own_tags.get(adapter))
+        if let Some(expr) = self.tags_for(&case.case.adapter)
             && !truth.is_false()
         {
             truth = truth & tags_truth(expr, case.case);
@@ -309,16 +330,20 @@ impl Selection {
         }
     }
 
-    /// Whether a `--deselect` prefix of the case's adapter drops it: its id
-    /// starts with one, as a string, as pytest's `--deselect` matches node
-    /// ids. A `Partial` case's id may not be the framework's, so the
-    /// framework deselects it itself.
-    fn deselects(&self, case: &Case) -> bool {
-        case.certainty != Certainty::Partial
-            && self
-                .deselect
-                .get(&case.adapter)
-                .is_some_and(|prefixes| prefixes.iter().any(|prefix| prefix.is_prefix_of(&case.id)))
+    /// The `-k` `adapter`'s cases get: the command line's, else the
+    /// adapter's own.
+    pub fn keyword_for(&self, adapter: &AdapterName) -> Option<&Expression> {
+        self.keyword
+            .as_ref()
+            .or_else(|| self.adapters.get(adapter)?.keyword.as_ref())
+    }
+
+    /// The `-m` `adapter`'s cases get: the command line's, else the
+    /// adapter's own.
+    pub fn tags_for(&self, adapter: &AdapterName) -> Option<&Expression> {
+        self.tags
+            .as_ref()
+            .or_else(|| self.adapters.get(adapter)?.tags.as_ref())
     }
 
     /// Whether another positional argument subsumes the one at `at` (an
