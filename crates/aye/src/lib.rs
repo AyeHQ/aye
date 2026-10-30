@@ -228,6 +228,7 @@ mod positional;
 mod printer;
 mod registry;
 mod settings;
+mod stream;
 
 use cli::Command;
 use commands::run::RunEnd;
