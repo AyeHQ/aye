@@ -12,6 +12,7 @@ use aye_events::{
 use crate::summary::{BatchSummary, RunSummary};
 
 use super::Shared;
+use super::maxfail::Share;
 use super::message::Message;
 
 /// The run's side: stamps and delivers records, keeps the summary, and
@@ -65,7 +66,7 @@ pub(super) struct Running {
     adapter: AdapterName,
     cases: u32,
     /// Its share of `maxfail`, and the bad outcomes it reported.
-    maxfail: Option<u32>,
+    share: Share,
     bad: u32,
     /// The lifetimes it started in the log and hasn't finished, innermost
     /// last.
@@ -76,7 +77,7 @@ impl Running {
     /// Whether it reached its own `maxfail`, so the framework stops it and
     /// tears down by itself (see [`Shared::wind_down`]).
     fn finishing(&self) -> bool {
-        self.maxfail.is_some_and(|max| self.bad >= max)
+        self.share.reached(self.bad)
     }
 
     /// Note a lifetime as finished; whether it was open.
@@ -109,7 +110,7 @@ impl Log<'_> {
         self.summary.stopped.get_or_insert(reason);
     }
 
-    pub(super) fn handle(&mut self, message: Message, shared: &Shared<'_>, maxfail: Option<u32>) {
+    pub(super) fn handle(&mut self, message: Message, shared: &Shared<'_>) {
         match message {
             Message::WorkerStarted {
                 worker,
@@ -141,14 +142,14 @@ impl Log<'_> {
                 batch,
                 adapter,
                 cases,
-                maxfail,
+                share,
             } => {
                 self.running.insert(
                     batch,
                     Running {
                         adapter: adapter.clone(),
                         cases,
-                        maxfail,
+                        share,
                         ..Running::default()
                     },
                 );
@@ -202,7 +203,7 @@ impl Log<'_> {
                     _ => {}
                 }
                 self.forward(*record);
-                if bad && maxfail.is_some_and(|max| self.summary.counts.bad() >= max) {
+                if bad && shared.maxfail.reached(self.summary.counts.bad()) {
                     self.summary.stopped_early = true;
                     self.stop(StopReason::Maxfail);
                     shared.wind_down();

@@ -11,7 +11,6 @@
 //! are the crate's `listing.rs`; refinement itself, its `refine.rs`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::AtomicU32;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
@@ -21,7 +20,7 @@ use aye_events::{
     AdapterName, Diagnostic, DiagnosticCode, DiagnosticPath, Event, ProjectPath, Record, Severity,
     Stamper, StopReason, WorkerIndex,
 };
-use aye_protocol::{Policy, Runtime};
+use aye_protocol::Runtime;
 
 use crate::listing::{Listings, Prelisting, Warm, shut_down};
 use crate::options::{Plan, RunnerOptions, Runtimes};
@@ -40,7 +39,7 @@ mod maxfail;
 mod message;
 
 use log::{Log, RunPhase};
-use maxfail::Busy;
+use maxfail::{Busy, MaxfailBudget};
 
 /// Runs plans on workers, and refines files on them.
 #[derive(Debug)]
@@ -176,10 +175,6 @@ impl Runner {
             );
         }
 
-        // `maxfail` 0 is no limit, as in pytest.
-        let mut policy = plan.policy.clone();
-        policy.maxfail = policy.maxfail.filter(|&max| max > 0);
-
         // Batches of executors that list the session keep plan order on
         // each lane, as each pytest-xdist worker runs its tests in order.
         let ordered: HashSet<&AdapterName> = self.runtimes.listing_session().collect();
@@ -200,7 +195,7 @@ impl Runner {
             .min(u32::try_from(batches.len()).unwrap_or(u32::MAX));
         let adapters: HashSet<&AdapterName> = batches.iter().map(|b| &b.spec.adapter).collect();
         let mut spec = self.spec(Vec::new());
-        spec.echo = (!policy.capture).then_some(self.options.echo);
+        spec.echo = (!plan.policy.capture).then_some(self.options.echo);
 
         // The worker kept from refinement is the first lane's, if the run
         // needs its adapter and gives that lane the environment it has.
@@ -255,11 +250,10 @@ impl Runner {
         let shared = Shared {
             queue,
             busy: Mutex::new(HashMap::new()),
-            bad: AtomicU32::new(0),
+            maxfail: MaxfailBudget::new(plan.policy.maxfail),
             phase: Mutex::new(RunPhase::Running),
             spec,
             runtimes: &self.runtimes,
-            policy: &policy,
             plan,
             sessions: &plan.session_files,
             listings: Listings::new(reference.as_ref()),
@@ -295,7 +289,7 @@ impl Runner {
                     shared.kill_interrupted();
                 }
                 match rx.recv_timeout(POLL) {
-                    Ok(message) => log.handle(message, &shared, policy.maxfail),
+                    Ok(message) => log.handle(message, &shared),
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
@@ -327,10 +321,8 @@ struct Shared<'a> {
     queue: Queue,
     /// Workers in a handshake or a batch, to stop when the run stops.
     busy: Mutex<HashMap<WorkerIndex, Busy>>,
-    /// Bad outcomes the lanes have passed on so far. The run stops on its
-    /// own count; lanes read this one to stop taking batches without
-    /// waiting for it, and to size each batch's `maxfail`.
-    bad: AtomicU32,
+    /// `maxfail` across the lanes: the bad outcomes they have passed on.
+    maxfail: MaxfailBudget,
     /// Where the run is: the log thread moves it on as it stops the run,
     /// and a lane whose batch the framework stopped; the lanes read it
     /// before they start anything, and the log for every record.
@@ -339,8 +331,6 @@ struct Shared<'a> {
     /// adapter's ([`Shared::start`]).
     spec: WorkerSpec,
     runtimes: &'a Runtimes,
-    /// The plan's, with `maxfail` 0 made `None`.
-    policy: &'a Policy,
     plan: &'a Plan,
     /// The plan's session files, by adapter.
     sessions: &'a BTreeMap<AdapterName, Vec<ProjectPath>>,

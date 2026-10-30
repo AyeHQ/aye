@@ -10,6 +10,7 @@ use crate::worker::{Incoming, Worker, is_reply, shorten};
 
 use super::Shared;
 use super::crash::Track;
+use super::maxfail::Share;
 use super::message::Message;
 
 /// How a batch ended, as its lane saw it.
@@ -35,15 +36,15 @@ impl Shared<'_> {
         send: &dyn Fn(Message),
     ) {
         let running = worker.as_mut().expect("a worker runs the batch");
-        let maxfail = self.budget();
+        let share = self.maxfail.share();
         send(Message::BatchStarted {
             worker: lane,
             batch: batch.id,
             adapter: batch.spec.adapter.clone(),
             cases: u32::try_from(batch.spec.ids.len()).unwrap_or(u32::MAX),
-            maxfail,
+            share,
         });
-        let end = self.run_batch(lane, running, batch, maxfail, send);
+        let end = self.run_batch(lane, running, batch, share, send);
         let interrupted = self.idle(lane);
         match end {
             End::Done { status, track } => {
@@ -53,8 +54,7 @@ impl Shared<'_> {
                     // pytest ends its session there; so does the run.
                     self.framework_stopped();
                 }
-                let cut =
-                    interrupted || verdict.stop || maxfail.is_some_and(|max| track.bad >= max);
+                let cut = interrupted || verdict.stop || share.reached(track.bad);
                 send(Message::BatchFinished {
                     worker: lane,
                     batch: batch.id,
@@ -126,17 +126,17 @@ impl Shared<'_> {
         self.execute(lane, worker, &batch, send);
     }
 
-    /// Run `batch` on `worker`, with `maxfail` its share of the run's.
+    /// Run `batch` on `worker`, with its `share` of the run's `maxfail`.
     fn run_batch(
         &self,
         lane: WorkerIndex,
         worker: &mut Worker,
         batch: &Assigned,
-        maxfail: Option<u32>,
+        share: Share,
         send: &dyn Fn(Message),
     ) -> End {
-        let mut policy = self.policy.clone();
-        policy.maxfail = maxfail;
+        let mut policy = self.plan.policy.clone();
+        policy.maxfail = share.limit();
         let mut context = self.plan.context(&batch.spec.adapter);
         context.ran_ids = batch.spec.origin.ran().to_vec();
         let request = Request::Run(Batch {
@@ -162,7 +162,7 @@ impl Shared<'_> {
             match worker.recv() {
                 Incoming::Line(WorkerLine::Record(mut record)) => {
                     track.see(&record.event);
-                    if maxfail.is_some_and(|max| track.bad >= max) {
+                    if share.reached(track.bad) {
                         self.ends_by_itself(lane);
                     }
                     record.envelope.worker = Some(lane);

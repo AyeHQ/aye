@@ -8,6 +8,7 @@ use aye_events::{
 use crate::summary::{BatchEnd, Crash};
 
 use super::batch::Verdict;
+use super::maxfail::Share;
 
 /// What lanes tell the run.
 #[derive(Debug)]
@@ -29,7 +30,7 @@ pub(super) enum Message {
         adapter: AdapterName,
         cases: u32,
         /// The batch's share of `maxfail`.
-        maxfail: Option<u32>,
+        share: Share,
     },
     /// From a worker, or made for a test a crash interrupted.
     Record(Box<Record>),

@@ -97,7 +97,7 @@ impl Shared<'_> {
                 return;
             }
         }
-        while !self.exhausted()
+        while !self.maxfail.exhausted()
             && let Some(batch) = self
                 .queue
                 .take(lane, if one { None } else { adapter.as_ref() })
