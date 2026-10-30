@@ -1,27 +1,26 @@
 //! One run, from its settings ([`RunSettings`]): collection, selection, the
 //! runner and the reporters, wired around the event stream.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use aye_adapter::Project;
 use aye_collect::{Collector, Options};
 use aye_config::OutputFormat;
 use aye_events::{
-    AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, Event, ExitCode,
-    ProjectPath, RunId, SCHEMA_VERSION, Severity, Stamper, StopReason, TestId,
+    Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, Event, RunId, SCHEMA_VERSION,
+    Severity, Stamper, StopReason,
 };
-use aye_fs::{StateBucket, StateDir, normalize_absolute, root_relative};
+use aye_fs::{StateBucket, StateDir, root_relative};
 use aye_history::{History, RunWriter};
 use aye_protocol::Refiner;
 use aye_provision::EnvironmentFingerprint;
 use aye_runner::{Echo, Plan, Runner, RunnerOptions};
-use aye_select::Selection;
 use aye_static::EnvVars;
 
 use crate::error::AyeError;
@@ -31,10 +30,20 @@ use crate::registry;
 use crate::settings::RunSettings;
 use crate::stream::{Here, Keep, OneConftestError, OneModuleErrors, Remember, Stream, reporters};
 
+mod collect;
 mod exit;
+mod interrupt;
+mod plan;
+mod reach;
+pub(crate) mod select;
 
+use collect::Pace;
 pub(crate) use exit::{Errors, RunEnd};
 use exit::{RunStage, RunVerdict};
+use interrupt::install_interrupt;
+use plan::{requested_ids, session_files};
+use reach::{Named, Reach, broken_conftest_dirs, dotted_reach, explained_by_a_conftest};
+use select::not_found_message;
 
 /// Run what `settings` ask for, and say how it ended ([`RunEnd`]), or why
 /// it couldn't start: a JUnit report that can't be written, before any
@@ -424,235 +433,6 @@ pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> Result<RunEnd,
     ))
 }
 
-/// What the positional arguments reach when some of them aren't paths
-/// (dotted names, keys): collection then walks the whole project to
-/// resolve them, and refinement reports on all of it, its sessions
-/// starting from the framework's default (the context the adapters
-/// prepared saw only the path arguments). A diagnostic about a place the
-/// user's run never meets is not the run's: `pytest <the paths and the
-/// selected files>` wouldn't report it. With no positional argument, or
-/// only paths, collection walked only what the run reaches.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Reach {
-    /// The path arguments, absolute, spelled from the root.
-    paths: Vec<PathBuf>,
-    /// The paths the user's run starts from: each path argument, and the
-    /// files of the collected cases each other argument selects, in the
-    /// order of the arguments, each once
-    /// ([`aye_protocol::BatchContext::selected_paths`]).
-    selected: Vec<PathBuf>,
-    /// The arguments that aren't paths, as given: dotted names and keys.
-    words: Vec<String>,
-    /// Whether some argument named nothing: an error collection reported
-    /// elsewhere may be why, and is kept.
-    unmatched: bool,
-}
-
-impl Reach {
-    /// `None` when every positional argument is a path, or there is none.
-    fn of(positionals: &[Positional], root: &Path, cases: &[Case]) -> Option<Self> {
-        if positionals.iter().all(|p| p.path.is_some()) {
-            return None;
-        }
-        let at_root = |relative: &str| normalize_absolute(&root.join(relative));
-        let mut paths = Vec::new();
-        let mut words = Vec::new();
-        let mut selected: Vec<PathBuf> = Vec::new();
-        let mut seen: HashSet<PathBuf> = HashSet::new();
-        for positional in positionals {
-            if let Some(path) = &positional.path {
-                let path = at_root(&root_relative(path, root));
-                paths.push(path.clone());
-                if seen.insert(path.clone()) {
-                    selected.push(path);
-                }
-                continue;
-            }
-            words.push(positional.selector.clone());
-            let one = Selection::default().with_ids([positional.selector.as_str()]);
-            for case in cases {
-                if one.truth(case).is_false() {
-                    continue;
-                }
-                let file = at_root(case.id.path().as_str());
-                if seen.insert(file.clone()) {
-                    selected.push(file);
-                }
-            }
-        }
-        Some(Self {
-            paths,
-            words,
-            selected,
-            unmatched: false,
-        })
-    }
-
-    /// Whether a diagnostic collection reported is the run's. A `skipped`
-    /// info (a module or directory the framework skipped, which the
-    /// summaries count as a skip) is when a path argument holds it, or lies
-    /// in it, or a dotted name reaches it ([`dotted_reach`]): what keys
-    /// select are tests, and a skipped module has none. A `usage-error` on
-    /// a file (a conftest that failed at start-up in refinement's session)
-    /// is when it lies in a path argument, or its directory holds a path
-    /// the run starts from (as `pytest <those paths>` loads it first), or
-    /// some argument named nothing. Everything else is the run's.
-    fn keeps(&self, root: &Path, diagnostic: &Diagnostic) -> bool {
-        let at = || normalize_absolute(&root.join(diagnostic.path.as_str()));
-        match (diagnostic.severity, &diagnostic.code) {
-            (Severity::Info, DiagnosticCode::Skipped) => {
-                let at = at();
-                self.paths
-                    .iter()
-                    .any(|path| at.starts_with(path) || path.starts_with(&at))
-                    || self
-                        .words
-                        .iter()
-                        .any(|word| dotted_reach(word, diagnostic.path.as_str()) != Named::Nothing)
-            }
-            (Severity::Error, DiagnosticCode::UsageError) if !diagnostic.path.is_nowhere() => {
-                if self.unmatched {
-                    return true;
-                }
-                let at = at();
-                let dir = if at.is_dir() {
-                    at.as_path()
-                } else {
-                    at.parent().unwrap_or(&at)
-                };
-                self.paths.iter().any(|path| at.starts_with(path))
-                    || self.selected.iter().any(|path| path.starts_with(dir))
-            }
-            _ => true,
-        }
-    }
-}
-
-/// The directories of the conftests collection reported an error for (a
-/// `conftest.py` that failed to load, `registry::is_conftest`), relative to
-/// the root, each with its trailing `/` (the root's is empty).
-fn broken_conftest_dirs(diagnostics: &[Diagnostic]) -> Vec<&str> {
-    diagnostics
-        .iter()
-        .filter(|d| d.severity == Severity::Error && registry::is_conftest(d.path.as_str()))
-        .map(|d| &d.path.as_str()[..d.path.as_str().len() - "conftest.py".len()])
-        .collect()
-}
-
-/// Whether a diagnostic is collection's `no-tests` note on a file below a
-/// conftest that failed to load (`broken`, from [`broken_conftest_dirs`]):
-/// the framework found no tests there because of it, which the conftest's
-/// error says (an initial one's session runs without the tests below it;
-/// another fails its directory), so the note, which says only that the file
-/// has none, is left out.
-fn explained_by_a_conftest(broken: &[&str], diagnostic: &Diagnostic) -> bool {
-    diagnostic.severity == Severity::Info
-        && diagnostic.code == DiagnosticCode::NoTests
-        && broken
-            .iter()
-            .any(|dir| diagnostic.path.as_str().starts_with(dir))
-}
-
-/// What a dotted name names of a path collection reported skipped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Named {
-    Nothing,
-    /// Something the skip holds or that holds it, but not the name's
-    /// whole: tests of a skipped module (`mod.test_x`), a module in a
-    /// skipped directory. pytest counts the skip and says it found no such
-    /// test.
-    Part,
-    /// The skipped module or package itself, or a package holding it:
-    /// pytest counts the skip, and nothing is missing.
-    Whole,
-}
-
-/// How the dotted name `word` (`pkg.mod.Class.test`, read from the root as
-/// `aye_select::Selector` reads one: `pkg/mod.py` then the names in it, or
-/// the package `pkg/mod`; `__init__` left out) reaches `path`, which
-/// collection reported skipped (a module, or a directory a conftest
-/// skipped), relative to the root. A word that isn't a dotted name (a key,
-/// an id) names nothing.
-fn dotted_reach(word: &str, path: &str) -> Named {
-    if word.contains("::") || word.contains('/') {
-        return Named::Nothing;
-    }
-    let parts: Vec<&str> = word.split('.').filter(|part| *part != "__init__").collect();
-    if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
-        return Named::Nothing;
-    }
-    let inside = |inner: &str, outer: &str| {
-        inner
-            .strip_prefix(outer)
-            .is_some_and(|rest| rest.starts_with('/'))
-    };
-    let mut named = Named::Nothing;
-    for k in 1..=parts.len() {
-        let base = parts[..k].join("/");
-        let module = format!("{base}.py");
-        let whole = k == parts.len();
-        if whole && (path == base || path == module || inside(path, &base)) {
-            return Named::Whole;
-        }
-        if path == module || inside(&module, path) || (whole && inside(&base, path)) {
-            named = Named::Part;
-        }
-    }
-    named
-}
-
-/// The ids with parameters the command line names (`path::test[x]`),
-/// relative to the root as collection spells them, each once
-/// ([`aye_protocol::BatchContext::requested_ids`]).
-fn requested_ids(positionals: &[Positional]) -> Vec<TestId> {
-    let mut seen = HashSet::new();
-    positionals
-        .iter()
-        .filter(|p| p.id && p.path.is_some())
-        .filter(|p| {
-            p.selector
-                .split_once("::")
-                .is_some_and(|(_, rest)| rest.contains('['))
-        })
-        .map(|p| p.selector.clone())
-        .filter(|id| seen.insert(id.clone()))
-        .map(TestId::new)
-        .collect()
-}
-
-/// By adapter, the files collection found its tests in (selected or not),
-/// in collection order: the session every worker of an adapter whose
-/// executor lists the session lists before its first batch
-/// ([`Plan::session_files`]). Read from the cases, so a claimed file with
-/// none (one that failed to import) is left out. With dotted names or keys
-/// among the arguments, collection walked the whole project to resolve
-/// them, but the user's run is `pytest <the paths it starts from>`
-/// ([`Reach::selected`], absolute, with the root, as `within`): only the
-/// files in those paths are its session, and listing the others would load
-/// conftests that run never loads (a `test*` directory's, whose hooks
-/// reach every test).
-fn session_files(
-    cases: &[Case],
-    within: Option<(&[PathBuf], &Path)>,
-) -> BTreeMap<AdapterName, Vec<ProjectPath>> {
-    let mut files: BTreeMap<AdapterName, Vec<ProjectPath>> = BTreeMap::new();
-    let mut seen: HashSet<(&AdapterName, &str)> = HashSet::new();
-    for case in cases {
-        let path = case.id.path();
-        let reached = within.is_none_or(|(paths, root)| {
-            let file = normalize_absolute(&root.join(path.as_str()));
-            paths.iter().any(|start| file.starts_with(start))
-        });
-        if reached && seen.insert((&case.adapter, path.as_str())) {
-            files
-                .entry(case.adapter.clone())
-                .or_default()
-                .push(path.to_project_path());
-        }
-    }
-    files
-}
-
 /// Whether a report can be written to `path`: its directory is created, and
 /// the file opened without truncating it.
 fn writable(path: &Path) -> io::Result<()> {
@@ -666,141 +446,6 @@ fn writable(path: &Path) -> io::Result<()> {
         .create(true)
         .open(path)
         .map(drop)
-}
-
-/// pytest's `not found:`, with a word for those who expected a command.
-fn not_found_message(selector: &str) -> String {
-    if matches!(selector, "run" | "test" | "tests") && !selector.contains('/') {
-        format!(
-            "not found: {selector} (aye has no `{selector}` command: `aye` alone runs the tests)"
-        )
-    } else if matches!(selector, "show" | "config") {
-        format!(
-            "not found: {selector} (for `aye {selector}`, put `{selector}` first, before any \
-             option: `aye {selector} …`)"
-        )
-    } else {
-        format!("not found: {selector}")
-    }
-}
-
-/// When collection reports its progress: not before it has taken half a
-/// second, so that a quick collection sends nothing, then at most four times
-/// a second.
-struct Pace {
-    started: Instant,
-    last: Option<Instant>,
-}
-
-impl Pace {
-    const AFTER: Duration = Duration::from_millis(500);
-    const EVERY: Duration = Duration::from_millis(250);
-
-    const fn new(started: Instant) -> Self {
-        Self {
-            started,
-            last: None,
-        }
-    }
-
-    fn due(&mut self) -> bool {
-        let now = Instant::now();
-        if now.duration_since(self.started) < Self::AFTER
-            || self
-                .last
-                .is_some_and(|last| now.duration_since(last) < Self::EVERY)
-        {
-            return false;
-        }
-        self.last = Some(now);
-        true
-    }
-}
-
-/// How long a stop signal before the run (while collecting) may take to
-/// end aye cleanly before it exits anyway: whatever runs then (a walk, an
-/// import in a worker) may not be watching.
-const COLLECTING_GRACE: Duration = Duration::from_millis(1500);
-
-/// Ctrl-C (or SIGTERM, or SIGHUP) stops the run cleanly; a second one
-/// kills every worker, with the processes its tests started, and exits at
-/// once. A signal within [`REPEAT_WINDOW`] of the first is that one
-/// delivered again, not a second request (see [`Presses`]).
-///
-/// Before the run, a stop signal stops collection (`stop` the collector
-/// watches), and aye exits anyway if that takes too long; during the run
-/// (`running`), it stops the run cleanly.
-#[expect(
-    clippy::exit,
-    reason = "a second signal, or a collection that doesn't stop in time, ends aye at once"
-)]
-fn install_interrupt(
-    stop: aye_runner::StopHandle,
-    collecting: Arc<AtomicBool>,
-    running: Arc<AtomicBool>,
-    printer: Printer,
-) {
-    let mut presses = Presses::default();
-    let _ = ctrlc::set_handler(move || match presses.press(Instant::now()) {
-        Press::Stop => {
-            collecting.store(true, Ordering::SeqCst);
-            stop.stop();
-            if !running.load(Ordering::SeqCst) {
-                let stop = stop.clone();
-                let running = Arc::clone(&running);
-                std::thread::spawn(move || {
-                    std::thread::sleep(COLLECTING_GRACE);
-                    if !running.load(Ordering::SeqCst) {
-                        stop.kill();
-                        printer.interrupted();
-                        std::process::exit(i32::from(u8::from(ExitCode::Interrupted)));
-                    }
-                });
-            }
-        }
-        Press::Repeat => {}
-        Press::Kill => {
-            stop.kill();
-            std::process::exit(i32::from(u8::from(ExitCode::Interrupted)));
-        }
-    });
-}
-
-/// How long after the first stop signal another one is the same request
-/// delivered twice: GNU `timeout` signals aye and then its own process
-/// group, aye included, and a terminal and a wrapper passing signals on
-/// (`uv run`) may each deliver one Ctrl-C. Shorter than a person takes to
-/// see that the run is still stopping and ask again.
-const REPEAT_WINDOW: Duration = Duration::from_millis(500);
-
-/// What a stop signal means, by when it arrives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Press {
-    /// The first: stop the run cleanly.
-    Stop,
-    /// Within [`REPEAT_WINDOW`] of the first: the same request again.
-    Repeat,
-    /// Later: a second request, to stop at once.
-    Kill,
-}
-
-/// The stop signals seen so far.
-#[derive(Debug, Default)]
-struct Presses {
-    first: Option<Instant>,
-}
-
-impl Presses {
-    fn press(&mut self, now: Instant) -> Press {
-        match self.first {
-            None => {
-                self.first = Some(now);
-                Press::Stop
-            }
-            Some(first) if now.saturating_duration_since(first) < REPEAT_WINDOW => Press::Repeat,
-            Some(_) => Press::Kill,
-        }
-    }
 }
 
 #[cfg(test)]
