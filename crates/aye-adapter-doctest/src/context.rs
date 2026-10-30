@@ -153,6 +153,8 @@ fn truth(text: &str) -> Option<bool> {
 impl DoctestRecognizer {
     /// The context ([`Recognizer::context`]), built the first time it is
     /// asked for.
+    ///
+    /// [`Recognizer::context`]: aye_adapter::Recognizer::context
     pub(crate) fn doctest_context(&self) -> &DoctestContext {
         self.context.get_or_init(|| DoctestContext::new(self))
     }

@@ -9,11 +9,26 @@
 //! diffs instead of two text blobs. Per-example re-runs and an `--accept`
 //! mode that rewrites expected output in place are planned.
 //!
+//! The Rust half's modules: the recognizer ([`DoctestRecognizer`]: where
+//! collection starts, what it enters and claims, and the cases it makes)
+//! and the context it sends; `[tool.aye.doctest]` as written (`options`)
+//! and resolved over pytest's configuration (`settings`,
+//! [`DoctestConfig`]); a module's doctests, under the name pytest imports
+//! it by, and why it is refined (`module`), and a text file's (`text`);
+//! what the project's files say about `__module__` (`project_scan`) and
+//! what its conftests may do to doctest items (`conftests`); pytest's
+//! collection order, which tells a conftest's "import file mismatch"
+//! (`mismatch`); `DocTestParser` without Python, and the option flags
+//! doctest knows ([`OptionFlag`], `parser`); and `DocTestFinder` read from
+//! the AST (`finder`: a namespace's bindings and what its imports bind,
+//! aliases and wrappers, the checks that refine a file, and the names the
+//! finder knows).
+//!
 //! Depends on: aye-adapter, aye-config (`[tool.aye.doctest]`, where a
 //! setting came from), aye-events, aye-protocol, aye-pytest (pytest's
-//! configuration, read approximately; its conftest rules and module names;
-//! the variables it reads), aye-python-semantic (the `__main__` guard),
-//! aye-python-stdlib (`fnmatch`, `glob`, `os.path`).
+//! configuration, read approximately; its import mode, conftest rules and
+//! module names; the variables it reads), aye-python-semantic (the
+//! `__main__` guard), aye-python-stdlib (`fnmatch`, `os.path`).
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **This crate is the doctest adapter, and it is native**: it maps

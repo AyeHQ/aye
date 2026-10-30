@@ -175,7 +175,7 @@ impl DoctestConfig {
         }
         // Each name pytest accepts is a flag. A configuration that collects
         // nothing isn't checked, and what it names that is no flag is left
-        // out: no recognizer is made of it.
+        // out: `prepare` makes no recognizer of it.
         let mut optionflags = Sourced::new(
             pytest_flags
                 .value
