@@ -66,20 +66,24 @@ catalogue! {
     /// The home directory: `~` in `--junitxml`, and in pytest's paths
     /// outside Windows; where the user's own `site-packages` are, for the
     /// refinement cache's key. Read by the binary, aye-provision and the
-    /// pytest adapter.
+    /// pytest adapter, through aye-python-stdlib's `os.path`.
     HOME;
     /// The home directory where `HOME` isn't set, and on Windows in
     /// pytest's paths, as `ntpath.expanduser` reads it. Read by the binary,
-    /// aye-provision and the pytest adapter.
+    /// aye-provision and the pytest adapter, through aye-python-stdlib's
+    /// `os.path`.
     USERPROFILE;
     /// On Windows, the home directory's drive where `USERPROFILE` isn't
-    /// set, as `ntpath.expanduser` reads it. Read by the pytest adapter.
+    /// set, as `ntpath.expanduser` reads it. Read by the pytest adapter,
+    /// through aye-python-stdlib's `os.path`.
     HOMEDRIVE;
     /// On Windows, the home directory's path where `USERPROFILE` isn't set,
-    /// as `ntpath.expanduser` reads it. Read by the pytest adapter.
+    /// as `ntpath.expanduser` reads it. Read by the pytest adapter, through
+    /// aye-python-stdlib's `os.path`.
     HOMEPATH;
     /// On Windows, the user's name, for `~user` in pytest's paths, as
-    /// `ntpath.expanduser` reads it. Read by the pytest adapter.
+    /// `ntpath.expanduser` reads it. Read by the pytest adapter, through
+    /// aye-python-stdlib's `os.path`.
     USERNAME;
     /// Where Python imports from beside the standard library: the modules
     /// there count as installed for the refinement cache, and the pytest

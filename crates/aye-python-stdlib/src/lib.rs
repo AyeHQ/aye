@@ -13,6 +13,8 @@
 //!   options, which both of those adapters match with.
 //! - [`glob`]: `glob.glob(pattern, recursive=True)`, and the doctest
 //!   adapter's approximation of it.
+//! - [`os_path`]: `os.path.expandvars` and `expanduser`, `posixpath`'s and
+//!   `ntpath`'s, over a lookup of the environment they are given.
 //! - [`unittest`]: unittest's loader rules (`VALID_MODULE_NAME`).
 //!
 //! Owns: the standard library's behaviour, as the adapters read it. Does
@@ -24,4 +26,5 @@
 
 pub mod fnmatch;
 pub mod glob;
+pub mod os_path;
 pub mod unittest;
