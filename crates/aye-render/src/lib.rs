@@ -159,7 +159,7 @@ mod level;
 mod rerun;
 mod show;
 mod text;
-mod words;
+pub mod words;
 
 pub use anstream::ColorChoice;
 pub use github::{GithubAnnotations, github_actions_enabled};

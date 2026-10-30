@@ -1,11 +1,14 @@
 //! The words the renderers share: text cut to a length ([`head`],
 //! [`tail`], [`last_lines`]), counts of things ([`plural`]), durations
-//! ([`spaced`], [`seconds`]), a test's history ([`history`]), and an
-//! outcome's and a phase's names ([`outcome_words`], [`phase`]).
+//! ([`spaced`], [`seconds`]), a test's history ([`history`]), an outcome's
+//! and a phase's names ([`outcome_words`], [`phase`]), and the times `aye
+//! show` says, which the binary's printer reuses ([`utc`], [`rfc3339`],
+//! [`ago`]).
 
 mod duration;
 mod history;
 mod plural;
+mod time;
 mod truncate;
 
 use aye_events::{Outcome, Phase};
@@ -13,6 +16,7 @@ use aye_events::{Outcome, Phase};
 pub(crate) use duration::{millis, seconds, secs, spaced};
 pub(crate) use history::history;
 pub(crate) use plural::plural;
+pub use time::{ago, rfc3339, utc};
 pub(crate) use truncate::{head, last_lines, tail};
 
 /// An outcome as words: `passed`, `expected failure`.

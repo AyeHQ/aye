@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aye_events::{Counts, Event, ExitCode, ProjectPath, Record, WorkerIndex};
 use aye_history::RunMeta;
+use aye_render::words::ago;
 use aye_render::{ShowContext, ShowMode};
 use aye_stream::{FileChange, ItemKind, RecordIndex, RunIndex, RunItem};
 
@@ -132,20 +133,6 @@ pub(super) fn context(
         run: meta.number(),
         ago: (meta.finished_ms > 0).then(|| ago(now_ms, meta.finished_ms)),
         stale: stale.iter().cloned().collect(),
-    }
-}
-
-/// How long before `now_ms` the time `then_ms` was (both in milliseconds
-/// since the Unix epoch): `just now` (under a minute, or later than now),
-/// `2 min ago`, `3 h ago`, `1 day ago`, `2 days ago`.
-pub(super) fn ago(now_ms: u64, then_ms: u64) -> String {
-    let secs = now_ms.saturating_sub(then_ms) / 1000;
-    match secs {
-        ..60 => "just now".to_owned(),
-        60..3_600 => format!("{} min ago", secs / 60),
-        3_600..86_400 => format!("{} h ago", secs / 3_600),
-        86_400..172_800 => "1 day ago".to_owned(),
-        _ => format!("{} days ago", secs / 86_400),
     }
 }
 

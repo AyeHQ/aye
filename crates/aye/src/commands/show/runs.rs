@@ -1,5 +1,6 @@
 //! `aye show --runs`: the stored runs, a line each, in text or JSON
-//! ([`list_runs`]), with the dates they say ([`utc`], [`rfc3339`]).
+//! ([`list_runs`]), with the dates aye-render's words say
+//! (`aye_render::words::{utc, rfc3339}`).
 
 use std::io::{self, Write as _};
 use std::time::Duration;
@@ -8,6 +9,7 @@ use aye_config::OutputFormat;
 use aye_events::Counts;
 use aye_history::{RunMeta, RunStore};
 use aye_render::summary_words;
+use aye_render::words::{rfc3339, utc};
 use aye_stream::Extra;
 
 use super::no_run;
@@ -108,42 +110,4 @@ pub(super) fn counts(counts: &Counts, extra: &Extra) -> Vec<(&'static str, u32)>
     .into_iter()
     .filter(|(_, n)| *n > 0)
     .collect()
-}
-
-/// `2026-10-15 12:34:56 UTC`.
-pub(super) fn utc(ms: u64) -> String {
-    let (date, time) = civil(ms);
-    format!("{date} {time} UTC")
-}
-
-/// `2026-10-15T12:34:56Z`.
-pub(super) fn rfc3339(ms: u64) -> String {
-    let (date, time) = civil(ms);
-    format!("{date}T{time}Z")
-}
-
-/// The date and time of `ms` milliseconds after the Unix epoch, in UTC:
-/// `2026-10-15` and `12:34:56` (Howard Hinnant's `civil_from_days`).
-pub(super) fn civil(ms: u64) -> (String, String) {
-    let secs = ms / 1000;
-    let days = i64::try_from(secs / 86_400).unwrap_or(i64::MAX / 2);
-    let of_day = secs % 86_400;
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    (
-        format!("{year:04}-{month:02}-{day:02}"),
-        format!(
-            "{:02}:{:02}:{:02}",
-            of_day / 3600,
-            of_day % 3600 / 60,
-            of_day % 60
-        ),
-    )
 }

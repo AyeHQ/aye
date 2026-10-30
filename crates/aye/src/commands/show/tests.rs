@@ -9,17 +9,7 @@ use aye_events::{
 use aye_stream::{FileChange, ItemIndex};
 
 use super::choose::{closest, distance};
-use super::feed::ago;
-use super::runs::{rfc3339, utc};
 use super::*;
-
-#[test]
-fn dates_are_utc() {
-    assert_eq!(utc(0), "1970-01-01 00:00:00 UTC");
-    assert_eq!(rfc3339(1_792_091_602_130), "2026-10-15T19:13:22Z");
-    assert_eq!(rfc3339(951_782_400_000), "2000-02-29T00:00:00Z");
-    assert_eq!(rfc3339(4_107_542_399_000), "2100-02-28T23:59:59Z");
-}
 
 #[test]
 fn digits_are_a_key_like_any_other_unless_a_file() {
@@ -34,23 +24,6 @@ fn digits_are_a_key_like_any_other_unless_a_file() {
     // A file or directory of that name.
     std::fs::create_dir(cwd.join("7")).unwrap();
     assert!(matches!(read(cwd, root, "7"), Wanted::Path(path) if path == "7"));
-}
-
-#[test]
-fn ago_says_how_long_since_the_run_finished() {
-    let then = 1_792_091_602_130;
-    let after = |secs: u64| ago(then + secs * 1000, then);
-    assert_eq!(after(0), "just now");
-    assert_eq!(after(59), "just now");
-    assert_eq!(after(60), "1 min ago");
-    assert_eq!(after(150), "2 min ago");
-    assert_eq!(after(3_599), "59 min ago");
-    assert_eq!(after(3_600), "1 h ago");
-    assert_eq!(after(3 * 3_600 + 59), "3 h ago");
-    assert_eq!(after(86_400), "1 day ago");
-    assert_eq!(after(2 * 86_400 + 1), "2 days ago");
-    // A clock that went back: just now.
-    assert_eq!(ago(then, then + 5_000), "just now");
 }
 
 #[test]
