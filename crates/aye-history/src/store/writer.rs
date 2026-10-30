@@ -14,6 +14,7 @@ use aye_events::{
     ContentDigest, Counts, DiagnosticCode, DiagnosticOrigin, ErrorClass, Event, ProjectPath,
     Record, RunNumber, Severity,
 };
+use aye_stream::Tally;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
@@ -27,8 +28,9 @@ const CLAIMS: u64 = 1000;
 /// Keeps the log of the run fed to it, as a consumer of the stream: each
 /// record is serialized as it arrives, into a buffer handed in chunks to a
 /// thread that compresses them into the log and reads the digests of the
-/// collected files; [`RunWriter::finish`] completes the log, records it as
-/// `last` and applies retention.
+/// collected files, and folded into what the run's summary counts beside
+/// the tests ([`Tally`]); [`RunWriter::finish`] completes the log, records
+/// it as `last` and applies retention.
 ///
 /// Serializing where the records are, rather than moving them to the
 /// thread, keeps their memory where it was allocated: freeing a run's
@@ -40,6 +42,9 @@ pub struct RunWriter {
     keep: usize,
     /// Where the run is, from its claim to the end of the stream.
     state: WriterState,
+    /// What the run's summary counts beside the tests' counts, from every
+    /// record the writer is fed: the summary's `extra`.
+    tally: Tally,
 }
 
 /// Where the run fed to a [`RunWriter`] is: before its `run_started` (with
@@ -115,6 +120,7 @@ impl RunWriter {
             dir: dir.into(),
             keep,
             state: WriterState::Idle,
+            tally: Tally::default(),
         }
     }
 
@@ -148,6 +154,7 @@ impl RunWriter {
 
     /// Takes one record of the run's log.
     pub fn record(&mut self, record: &Record) {
+        self.tally.note(record);
         if let Event::RunStarted {
             collect_only, root, ..
         } = &record.event
@@ -174,11 +181,11 @@ impl RunWriter {
     }
 
     /// The stream has ended: completes the log, writes its summary, with
-    /// `extra` (what the run's summary counts beside the tests' counts, by
+    /// what the run's summary counts beside the tests' counts (`extra`, by
     /// name), and `last`, then deletes what retention doesn't keep. The
     /// run's id (`r81`), when it was kept: a run with nothing to show is
     /// not (its log is deleted, and its number free again).
-    pub fn finish(mut self, extra: BTreeMap<String, u32>) -> io::Result<Option<StoredRunId>> {
+    pub fn finish(mut self) -> io::Result<Option<StoredRunId>> {
         let store = RunStore::new(&self.dir);
         let mut run = match std::mem::replace(&mut self.state, WriterState::Idle) {
             WriterState::Writing(run) => *run,
@@ -213,7 +220,7 @@ impl RunWriter {
         let meta = RunMeta {
             finished_ms: now_ms(),
             files,
-            extra,
+            extra: self.tally.extra().named(),
             ..run.meta
         };
         store.add(&meta)?;

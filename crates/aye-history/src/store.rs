@@ -22,14 +22,15 @@
 //!   `run_started` and the end of the stream), its exit code, counts and
 //!   duration from `run_finished`, what its summary counts beside those
 //!   (`extra`: modules skipped while collecting, failed lifetimes that kept
-//!   no test from running, error diagnostics; the binary hands them over,
-//!   as `aye_stream::Tally` counts them), and the digest of each file
-//!   holding a test it collected (or that collection reported an error on,
-//!   or skipped), read when `collection_finished` arrives, so that `aye
-//!   show` can tell a file that changed since. Written when
-//!   the log is complete, by writing a temporary file and renaming it
-//!   over: a run is in the store once this file exists, so a log being
-//!   written, or left by an aye that was killed, is never shown.
+//!   no test from running, error diagnostics; the writer folds them from
+//!   the stream with `aye_stream::Tally`, as the summaries count them), and
+//!   the digest of each file holding a test it collected (or that
+//!   collection reported an error on, or skipped), read when
+//!   `collection_finished` arrives, so that `aye show` can tell a file that
+//!   changed since. Written when the log is complete, by writing a
+//!   temporary file and renaming it over: a run is in the store once this
+//!   file exists, so a log being written, or left by an aye that was
+//!   killed, is never shown.
 //! - `last`: the id of the run that finished last, replaced the same way
 //!   once its summary is written. Two runs at once each write their own
 //!   files; the one that renames `last` last is `last`, and listed first

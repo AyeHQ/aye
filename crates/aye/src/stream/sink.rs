@@ -1,7 +1,7 @@
 //! Where every record of a run goes once stamped ([`Sink`]): the error
 //! tally, the reporters (the output format's on stdout, GitHub's
 //! annotations, the JUnit report: [`reporters`]), history ([`Remember`])
-//! and the run store ([`Keep`]).
+//! and the run store (`aye_history::RunWriter`).
 //!
 //! Decided (implementation, October 2026):
 //! - **Output.** A stdout reporter that fails (a closed pipe) stops writing
@@ -28,16 +28,16 @@
 //!   (`aye_history::store`) is the stream's last consumer, serializing each
 //!   record once every reporter has it and compressing the log on a thread
 //!   of its own, so the run doesn't wait on it (on `packaging`'s 62,000
-//!   tests, 57 MB of records, the run takes as long). Beside it the binary
-//!   folds what the summaries count beside the tests (`aye_stream::Tally`)
-//!   and hands it to the store with the end of the stream, for `aye show
-//!   --runs`. A run with nothing to show (no test ran and nothing failed
-//!   but the command line's names: a typo in a path) isn't kept, so `last`
-//!   stays the run before it, and its number is free again. `[tool.aye]
-//!   keep-runs` (10) says how many runs are kept. A store that can't be
-//!   written is a warning, never a failed run. History, folded after the
-//!   reporters, first gives each bad outcome its `history` (how the test
-//!   ended before this run), which reporters and the store see.
+//!   tests, 57 MB of records, the run takes as long). It folds what the
+//!   summaries count beside the tests (`aye_stream::Tally`) itself, and
+//!   keeps it beside the log, for `aye show --runs`. A run with nothing to
+//!   show (no test ran and nothing failed but the command line's names: a
+//!   typo in a path) isn't kept, so `last` stays the run before it, and
+//!   its number is free again. `[tool.aye] keep-runs` (10) says how many
+//!   runs are kept. A store that can't be written is a warning, never a
+//!   failed run. History, folded after the reporters, first gives each bad
+//!   outcome its `history` (how the test ended before this run), which
+//!   reporters and the store see.
 
 use std::io::{self, IsTerminal as _};
 use std::path::{Path, PathBuf};
@@ -46,9 +46,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use aye_config::OutputFormat;
 use aye_events::{DiagnosticOrigin, Event, Record};
-use aye_history::{History, RunWriter, StoredRunId};
+use aye_history::{History, RunWriter};
 use aye_render::{GithubAnnotations, JsonLines, Junit, Text, TextOptions};
-use aye_stream::{Consumer, FailOnFinish, StopAfterError, Tally, Tee};
+use aye_stream::{Consumer, FailOnFinish, StopAfterError, Tee};
 
 use super::passes::PreviousOutcome;
 use crate::commands::run::Errors;
@@ -70,7 +70,7 @@ pub(crate) struct Sink<'a> {
     history: Option<Remember<'a>>,
     /// Keeps the run's log for `aye show`: the last consumer of each
     /// record.
-    store: Keep,
+    store: RunWriter,
     /// The error diagnostics carried since the tally was last taken.
     errors: Errors,
     printer: Printer,
@@ -81,7 +81,7 @@ impl<'a> Sink<'a> {
         reporters: Tee<'a>,
         report_failed: Arc<AtomicBool>,
         history: Option<Remember<'a>>,
-        store: Keep,
+        store: RunWriter,
         printer: Printer,
     ) -> Self {
         Self {
@@ -192,36 +192,6 @@ pub(crate) fn reporters<'a>(
         ));
     }
     tee
-}
-
-/// The run store's writer, and what the run's summary counts beside the
-/// tests' counts, which it keeps beside the log (`aye show --runs` words
-/// them as the summary did).
-pub(crate) struct Keep {
-    writer: RunWriter,
-    tally: Tally,
-}
-
-impl Keep {
-    pub(crate) fn new(writer: RunWriter) -> Self {
-        Self {
-            writer,
-            tally: Tally::default(),
-        }
-    }
-
-    fn record(&mut self, record: &Record) {
-        self.tally.note(record);
-        self.writer.record(record);
-    }
-
-    fn dir(&self) -> &Path {
-        self.writer.dir()
-    }
-
-    fn finish(self) -> io::Result<Option<StoredRunId>> {
-        self.writer.finish(self.tally.extra().named())
-    }
 }
 
 /// History as a consumer of the stream, saved in `dir` at the end; and,

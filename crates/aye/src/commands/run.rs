@@ -46,7 +46,7 @@ use crate::error::AyeError;
 use crate::printer::Printer;
 use crate::registry;
 use crate::settings::{JunitTarget, RunSettings};
-use crate::stream::{Keep, Passes, Remember, RerunFromHere, Sink, Stream, reporters};
+use crate::stream::{Passes, Remember, RerunFromHere, Sink, Stream, reporters};
 
 mod collect;
 mod exit;
@@ -203,7 +203,7 @@ fn start<'a>(
             history,
             dir: state.path().to_path_buf(),
         }),
-        Keep::new(writer),
+        writer,
         printer,
     );
     let mut out = Stream::new(stamper, sink, started);

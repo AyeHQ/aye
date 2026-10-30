@@ -73,7 +73,7 @@ fn a_run_is_picked_by_its_number_or_the_start_of_an_old_id() {
         let number = writer.claim();
         writer.record(&started(number));
         writer.record(&Record::new(finished("t.py::test_a", Outcome::Passed)));
-        writer.finish(std::collections::BTreeMap::new()).unwrap();
+        writer.finish().unwrap();
         std::thread::sleep(Duration::from_millis(5));
     }
     // A run stored before runs were numbered.

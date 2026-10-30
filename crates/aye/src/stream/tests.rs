@@ -20,7 +20,7 @@ fn stream_of<'a>(
     reporters: Tee<'a>,
     failed: &Arc<AtomicBool>,
     history: Option<Remember<'a>>,
-    store: Keep,
+    store: RunWriter,
 ) -> Stream<'a> {
     let sink = Sink::new(reporters, Arc::clone(failed), history, store, Printer);
     Stream::new(Stamper::with_run(run), sink, Instant::now())
@@ -68,7 +68,7 @@ fn a_closed_stdout_starves_no_other_reporter() {
             .with(Counting(Arc::clone(&seen))),
         &failed,
         None,
-        Keep::new(RunWriter::new(std::env::temp_dir().join("aye-no-store"), 0)),
+        RunWriter::new(std::env::temp_dir().join("aye-no-store"), 0),
     );
     for _ in 0..5 {
         stream.emit(Event::CollectionStarted);
@@ -95,7 +95,7 @@ fn the_run_store_keeps_every_record_of_the_stream() {
         Tee::new().with(Counting(Arc::clone(&seen))),
         &failed,
         None,
-        Keep::new(RunWriter::new(&runs, 10)),
+        RunWriter::new(&runs, 10),
     );
     stream.emit(Event::RunStarted {
         schema_version: aye_events::SCHEMA_VERSION,
@@ -217,7 +217,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
             history: &mut history,
             dir: state.clone(),
         }),
-        Keep::new(writer),
+        writer,
     );
     stream.emit(Event::RunStarted {
         schema_version: aye_events::SCHEMA_VERSION,
@@ -297,7 +297,7 @@ fn a_report_that_fails_at_the_end_fails_the_run() {
         )),
         &failed,
         None,
-        Keep::new(RunWriter::new(std::env::temp_dir().join("aye-no-store"), 0)),
+        RunWriter::new(std::env::temp_dir().join("aye-no-store"), 0),
     );
     let ended = stream.finish(ExitCode::Ok, Counts::default(), None);
     assert!(failed.load(Ordering::Relaxed));

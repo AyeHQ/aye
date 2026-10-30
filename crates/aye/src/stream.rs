@@ -14,7 +14,7 @@ mod passes;
 mod sink;
 
 pub(crate) use passes::{Passes, RerunFromHere};
-pub(crate) use sink::{Keep, Remember, Sink, reporters};
+pub(crate) use sink::{Remember, Sink, reporters};
 
 /// The run's stream: the stamper of the run's records, which stamps the
 /// binary's own here and the runner's as they come, and the sink every

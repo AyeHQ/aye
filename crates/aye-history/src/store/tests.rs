@@ -76,10 +76,7 @@ fn keep(dir: &Path, keep: usize, records: &[Record]) -> Option<String> {
     for record in records {
         writer.record(record);
     }
-    writer
-        .finish(BTreeMap::new())
-        .unwrap()
-        .map(|id| id.to_string())
+    writer.finish().unwrap().map(|id| id.to_string())
 }
 
 /// The id a run is stored under, from its text.
@@ -208,11 +205,11 @@ fn a_number_another_run_holds_is_skipped() {
     for record in &run("b", project.path(), OUTCOMES) {
         writer.record(record);
     }
-    assert_eq!(writer.finish(BTreeMap::new()).unwrap(), Some(stored("r3")));
+    assert_eq!(writer.finish().unwrap(), Some(stored("r3")));
     for record in &run("c", project.path(), OUTCOMES) {
         other.record(record);
     }
-    assert_eq!(other.finish(BTreeMap::new()).unwrap(), Some(stored("r2")));
+    assert_eq!(other.finish().unwrap(), Some(stored("r2")));
     let store = RunStore::new(&dir);
     assert_eq!(store.log("r3").unwrap(), run("b", project.path(), OUTCOMES));
     assert_eq!(store.log("r2").unwrap(), run("c", project.path(), OUTCOMES));
@@ -237,12 +234,12 @@ fn a_number_claimed_for_a_run_that_isnt_kept_is_free_again() {
     for record in &records {
         writer.record(record);
     }
-    assert_eq!(writer.finish(BTreeMap::new()).unwrap(), None);
+    assert_eq!(writer.finish().unwrap(), None);
     assert_eq!(names(&dir), [] as [String; 0]);
     // Claimed, and the run never started.
     let mut writer = RunWriter::new(&dir, 10);
     assert_eq!(writer.claim(), RunNumber::new(1));
-    assert_eq!(writer.finish(BTreeMap::new()).unwrap(), None);
+    assert_eq!(writer.finish().unwrap(), None);
     assert_eq!(names(&dir), [] as [String; 0]);
     // Claimed, and the run had nothing to show.
     let mut writer = RunWriter::new(&dir, 10);
@@ -250,7 +247,7 @@ fn a_number_claimed_for_a_run_that_isnt_kept_is_free_again() {
     for record in &run("b", project.path(), &[]) {
         writer.record(record);
     }
-    assert_eq!(writer.finish(BTreeMap::new()).unwrap(), None);
+    assert_eq!(writer.finish().unwrap(), None);
     assert_eq!(names(&dir), [] as [String; 0]);
     // So the next run is r1.
     assert_eq!(
@@ -407,7 +404,7 @@ fn two_runs_at_once_each_keep_their_own_log() {
                         std::thread::sleep(Duration::from_millis(2));
                     }
                 }
-                (id, writer.finish(BTreeMap::new()).unwrap().unwrap())
+                (id, writer.finish().unwrap().unwrap())
             })
         })
         .collect();
@@ -560,14 +557,14 @@ fn a_store_unwritable_is_an_error_for_the_caller_to_report() {
     for record in &run("eeee", project.path(), OUTCOMES) {
         writer.record(record);
     }
-    assert!(writer.finish(BTreeMap::new()).is_err());
+    assert!(writer.finish().is_err());
     // Claimed before the run started: no number, and the same error.
     let mut writer = RunWriter::new(dir.join("runs"), 10);
     assert_eq!(writer.claim(), None);
     for record in &run("eeee", project.path(), OUTCOMES) {
         writer.record(record);
     }
-    assert!(writer.finish(BTreeMap::new()).is_err());
+    assert!(writer.finish().is_err());
 }
 
 /// A claim that failed is said only when a run to keep starts after it
@@ -581,7 +578,7 @@ fn a_failed_claim_is_said_only_when_a_run_to_keep_starts() {
     let mut writer = RunWriter::new(dir.join("runs"), 10);
     assert_eq!(writer.claim(), None);
     assert_eq!(writer.claim(), None);
-    assert_eq!(writer.finish(BTreeMap::new()).unwrap(), None);
+    assert_eq!(writer.finish().unwrap(), None);
     let mut writer = RunWriter::new(dir.join("runs"), 10);
     assert_eq!(writer.claim(), None);
     let mut records = run("eeee", project.path(), OUTCOMES);
@@ -591,7 +588,7 @@ fn a_failed_claim_is_said_only_when_a_run_to_keep_starts() {
     for record in &records {
         writer.record(record);
     }
-    assert_eq!(writer.finish(BTreeMap::new()).unwrap(), None);
+    assert_eq!(writer.finish().unwrap(), None);
     let runs = project.path().join("elsewhere/runs");
     let mut records = run("ffff", project.path(), OUTCOMES);
     let again = records[0].clone();
@@ -781,15 +778,48 @@ fn a_run_with_nothing_to_show_leaves_no_trace() {
 fn what_the_summary_counts_beside_the_tests_is_kept() {
     let project = project();
     let dir = project.path().join(".aye/runs");
+    // Two modules skipped while collecting (one said twice), and a failed
+    // teardown that kept no test from running, as the summaries count
+    // them (`aye_stream::Tally`).
+    let skipped = |path: &str| {
+        Event::Diagnostic(Diagnostic {
+            severity: Severity::Info,
+            code: "skipped".into(),
+            path: path.into(),
+            span: None,
+            message: format!("skipped {path}"),
+        })
+    };
+    let teardown = Event::LifetimeFinished {
+        lifetime: "tests/test_a.py::T".into(),
+        failure: Some(Failure {
+            phase: Some(Phase::Teardown),
+            message: "boom".into(),
+            ..Failure::default()
+        }),
+        duration: Duration::ZERO,
+    };
+    let records = run_with(
+        "ffff",
+        project.path(),
+        OUTCOMES,
+        vec![
+            skipped("tests/test_c.py"),
+            skipped("tests/test_d.py"),
+            skipped("tests/test_c.py"),
+            teardown,
+        ],
+        ExitCode::TestsFailed,
+    );
     let mut writer = RunWriter::new(&dir, 10);
-    for record in &run("ffff", project.path(), OUTCOMES) {
+    for record in &records {
         writer.record(record);
     }
     let extra = BTreeMap::from([
         ("teardown_error".to_owned(), 1),
         ("skipped_modules".to_owned(), 2),
     ]);
-    writer.finish(extra.clone()).unwrap();
+    writer.finish().unwrap();
     assert_eq!(RunStore::new(&dir).meta("r1").unwrap().extra, extra);
     // Left out when there is none, and read as none when absent.
     keep(&dir, 10, &run("gggg", project.path(), OUTCOMES));
