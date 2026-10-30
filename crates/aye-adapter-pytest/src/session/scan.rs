@@ -54,7 +54,7 @@ use aye_python_semantic::module_resolver::absolute_imports;
 use aye_python_semantic::sys_path::SysPath;
 use aye_python_stdlib::os_path::normalize_absolute;
 
-use super::plugins::{CONFTEST, PLUGIN_OF_CONFTEST, PLUGIN_OF_MODULE};
+use super::plugins::HookSource;
 use crate::PytestRecognizer;
 use crate::conftest::{self, Summary};
 
@@ -63,7 +63,7 @@ use crate::conftest::{self, Summary};
 pub(crate) struct Scan {
     /// [`conftest::GLOBAL_HOOKS`] implemented by any conftest of the project,
     /// each with what implements it first (for messages).
-    hooks: BTreeMap<String, String>,
+    hooks: BTreeMap<String, HookSource>,
     /// The summaries of test modules that load plugins (kept, since
     /// [`conftest::Supports`] caches by address).
     modules: Vec<Arc<Summary>>,
@@ -75,7 +75,7 @@ pub(crate) struct Scan {
     /// What implements a `pytest_collection_modifyitems` that may add
     /// tests (its module makes items: [`conftest::Summary::makes_items`]),
     /// the first found, for messages.
-    pub(crate) adds_items: Option<String>,
+    pub(crate) adds_items: Option<HookSource>,
 }
 
 /// The session-wide hook that may add tests (finding C16).
@@ -86,7 +86,7 @@ impl PytestRecognizer {
     /// load in this project (and the plugins they load, or test modules
     /// load through `pytest_plugins`, which hook every module collected
     /// after them), each with what implements it first, for messages.
-    pub(crate) fn global_hooks(&self) -> &BTreeMap<String, String> {
+    pub(crate) fn global_hooks(&self) -> &BTreeMap<String, HookSource> {
         &self.scan().hooks
     }
 
@@ -149,7 +149,8 @@ impl PytestRecognizer {
                     self.scan_file(&mut scan, &mut test_bases, &mut base, &dir, &path, &rel);
                 }
             }
-            for summary in self.preparse.iter().chain(&self.outer) {
+            let session = self.preparse.iter().map(|plugin| &plugin.summary);
+            for summary in session.chain(&self.outer) {
                 add_sys_path(&mut scan.sys_path, summary);
             }
             // Modules looked up so far (`-p` plugins) are looked up again,
@@ -166,35 +167,34 @@ impl PytestRecognizer {
             let labelled = self
                 .preparse
                 .iter()
-                .zip(&self.preparse_labels)
-                .map(|(s, label)| (s, *label, *label))
+                .map(|plugin| {
+                    let source = plugin.source.hook_source();
+                    (&plugin.summary, source, source)
+                })
                 .chain(
                     self.outer
                         .iter()
                         .chain(&conftests)
-                        .map(|s| (s, CONFTEST, PLUGIN_OF_CONFTEST)),
+                        .map(|s| (s, HookSource::Conftest, HookSource::PluginOfConftest)),
                 )
-                .chain(
-                    scan.modules
-                        .iter()
-                        .map(|s| (s, PLUGIN_OF_MODULE, PLUGIN_OF_MODULE)),
-                );
+                .chain(scan.modules.iter().map(|s| {
+                    let source = HookSource::PluginOfTestModule;
+                    (s, source, source)
+                }));
             for (summary, own, loaded) in labelled {
                 for (i, expanded) in self.supports.expand(summary, &bases).iter().enumerate() {
                     let exports = self.supports.exports(expanded, &bases);
                     let source = if i == 0 { own } else { loaded };
                     for hook in conftest::GLOBAL_HOOKS {
                         if exports.hooks.contains(hook) {
-                            scan.hooks
-                                .entry(hook.to_string())
-                                .or_insert_with(|| source.to_string());
+                            scan.hooks.entry(hook.to_string()).or_insert(source);
                         }
                     }
                     if exports.makes_items
                         && exports.hooks.contains(MODIFYITEMS)
                         && scan.adds_items.is_none()
                     {
-                        scan.adds_items = Some(source.to_string());
+                        scan.adds_items = Some(source);
                     }
                 }
             }

@@ -180,7 +180,7 @@ use crate::claims::ignore::Ignored;
 use crate::conftest::{self, FixtureDef, MARKING_HOOKS, Summary, fixture_of};
 use crate::marks::ids::IdOptions;
 use crate::marks::{EmptyMark, Mark};
-use crate::session::plugins::{BUILTIN_PLUGINS, PLUGIN_OF_SCOPED_CONFTEST, SCOPED_CONFTEST};
+use crate::session::plugins::{BUILTIN_PLUGINS, HookSource};
 use crate::session::scan::MODIFYITEMS;
 use crate::{PYTEST, SETS};
 use refinement::Refinement;
@@ -259,14 +259,15 @@ impl PytestRecognizer {
         conftests.extend(local.into_iter().map(|(_, summary)| summary));
         // `-p` plugins first, then each conftest's plugins, then the
         // conftests: the order pytest registers their fixtures in.
-        let mut plugins: Vec<(Arc<Summary>, &str)> = Vec::new();
-        for (summary, label) in self.preparse.iter().zip(&self.preparse_labels) {
-            let expanded = self.supports.expand(summary, &bases);
-            plugins.extend(expanded.into_iter().map(|s| (s, *label)));
+        let mut plugins: Vec<(Arc<Summary>, HookSource)> = Vec::new();
+        for plugin in &self.preparse {
+            let expanded = self.supports.expand(&plugin.summary, &bases);
+            let source = plugin.source.hook_source();
+            plugins.extend(expanded.into_iter().map(|s| (s, source)));
         }
         for conftest in &conftests {
             let expanded = self.supports.expand(conftest, &bases).into_iter().skip(1);
-            plugins.extend(expanded.map(|s| (s, PLUGIN_OF_SCOPED_CONFTEST)));
+            plugins.extend(expanded.map(|s| (s, HookSource::PluginOfConftestInScope)));
         }
         let global = self.global_hooks();
         let mut scope = SupportScope {
@@ -282,14 +283,11 @@ impl PytestRecognizer {
             .map(|(s, _)| s)
             .chain(&conftests)
             .find_map(|summary| summary.ini.collection.clone());
-        let labelled = conftests.iter().map(|s| (s, SCOPED_CONFTEST));
+        let labelled = conftests.iter().map(|s| (s, HookSource::ConftestInScope));
         for (summary, source) in plugins.iter().map(|(s, l)| (s, *l)).chain(labelled) {
             let exports = self.supports.exports(summary, &bases);
             for hook in &exports.hooks {
-                scope
-                    .hook_sources
-                    .entry(hook.clone())
-                    .or_insert_with(|| source.to_string());
+                scope.hook_sources.entry(hook.clone()).or_insert(source);
             }
             scope.hooks.extend(exports.hooks.iter().cloned());
             scope.collect_file_touches_py |= exports.collect_file_touches_py;

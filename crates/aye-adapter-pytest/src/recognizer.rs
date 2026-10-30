@@ -23,6 +23,7 @@ use crate::claims::ignore::Ignored;
 use crate::conftest::{Summary, Supports};
 use crate::context::{PytestContext, native_context};
 use crate::predict;
+use crate::session::plugins::SessionPlugin;
 use crate::session::scan::Scan;
 use crate::{PytestConfig, SETS};
 
@@ -35,12 +36,8 @@ pub struct PytestRecognizer {
     pub(crate) supports: Supports,
     /// Project modules `-p NAME` loads (from addopts or `PYTEST_ADDOPTS`),
     /// then those `PYTEST_PLUGINS` names, in order: plugins of the whole
-    /// session.
-    pub(crate) preparse: Vec<Arc<Summary>>,
-    /// What loads each of [`Self::preparse`], for messages:
-    /// [`PLUGIN_P`](crate::session::plugins::PLUGIN_P) or
-    /// [`PLUGIN_ENV`](crate::session::plugins::PLUGIN_ENV).
-    pub(crate) preparse_labels: Vec<&'static str>,
+    /// session, each with what loads it, for messages.
+    pub(crate) preparse: Vec<SessionPlugin>,
     /// Conftests above the project root that pytest loads, outermost first.
     pub(crate) outer: Vec<Arc<Summary>>,
     /// What walking the project once finds (see [`PytestRecognizer::scan`]).

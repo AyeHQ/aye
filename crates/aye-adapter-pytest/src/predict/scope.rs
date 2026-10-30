@@ -10,6 +10,7 @@ use aye_python_semantic::namespace::Namespace;
 use aye_python_stdlib::unittest;
 
 use crate::conftest::{self, FixtureDef, Supports};
+use crate::session::plugins::HookSource;
 
 /// What the support files in scope do.
 #[derive(Debug, Clone, Default)]
@@ -45,11 +46,10 @@ pub(crate) struct SupportScope {
     /// A support file in scope imports or looks up a module of the test
     /// module's name (by literal name).
     pub imports_module: bool,
-    /// What implements each of `hooks` ("a conftest.py in scope", "a -p
-    /// plugin"), for messages.
-    pub hook_sources: BTreeMap<String, String>,
+    /// What implements each of `hooks`, for messages.
+    pub hook_sources: BTreeMap<String, HookSource>,
     /// The same for `global_hooks`.
-    pub global_hook_sources: BTreeMap<String, String>,
+    pub global_hook_sources: BTreeMap<String, HookSource>,
     /// A conftest in scope loads plugins aye can't find while some
     /// conftest puts directories aye can't tell on `sys.path`: a name no
     /// readable definition has (but pytest's own) may be one of their
@@ -59,17 +59,19 @@ pub(crate) struct SupportScope {
 
 impl SupportScope {
     /// What implements `hook`, of those in scope.
-    pub(super) fn hook_source(&self, hook: &str) -> &str {
+    pub(super) fn hook_source(&self, hook: &str) -> HookSource {
         self.hook_sources
             .get(hook)
-            .map_or("a conftest.py in scope", String::as_str)
+            .copied()
+            .unwrap_or(HookSource::ConftestInScope)
     }
 
     /// What implements `hook`, of the session-wide ones.
-    pub(super) fn global_hook_source(&self, hook: &str) -> &str {
+    pub(super) fn global_hook_source(&self, hook: &str) -> HookSource {
         self.global_hook_sources
             .get(hook)
-            .map_or("a conftest.py", String::as_str)
+            .copied()
+            .unwrap_or(HookSource::Conftest)
     }
 }
 

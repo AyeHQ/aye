@@ -61,7 +61,8 @@ impl PytestRecognizer {
     fn added_python_files(&self, dir: &Path) -> Vec<String> {
         // Most projects add none: look without collecting first.
         let adds = |s: &Summary| !s.ini.python_files.is_empty();
-        let any = self.preparse.iter().chain(&self.outer).any(|s| adds(s))
+        let any = self.preparse.iter().any(|plugin| adds(&plugin.summary))
+            || self.outer.iter().any(|s| adds(s))
             || dir
                 .ancestors()
                 .take_while(|d| d.starts_with(&self.root))

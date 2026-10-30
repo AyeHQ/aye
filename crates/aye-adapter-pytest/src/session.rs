@@ -50,7 +50,7 @@ use crate::marks::EmptyMark;
 use crate::marks::ids::IdOptions;
 use crate::predict;
 use crate::{PytestConfig, PytestEnv, PytestRecognizer};
-use plugins::{BUILTIN_PLUGINS, PLUGIN_ENV, PLUGIN_P};
+use plugins::{BUILTIN_PLUGINS, PluginSource, SessionPlugin};
 
 /// Where code imports project modules from: the rootdir (on `sys.path`
 /// under `python -m pytest`), the project root, their `src`, and
@@ -134,19 +134,22 @@ impl PytestRecognizer {
         // `-p` plugins, then `PYTEST_PLUGINS`' (which no `-p no:` blocks).
         let session_plugins: Vec<&String> =
             config.plugins.iter().chain(&config.env_plugins).collect();
-        let (preparse, preparse_labels): (Vec<Arc<Summary>>, Vec<&'static str>) = session_plugins
+        let preparse: Vec<SessionPlugin> = session_plugins
             .iter()
             .enumerate()
             .filter(|(_, name)| !name.starts_with("no:"))
             .filter_map(|(at, name)| {
-                let label = if at < config.plugins.len() {
-                    PLUGIN_P
+                let source = if at < config.plugins.len() {
+                    PluginSource::CommandLine
                 } else {
-                    PLUGIN_ENV
+                    PluginSource::Environment
                 };
-                Some((supports.module(name, &config.rootdir, &bases)?, label))
+                Some(SessionPlugin {
+                    summary: supports.module(name, &config.rootdir, &bases)?,
+                    source,
+                })
             })
-            .unzip();
+            .collect();
         let unseen_plugins = session_plugins
             .iter()
             .enumerate()
@@ -179,7 +182,6 @@ impl PytestRecognizer {
             settings,
             supports,
             preparse,
-            preparse_labels,
             outer,
             scan: OnceLock::new(),
             unseen_plugins,
@@ -277,6 +279,7 @@ impl PytestRecognizer {
         local.reverse();
         self.preparse
             .iter()
+            .map(|plugin| &plugin.summary)
             .chain(&self.outer)
             .chain(&local)
             .cloned()
