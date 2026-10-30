@@ -71,8 +71,8 @@ const EXIT: [(&str, &str, &str); 26] = [
 
 /// An error diagnostic with each code decides the exit code as in 0.0.1:
 /// collection's (before any batch, where a `not-found` names what the
-/// command line asked for) as `run` decides on them before the run, and
-/// a batch's as `run_exit_code` does after it.
+/// command line asked for) as the run decides on them before it runs, and
+/// a batch's as it decides once it ran.
 #[test]
 fn every_code_decides_the_exit_code_as_before() {
     let known: Vec<&str> = EXIT[..25].iter().map(|(code, ..)| *code).collect();

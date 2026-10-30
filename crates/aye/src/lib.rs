@@ -1,4 +1,13 @@
-//! The `aye` binary: argument parsing, wiring, and the adapter registry.
+//! The `aye` binary, as a library: [`main`] reads the command line
+//! (`cli.rs`: which command, and its arguments as clap reads them), the
+//! environment aye started in, once (`environment.rs`), resolves the
+//! command's settings from them and `[tool.aye]`, once and in the order that
+//! decides which usage error wins (`settings.rs`), and runs the command: a
+//! run (`session.rs`, whose exit code `exit.rs` decides), `aye config`
+//! (`config_cmd.rs`) or `aye show` (`show.rs`). What ends aye before a run's
+//! event stream starts is an `AyeError` (`error.rs`), and everything the
+//! binary writes beside the stream goes through its `Printer`
+//! (`printer.rs`). `main.rs` only calls [`main`].
 //!
 //! Holds the static list of adapters the runner knows about, and which of
 //! them a project runs (`registry.rs`); orchestration lives in `aye-runner`,
@@ -7,40 +16,20 @@
 //!
 //! Depends on: every runner crate and every `aye-adapter-*` crate.
 //!
-//! Decided (implementation, October 2026):
+//! Decided (implementation, October 2026), beside what each module says of
+//! its own part:
 //! - **No whole-home runs.** With no path, a run from the home directory or
 //!   a filesystem root is a usage error before anything walks (a home
 //!   directory under git is a project root, and pytest would collect every
 //!   project in it); a path given (`aye .`) runs.
-//! - **Never silent, always stoppable.** While the session prepares (the
-//!   pytest adapter may walk a big tree), a `collecting…` line shows on a
-//!   terminal after half a second (`busy.rs`). Collection then sends
-//!   `collection_progress` (after half a second, at most four a second).
+//! - **Never silent, always stoppable.** While the run's settings resolve
+//!   (preparing the pytest adapter may walk a big tree), a `collecting…`
+//!   line shows on a terminal after half a second (the printer's `Busy`).
+//!   Collection then sends `collection_progress` (after half a second, at
+//!   most four a second).
 //!   The first Ctrl-C before the run stops collection, which ends as
 //!   interrupted (exit 2); if what is running then isn't watching, aye
 //!   exits 2 after a second and a half anyway, its workers killed.
-//! - **Flags** parse as pytest's argparse does where it matters: an option
-//!   given twice keeps its last value, `-x` and `--maxfail` set one value
-//!   (the last wins, 0 is no limit), and `-k`/`-m` take a value starting
-//!   with `-` when it looks like a negative number or holds a space.
-//!   `--output` takes any case, as `[tool.aye] output` does.
-//! - **Two output formats, one scale of detail** (October 2026): `--output
-//!   text` (the default) or `json` (JSON lines), else `[tool.aye] output`.
-//!   The verbosity, the number of `-v` less the number of `-q`, clamped to
-//!   -1..3, shapes either (`aye-render`'s `Text` and `JsonLines`): `-q` the
-//!   summary alone, `-v` what used to be the agent output in JSON, `-vvv`
-//!   everything (the raw event stream in JSON). A batch's policy still
-//!   carries the count unclamped (`Policy::verbosity`).
-//!   `human` and `agent`, the formats' names until then (never published),
-//!   are usage errors that say what to use instead (`text`; `json -v`), on
-//!   the command line and in `[tool.aye]`. `aye config` shows the format at
-//!   its verbosity (`json -v`) and where the format came from.
-//! - **`maxfail`** is the last `-x` or `--maxfail` given, counted across
-//!   workers. One after `--` wins over the command line's, since those
-//!   arguments come last in pytest's (`aye --maxfail 3 -- -x` stops at the
-//!   first failure, as `pytest --maxfail 3 -x` does). Without any, the
-//!   framework's own setting (pytest's `addopts`, `PYTEST_ADDOPTS`) is the
-//!   run's.
 //! - **The arguments after `--`** are the framework's: aye's pytest
 //!   front-end parses them after `addopts` and `PYTEST_ADDOPTS`, as pytest
 //!   would, so those that replace a test run (pytest's `-h`, `-V`, `--co`,
@@ -119,19 +108,6 @@
 //!   the framework reports it `not-found` when it makes no such test rather
 //!   than run the test's other parameters in its place, as it may for ids
 //!   aye worked out itself.
-//! - **Exit codes** come from the stream as well as the counts: pytest's
-//!   `usage-error` (it rejected its arguments, or an initial conftest failed
-//!   to load) exits 4 and `internal-error` 3, whichever batch reports it,
-//!   or collection (aye's pytest front-end runs pytest's collection hooks
-//!   while it lists, where a failing one ends the run before anything runs);
-//!   other error diagnostics, collection's or the run's, exit 2, and 1
-//!   under `--continue-on-collection-errors`, as pytest counts each
-//!   collection error as a failure: also when nothing else runs, and under
-//!   `--co`. A run the framework stopped as interrupted exits 2, and
-//!   `run_finished.stopped` says why a run ended early. A batch the
-//!   framework failed although none of its tests failed (the runner's
-//!   `framework_failed`: a conftest's `session.exitstatus`, pytest-cov's
-//!   `--cov-fail-under`) fails the run (1), as pytest exits 1.
 //! - **A file's collection errors count as pytest counts them.** pytest
 //!   collects a file's `TestCase` classes and its own tests in one
 //!   `Module`, so the unittest and pytest adapters' batches that both load

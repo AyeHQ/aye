@@ -1,5 +1,19 @@
 //! What a run's output is ([`OutputSettings`]), and its format, which `aye
 //! show` takes as a run does ([`format`]).
+//!
+//! Decided (implementation, October 2026):
+//! - **Two output formats, one scale of detail** (October 2026): `--output
+//!   text` (the default) or `json` (JSON lines), else `[tool.aye] output`.
+//!   The verbosity, the number of `-v` less the number of `-q`, clamped to
+//!   -1..3 (`aye-render`'s `Level`), shapes either (`Text` and
+//!   `JsonLines`): `-q` the summary alone, `-v` what used to be the agent
+//!   output in JSON, `-vvv` everything (the raw event stream in JSON). A
+//!   batch's policy still carries the count unclamped
+//!   (`Policy::verbosity`).
+//!   `human` and `agent`, the formats' names until then (never published),
+//!   are usage errors that say what to use instead (`text`; `json -v`), on
+//!   the command line and in `[tool.aye]`. `aye config` shows the format at
+//!   its verbosity (`json -v`) and where the format came from.
 
 use aye_config::{AyeSettings, OutputFormat, Sourced, ValueSource};
 use aye_render::ColorChoice;

@@ -2,6 +2,21 @@
 //! run gathers: the error diagnostics the stream carried ([`Errors`]), the
 //! runner's summary, the cases selected and the tests' counts. The values
 //! are pytest's, and `docs/events.md` ("Exit codes") says what each means.
+//!
+//! Decided (implementation, October 2026):
+//! - **Exit codes** come from the stream as well as the counts: pytest's
+//!   `usage-error` (it rejected its arguments, or an initial conftest failed
+//!   to load) exits 4 and `internal-error` 3, whichever batch reports it,
+//!   or collection (aye's pytest front-end runs pytest's collection hooks
+//!   while it lists, where a failing one ends the run before anything runs);
+//!   other error diagnostics, collection's or the run's, exit 2, and 1
+//!   under `--continue-on-collection-errors`, as pytest counts each
+//!   collection error as a failure: also when nothing else runs, and under
+//!   `--co`. A run the framework stopped as interrupted exits 2, and
+//!   `run_finished.stopped` says why a run ended early. A batch the
+//!   framework failed although none of its tests failed (the runner's
+//!   `framework_failed`: a conftest's `session.exitstatus`, pytest-cov's
+//!   `--cov-fail-under`) fails the run (1), as pytest exits 1.
 
 use aye_events::{Counts, Diagnostic, DiagnosticOrigin, ExitCode};
 use aye_runner::RunSummary;

@@ -1,4 +1,12 @@
 //! Where a run stops ([`resolve`]).
+//!
+//! Decided (implementation, October 2026):
+//! - **`maxfail`** is the last `-x` or `--maxfail` given, counted across
+//!   workers. One after `--` wins over the command line's, since those
+//!   arguments come last in pytest's (`aye --maxfail 3 -- -x` stops at the
+//!   first failure, as `pytest --maxfail 3 -x` does). Without any, the
+//!   framework's own setting (pytest's `addopts`, `PYTEST_ADDOPTS`) is the
+//!   run's.
 
 use aye_adapter::FrameworkDefaults;
 use aye_events::AdapterName;

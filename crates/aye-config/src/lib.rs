@@ -2,7 +2,9 @@
 //! `[tool.aye]`, and provides generic loaders (toml tables, ini sections, the
 //! upward search) that engines use to read their own framework's settings. Every
 //! resolved value remembers where it came from ([`ValueSource`]) for `aye
-//! config`.
+//! config`, which shows a source in a table's row (`pyproject.toml
+//! [tool.aye]`) or beside a setting's name on a header line (`[tool.aye]
+//! output`).
 //!
 //! `[tool.aye]` is read as written, every key optional and each value as
 //! TOML gives it ([`AyeOptions`]), then resolved ([`AyeSettings::resolve`])

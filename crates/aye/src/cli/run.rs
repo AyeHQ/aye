@@ -30,7 +30,8 @@ pub(crate) struct RunArgs {
     pub tests: Vec<String>,
 
     /// Only run tests matching the keyword expression.
-    // Values may start with `-` (`-k -1`); see `Args::check`.
+    // Values may start with `-` (`-k -1`); see
+    // `framework_args::check_expressions`.
     #[arg(short = 'k', value_name = "EXPR", allow_hyphen_values = true)]
     pub keyword: Option<String>,
 

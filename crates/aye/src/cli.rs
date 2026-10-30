@@ -2,6 +2,13 @@
 //! ([`Command`]), each one's arguments ([`RunArgs`], [`ShowArgs`]), and what
 //! they share ([`Verbosity`], [`Color`]). What the arguments mean for a run
 //! is the settings' to say.
+//!
+//! Decided (implementation, October 2026):
+//! - **Flags** parse as pytest's argparse does where it matters: an option
+//!   given twice keeps its last value, `-x` and `--maxfail` set one value
+//!   (the last wins, 0 is no limit), and `-k`/`-m` take a value starting
+//!   with `-` when it looks like a negative number or holds a space.
+//!   `--output` takes any case, as `[tool.aye] output` does.
 
 use std::ffi::OsString;
 use std::path::Path;
