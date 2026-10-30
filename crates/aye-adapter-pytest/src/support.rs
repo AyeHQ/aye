@@ -234,7 +234,7 @@ impl<'a> SysPathVisitor<'_, 'a> {
         if depth > 8 {
             return None;
         }
-        let normal = |path: PathBuf| Some(aye_fs::normalize_absolute(&path));
+        let normal = |path: PathBuf| Some(aye_python_stdlib::os_path::normalize_absolute(&path));
         match expr {
             Expr::Name(name) if name.id.as_str() == "__file__" => Some(self.file.clone()),
             Expr::StringLiteral(literal) => {

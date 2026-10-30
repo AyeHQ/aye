@@ -1,11 +1,22 @@
-//! Python's `os.path`, as the adapters read paths with it: variables and
-//! `~` expanded (`expandvars`, `expanduser`), in `posixpath`'s forms and
-//! `ntpath`'s, over a lookup of the environment they are given
-//! (`ProcessEnv::get`, from the binary), whichever variable a path names.
+//! Python's `os.path`, as the adapters read paths with it: made absolute
+//! lexically ([`abspath`], and [`normalize_absolute`] for a path already
+//! absolute: aye-fs's two normalizers, each kept where it was used), and
+//! variables and `~` expanded (`expandvars`, `expanduser`), in
+//! `posixpath`'s forms and `ntpath`'s, over a lookup of the environment
+//! they are given (`ProcessEnv::get`, from the binary), whichever variable
+//! a path names.
 //!
 //! `expanduser` reads the variables `posixpath` and `ntpath` read, by the
 //! names they read them by. This crate can't name aye-static's `EnvVars`,
 //! which catalogues them.
+
+/// `os.path.abspath(path)`, `cwd` being the current directory: lexical,
+/// no symlink resolved.
+pub use aye_fs::absolute as abspath;
+/// `os.path.abspath`'s folding for a path already absolute, every `..`
+/// removing the component before it: aye's other normalizer, which
+/// [`abspath`] agrees with on absolute paths.
+pub use aye_fs::normalize_absolute;
 
 /// The home directory, to `posixpath.expanduser`.
 const HOME: &str = "HOME";

@@ -378,7 +378,7 @@ fn determine_setup(
     };
     // `absolutepath(os.path.expandvars(rootdir_cmd_arg))`.
     let var = |name: &str| project.env.get(name).map(str::to_string);
-    let rootdir = aye_fs::normalize_absolute(&project.cwd.join(os_path::expandvars(arg, var)));
+    let rootdir = os_path::normalize_absolute(&project.cwd.join(os_path::expandvars(arg, var)));
     if !rootdir.is_dir() {
         return Err(AdapterError::Config(format!(
             "Directory '{}' not found. Check your '--rootdir' option.",
@@ -788,7 +788,7 @@ fn report_path(env: &ProcessEnv, cwd: &Path, value: &str) -> Result<Option<PathB
     }
     let var = |name: &str| env.get(name).map(str::to_string);
     let expanded = os_path::expanduser(&os_path::expandvars(value, var), var);
-    Ok(Some(aye_fs::normalize_absolute(&cwd.join(expanded))))
+    Ok(Some(os_path::normalize_absolute(&cwd.join(expanded))))
 }
 
 /// pytest's doctest options that take no value, and those that take one.

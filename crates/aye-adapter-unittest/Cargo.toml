@@ -13,7 +13,6 @@ authors.workspace = true
 aye-adapter = { workspace = true }
 aye-config = { workspace = true }
 aye-events = { workspace = true }
-aye-fs = { workspace = true }
 aye-protocol = { workspace = true }
 aye-python-stdlib = { workspace = true }
 ruff_python_parser = { workspace = true }

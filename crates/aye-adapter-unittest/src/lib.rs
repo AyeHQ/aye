@@ -16,7 +16,8 @@
 //! lands later behind the services interface in `aye-protocol`.
 //!
 //! Depends on: aye-adapter, aye-config (`[tool.aye.unittest]`, where a
-//! setting came from), aye-events, aye-fs (path algebra), aye-protocol.
+//! setting came from), aye-events, aye-protocol, aye-python-stdlib
+//! (`fnmatch`, `os.path`, unittest's loader rules).
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **The reference is `python -m unittest discover` on Python 3.13**
@@ -289,9 +290,9 @@ use aye_adapter::{
     Setting, SourceFile,
 };
 use aye_events::{AdapterName, AffinityKey, Case, Certainty, ProjectPath, ProjectPathRef, Span};
-use aye_fs::normalize_absolute;
 use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
 use aye_python_stdlib::fnmatch::{SetTranslation, fnmatch};
+use aye_python_stdlib::os_path::normalize_absolute;
 use aye_python_stdlib::unittest::valid_module_name;
 
 pub use config::UnittestConfig;

@@ -10,8 +10,9 @@
 //! mode that rewrites expected output in place are planned.
 //!
 //! Depends on: aye-adapter, aye-config (`[tool.aye.doctest]`, the INI and
-//! TOML loaders, where a setting came from), aye-events, aye-fs (path
-//! algebra), aye-protocol, aye-static (the variables it reads by name).
+//! TOML loaders, where a setting came from), aye-events, aye-fs (pytest's
+//! common ancestor), aye-protocol, aye-python-stdlib (`fnmatch`, `glob`,
+//! `os.path`), aye-static (the variables it reads by name).
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **This crate is the doctest adapter, and it is native**: it maps
@@ -329,6 +330,7 @@ use aye_events::{
 use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
 use aye_python_stdlib::glob;
+use aye_python_stdlib::os_path;
 use aye_static::{EnvVars, ProcessEnv};
 
 pub use config::{DoctestConfig, ImportMode};
@@ -850,7 +852,7 @@ impl DoctestRecognizer {
             return project
                 .args
                 .iter()
-                .map(|a| aye_fs::absolute(project.cwd, a))
+                .map(|a| os_path::abspath(project.cwd, a))
                 .collect();
         }
         if project.cwd == self.config.rootdir && !self.config.testpaths.is_empty() {

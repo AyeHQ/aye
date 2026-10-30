@@ -26,7 +26,8 @@
 //!
 //! Depends on: aye-adapter, aye-config (the INI and TOML loaders, where a
 //! setting came from, the worker count), aye-engine (the modules its
-//! front-end runs on), aye-events, aye-fs (path algebra), aye-protocol,
+//! front-end runs on), aye-events, aye-fs (pytest's common ancestor),
+//! aye-protocol, aye-python-stdlib (`fnmatch`, `glob`, `os.path`),
 //! aye-static (the variables it reads by name). Must not be depended on by
 //! any runner crate; only the binary links it.
 //!
@@ -476,10 +477,10 @@ use aye_adapter::{
 };
 use aye_config::ValueSource;
 use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
-use aye_fs::normalize_absolute;
 use aye_protocol::AdapterContext;
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
 use aye_python_stdlib::glob;
+use aye_python_stdlib::os_path::normalize_absolute;
 use aye_static::{EnvVars, ProcessEnv};
 
 pub use config::{PytestConfig, split_xdist};

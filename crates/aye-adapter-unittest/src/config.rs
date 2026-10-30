@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use aye_adapter::{AdapterError, Setting};
 use aye_config::{AyeSettings, Sourced, ValueSource};
+use aye_python_stdlib::os_path;
 
 /// The table's keys.
 pub(crate) const START_DIRECTORY: &str = "start-directory";
@@ -74,10 +75,10 @@ impl UnittestConfig {
                 shown()
             )));
         }
-        let start = aye_fs::absolute(root, Path::new(&start_directory.value));
+        let start = os_path::abspath(root, Path::new(&start_directory.value));
         let top = top_level_directory.value.as_deref().map_or_else(
             || start.clone(),
-            |top| aye_fs::absolute(root, Path::new(top)),
+            |top| os_path::abspath(root, Path::new(top)),
         );
         for (key, dir) in [(START_DIRECTORY, &start), (TOP_LEVEL_DIRECTORY, &top)] {
             if !dir.is_dir() {

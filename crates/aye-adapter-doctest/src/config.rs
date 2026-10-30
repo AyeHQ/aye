@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use aye_adapter::{AdapterError, Project, Setting};
 use aye_config::{Sourced, ValueSource};
+use aye_python_stdlib::os_path;
 use aye_static::EnvVars;
 
 use crate::parser::known_option;
@@ -643,7 +644,7 @@ impl DoctestConfig {
             .map(Path::to_path_buf)
             .or_else(|| early.config_file.as_ref().map(|f| project.cwd.join(f)));
         let mut ini = if let Some(file) = given {
-            let file = aye_fs::absolute(project.cwd, &file);
+            let file = os_path::abspath(project.cwd, &file);
             let (section, values) = load(&file)?.unwrap_or_default();
             Ini {
                 rootdir: file.parent().map(Path::to_path_buf),
@@ -656,14 +657,14 @@ impl DoctestConfig {
             let paths: Vec<PathBuf> = project
                 .args
                 .iter()
-                .map(|a| aye_fs::absolute(project.cwd, a))
+                .map(|a| os_path::abspath(project.cwd, a))
                 .collect();
             locate(&aye_fs::common_ancestor(project.cwd, &paths))?
         };
         let rootdir = early
             .rootdir
             .as_ref()
-            .map(|dir| aye_fs::absolute(project.cwd, Path::new(dir)))
+            .map(|dir| os_path::abspath(project.cwd, Path::new(dir)))
             .or_else(|| ini.rootdir.clone())
             .unwrap_or_else(|| project.root.to_path_buf());
         let ini_origin = match &ini.file {
@@ -722,7 +723,7 @@ impl DoctestConfig {
         };
         let explicit_text = project.args.iter().any(|arg| {
             arg.extension().is_some_and(|e| e == "txt" || e == "rst")
-                && aye_fs::absolute(project.cwd, arg).is_file()
+                && os_path::abspath(project.cwd, arg).is_file()
         });
         let active = modules.value || !globs.value.is_empty() || explicit_text;
 
@@ -780,13 +781,13 @@ impl DoctestConfig {
             .map_or_else(|| rootdir.clone(), Path::to_path_buf);
         let confcutdir = options.confcutdir.as_ref().map_or_else(
             || inidir.clone(),
-            |dir| aye_fs::absolute(project.cwd, Path::new(dir)),
+            |dir| os_path::abspath(project.cwd, Path::new(dir)),
         );
         let junitxml = options
             .junitxml
             .as_ref()
             .filter(|path| !path.is_empty())
-            .map(|path| aye_fs::absolute(project.cwd, Path::new(path)));
+            .map(|path| os_path::abspath(project.cwd, Path::new(path)));
         let junit = JUNIT_SETTINGS
             .iter()
             .filter_map(|name| {
@@ -823,13 +824,13 @@ impl DoctestConfig {
             ignore: options
                 .ignore
                 .iter()
-                .map(|p| aye_fs::absolute(project.cwd, Path::new(p)))
+                .map(|p| os_path::abspath(project.cwd, Path::new(p)))
                 .collect(),
             ignore_glob: options
                 .ignore_glob
                 .iter()
                 .map(|g| {
-                    aye_fs::absolute(project.cwd, Path::new(g))
+                    os_path::abspath(project.cwd, Path::new(g))
                         .to_string_lossy()
                         .into_owned()
                 })
@@ -847,7 +848,7 @@ impl DoctestConfig {
                 .map(Value::list)
                 .unwrap_or_default()
                 .iter()
-                .map(|p| aye_fs::absolute(&inidir, Path::new(p)))
+                .map(|p| os_path::abspath(&inidir, Path::new(p)))
                 .collect(),
             report,
             ignore_import_errors: options.ignore_import_errors,
