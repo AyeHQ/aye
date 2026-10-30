@@ -73,10 +73,7 @@ fn details_come_at_the_second_level_unless_the_flags_say() {
     let verbosity = |argv: &[&str], details, format| {
         let mut all = vec!["aye show"];
         all.extend(argv);
-        ShowArgs::try_parse_from(all)
-            .unwrap()
-            .level(details, format)
-            .count()
+        level(&ShowArgs::try_parse_from(all).unwrap(), details, format).count()
     };
     // Details: text's -v, JSON's -vv.
     assert_eq!(verbosity(&[], true, OutputFormat::Text), 1);

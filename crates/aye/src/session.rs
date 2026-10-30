@@ -32,16 +32,17 @@ use aye_runner::{Echo, Plan, Runner, RunnerOptions};
 use aye_select::Selection;
 use aye_static::{EnvVars, ProcessEnv};
 
-use crate::args::{Args, Color, Maxfail, Passed, passed, passed_maxfail};
 use crate::busy::Busy;
+use crate::cli::{Color, RunArgs, Verbosity};
 use crate::environment::EnvironmentOptions;
+use crate::framework_args::{Maxfail, Passed, passed, passed_maxfail};
 use crate::registry;
 
 /// A run's inputs, resolved: everything wrong with the command line or the
 /// configuration fails here, before anything is reported. Selectors that
 /// match nothing are found after collection, and reported in the stream.
 pub(crate) struct Session {
-    args: Args,
+    args: RunArgs,
     cwd: PathBuf,
     root: PathBuf,
     /// Each positional argument, resolved.
@@ -89,7 +90,7 @@ impl Positional {
 }
 
 impl Session {
-    pub(crate) fn new(args: Args, env: EnvironmentOptions) -> Result<Self> {
+    pub(crate) fn new(args: RunArgs, env: EnvironmentOptions) -> Result<Self> {
         let cwd = std::env::current_dir().context("cannot read the current directory")?;
         // `.` and `..` are resolved lexically, as pytest's `os.path.abspath`
         // does, before the root is searched for.
@@ -666,7 +667,7 @@ impl Session {
         Policy {
             maxfail: self.maxfail(),
             capture: !self.args.no_capture,
-            verbosity: self.args.verbosity().framework(),
+            verbosity: Verbosity::new(self.args.verbose, self.args.quiet).framework(),
             timeout: self.tool_aye.timeout(),
             keyword: self.args.keyword.clone(),
             tags: self.args.tags.clone(),
@@ -705,15 +706,13 @@ impl Session {
     /// format came from, for `aye config`.
     pub(crate) fn output_shown(&self) -> (String, ValueSource) {
         let Sourced { value, source } = output(&self.args, &self.tool_aye);
-        (
-            format!("{}{}", value.as_str(), self.args.verbosity()),
-            source,
-        )
+        let verbosity = Verbosity::new(self.args.verbose, self.args.quiet);
+        (format!("{}{verbosity}", value.as_str()), source)
     }
 
     fn reporters<'a>(&self, junit: Option<PathBuf>, file_failed: &Arc<AtomicBool>) -> Tee<'a> {
         let mut tee = Tee::new();
-        let verbosity = self.args.verbosity().level();
+        let verbosity = Verbosity::new(self.args.verbose, self.args.quiet).level();
         match self.output() {
             OutputFormat::Text => {
                 let color = match self.args.color {
@@ -1440,8 +1439,9 @@ fn each<T>(
 }
 
 /// See [`Session::maxfail`].
-fn maxfail(args: &Args, defaults: &[(AdapterName, FrameworkDefaults)]) -> Option<u32> {
-    match passed_maxfail(&args.passthrough).unwrap_or_else(|| args.maxfail()) {
+fn maxfail(args: &RunArgs, defaults: &[(AdapterName, FrameworkDefaults)]) -> Option<u32> {
+    let given = || Maxfail::given(args.exitfirst, args.maxfail);
+    match passed_maxfail(&args.passthrough).unwrap_or_else(given) {
         Maxfail::After(n) => Some(n),
         Maxfail::Unlimited => None,
         Maxfail::Unset => first(defaults, |d| d.maxfail).map(MaxFail::get),
@@ -1553,7 +1553,7 @@ fn prepare(adapters: &[Box<dyn Adapter>], project: &Project<'_>) -> Result<Vec<P
 /// output or the selection, which a rerun of one id doesn't need,
 /// `--native`, which does nothing, and `--junitxml`, whose report it would
 /// overwrite.
-fn rerun_args(args: &Args) -> Vec<String> {
+fn rerun_args(args: &RunArgs) -> Vec<String> {
     args.config_file
         .as_ref()
         .map(|file| vec!["-c".to_string(), file.to_string_lossy().into_owned()])
@@ -1614,7 +1614,7 @@ fn junit_options(defaults: &[(AdapterName, FrameworkDefaults)]) -> JunitOptions 
 /// arguments after `--` override it; the framework's own, should aye fail
 /// to parse it, drops no case.
 fn selection<'s>(
-    args: &Args,
+    args: &RunArgs,
     selectors: impl IntoIterator<Item = &'s str>,
     defaults: &[(AdapterName, FrameworkDefaults)],
 ) -> Result<Selection, aye_select::SelectError> {
@@ -1750,7 +1750,7 @@ fn python_request(
 
 /// The output format, and where it came from: `--output`, else
 /// `[tool.aye] output`, else text.
-fn output(args: &Args, tool_aye: &AyeSettings) -> Sourced<OutputFormat> {
+fn output(args: &RunArgs, tool_aye: &AyeSettings) -> Sourced<OutputFormat> {
     if let Some(output) = args.output {
         return Sourced::new(output, ValueSource::Cli("--output"));
     }

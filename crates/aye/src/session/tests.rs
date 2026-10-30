@@ -571,9 +571,9 @@ fn from_contexts(contexts: &[serde_json::Value]) -> Vec<(AdapterName, FrameworkD
         .collect()
 }
 
-fn args(argv: &[&str]) -> Args {
+fn args(argv: &[&str]) -> RunArgs {
     use clap::Parser as _;
-    Args::try_parse_from(std::iter::once("aye").chain(argv.iter().copied())).unwrap()
+    RunArgs::try_parse_from(std::iter::once("aye").chain(argv.iter().copied())).unwrap()
 }
 
 /// The `-k` and `-m` texts static selection applies to the first

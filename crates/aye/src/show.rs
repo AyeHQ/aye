@@ -56,13 +56,13 @@ use aye_events::{
 };
 use aye_history::{Change, RunMeta, RunStore, StoredRunId};
 use aye_render::{
-    ColorChoice, Extra, JsonLines, Keys, Reporter, ShowContext, ShowMode, Text, TextOptions,
+    ColorChoice, Extra, JsonLines, Keys, Level, Reporter, ShowContext, ShowMode, Text, TextOptions,
     summary_words,
 };
 use aye_select::Selection;
 
-use crate::args::{Color, ShowArgs};
-use crate::session;
+use crate::cli::{Color, ShowArgs, Verbosity};
+use crate::{framework_args, session};
 
 /// How many of the closest names a selector naming nothing lists.
 const CLOSEST: usize = 5;
@@ -110,7 +110,8 @@ enum Wanted {
 }
 
 fn show(args: &ShowArgs) -> Result<(), Problem> {
-    args.check().map_err(Problem::Usage)?;
+    framework_args::check_expressions(args.keyword.as_deref(), args.tags.as_deref())
+        .map_err(Problem::Usage)?;
     let cwd = std::env::current_dir()
         .map_err(|err| Problem::Usage(format!("cannot read the current directory: {err}")))?;
     let given: Vec<PathBuf> = args
@@ -199,7 +200,7 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
     let feed = feed(&records, &log, &shown, mode, filtered, meta.exit_code);
     let stale = stale(&meta, &root, &shown);
     let context = context(&meta, &stale, now_ms());
-    let verbosity = args.level(details, format);
+    let verbosity = level(args, details, format);
     let mut out: Box<dyn Reporter> = match format {
         OutputFormat::Text => {
             let color = match args.color {
@@ -239,6 +240,21 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
         Err(err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
         other => Ok(other?),
     }
+}
+
+/// How much the output shows: as a run's ([`Verbosity::level`]) when `-v`
+/// or `-q` is given. Without either, `details` (of tests named, or
+/// `--failed`) come at the detail ladder's second level, which is text's
+/// `-v` and JSON's `-vv`; the list at a run's default.
+fn level(args: &ShowArgs, details: bool, format: OutputFormat) -> Level {
+    let verbosity = Verbosity::new(args.verbose, args.quiet);
+    if details && verbosity.is_unset() {
+        return match format {
+            OutputFormat::Text => Level::Verbose,
+            OutputFormat::Json => Level::VeryVerbose,
+        };
+    }
+    verbosity.level()
 }
 
 /// No run is stored: why, when the configuration says.

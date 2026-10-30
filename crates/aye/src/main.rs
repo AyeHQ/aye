@@ -239,19 +239,19 @@
 
 use std::process;
 
-use clap::Parser;
 use clap::error::ErrorKind;
 
-mod args;
 mod busy;
+mod cli;
 mod config_cmd;
 mod environment;
+mod framework_args;
 mod registry;
 mod session;
 mod show;
 
-use args::{Args, ShowArgs};
 use aye_events::ExitCode;
+use cli::{Command, RunArgs};
 use environment::EnvironmentOptions;
 use session::Session;
 
@@ -260,31 +260,8 @@ use session::Session;
     reason = "aye's own messages, outside the event stream"
 )]
 fn main() -> process::ExitCode {
-    let mut raw: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    // `aye show` shows a stored run, unless `show` is a path: as `config`.
-    if raw.get(1).is_some_and(|a| a == "show") && !std::path::Path::new("show").exists() {
-        raw.remove(1);
-        return match ShowArgs::try_parse_from(raw) {
-            Ok(args) => show::main(&args).into(),
-            Err(err) => {
-                let _ = err.print();
-                match err.kind() {
-                    ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
-                        process::ExitCode::SUCCESS
-                    }
-                    _ => ExitCode::UsageError.into(),
-                }
-            }
-        };
-    }
-    // `aye config` shows the configuration, unless `config` is a path.
-    let show_config =
-        raw.get(1).is_some_and(|a| a == "config") && !std::path::Path::new("config").exists();
-    if show_config {
-        raw.remove(1);
-    }
-    let args = match Args::try_parse_from(raw) {
-        Ok(args) => args,
+    let command = match Command::parse(std::env::args_os().collect()) {
+        Ok(command) => command,
         Err(err) => {
             let _ = err.print();
             return match err.kind() {
@@ -294,7 +271,12 @@ fn main() -> process::ExitCode {
             };
         }
     };
-    if let Err(err) = args.check() {
+    let (args, show_config) = match command {
+        Command::Show(args) => return show::main(&args).into(),
+        Command::Config(args) => (args, true),
+        Command::Run(args) => (args, false),
+    };
+    if let Err(err) = check(&args) {
         eprintln!("aye: error: {err}");
         return ExitCode::UsageError.into();
     }
@@ -316,4 +298,11 @@ fn main() -> process::ExitCode {
         };
     }
     session.run().into()
+}
+
+/// What clap can't check of a run's arguments: aye's own `-k` and `-m`
+/// values, and arguments after `--` that would replace the test run.
+fn check(args: &RunArgs) -> Result<(), String> {
+    framework_args::check_expressions(args.keyword.as_deref(), args.tags.as_deref())?;
+    framework_args::replaced_run(&args.passthrough).map_or(Ok(()), Err)
 }
