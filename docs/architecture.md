@@ -99,7 +99,8 @@ argv ─▶ aye: cli, settings (once, in order)
           ├─▶ aye-provision ──────▶ the interpreter
           ├─▶ registry ───────────▶ the adapters (aye-adapter-*), in priority order
           ├─▶ adapters prepare ───▶ a recognizer each (pytest's config,
-          │                         [tool.aye.unittest], [tool.aye.doctest])
+          │                         read by aye-pytest; [tool.aye.unittest],
+          │                         [tool.aye.doctest])
           ├─▶ aye-collect ────────▶ cases ◀── refine ── worker (imports flagged files)
           ├─▶ aye-select ─────────▶ selected cases
           └─▶ aye-runner ─────────▶ batches ──▶ workers: python -c aye_worker.py
@@ -123,14 +124,15 @@ argv ─▶ aye: cli, settings (once, in order)
 
 The leaf crates (`aye-index`, `aye-static`, `aye-fs`) depend on no aye
 crate. Runner crates never depend on an `aye-adapter-*` crate, nor on the
-framework libraries the adapters share, `aye-python-stdlib` and
-`aye-python-semantic`. Only the binary links the adapters. `aye-runner`,
-`aye-stream`, `aye-render`, `aye-history` and `aye-select` compile no
-Ruff: the runner speaks `aye-protocol` and embeds `aye-engine`, and only
+framework libraries the adapters share, `aye-python-stdlib`,
+`aye-python-semantic` and `aye-pytest`. Only the binary links the adapters,
+and it reads pytest's command line with `aye-pytest`. `aye-runner`,
+`aye-stream`, `aye-render`, `aye-history` and `aye-select` compile no Ruff:
+the runner speaks `aye-protocol` and embeds `aye-engine`, and only
 `aye-collect` and the adapters, through `aye-adapter`, and
-`aye-python-semantic` read Python's syntax. `aye-test`, which the crates' tests
-share, isn't published. Each crate's `lib.rs` states its responsibility,
-boundaries and decisions.
+`aye-python-semantic` read Python's syntax. `aye-test`, which the crates'
+tests share, isn't published. Each crate's `lib.rs` states its
+responsibility, boundaries and decisions.
 
 | Crate | Responsibility |
 |---|---|
@@ -142,7 +144,7 @@ boundaries and decisions.
 | `aye-protocol` | The worker protocol: what the runner sends a worker and what it answers (`Request`, `Reply`, `WorkerLine`), a `Batch`, its `Policy` and its `BatchContext` (the adapter's opaque `AdapterContext` and the keys the binary and the runner add, `context_keys`), a `maxfail` limit (`MaxFail`), refinement's messages (`RefineRequest`, `Refined`), the handshake's modules, borrowed from the binary (`ModuleSource`), in the order a worker installs them (`ModuleSet`), and its executors (`ExecutorSpec`), an adapter's runtime face (`Runtime`: its modules, its executor's `EntryPoint` and its `SessionMode`), the services a worker may provide (`ServiceName`), `PROTOCOL_VERSION`, and the `Refiner` trait the runner implements for collection; `FrameworkStatus`, re-exported. Depends on `aye-events` only. |
 | `aye-engine` | aye's engine: the Python every executor builds on (`python/aye_engine.py`, which every worker installs first: `ENGINE`), the test model, assertion rewriting and the native engine (`aye_model.py`, `aye_rewrite.py`, `aye_native_engine.py`), embedded as `ModuleSource`s with their Python tests; and the vocabulary. Depends on `aye-protocol` only. |
 | `aye-adapter` | What an adapter implements: the `Adapter` trait (which prepares a recognizer, and gives the `Runtime` its workers install and build) and the `Recognizer` trait (a recognizer claims paths as they were `Requested`, named or found, and says whether it `claims_any_name` of a kind), `Claim`, `Recognition` with its `RefineReason`, `SourceFile`, `Project` (with the environment and `[tool.aye]` the binary read), `Setting` with its `ValueSource`, what a framework's configuration says about the run (`FrameworkDefaults`, `JunitDefaults`), `AdapterError`; Ruff's syntax tree, line index and text ranges, re-exported with the `get-size2` pin, so collection and the adapters share one version. Depends on `aye-events`, `aye-protocol`, `aye-config` and `aye-static`. |
-| `aye-config` | The project root, `[tool.aye]` as written (`AyeOptions`) and resolved (`AyeSettings`), its values, typed and shared with the command line where it takes the same one (`WorkerCount`, `OutputFormat`, `Timeout`, `KeepRuns`, `AdapterList`), where a resolved value came from (`ValueSource`, and `Sourced` values, equal by their values) and how `aye config` shows it (in a table's row, `pyproject.toml [tool.aye]`, or beside a setting's name, `[tool.aye] output`), and generic TOML and INI loaders. Paths come from `aye-fs`, adapters' names from `aye-events`. |
+| `aye-config` | The project root, `[tool.aye]` as written (`AyeOptions`) and resolved (`AyeSettings`), its values, typed and shared with the command line where it takes the same one (`WorkerCount`, `OutputFormat`, `Timeout`, `KeepRuns`, `AdapterList`), where a resolved value came from (`ValueSource`, and `Sourced` values, equal by their values) and how `aye config` shows it (in a table's row, `pyproject.toml [tool.aye]`, or beside a setting's name, `[tool.aye] output`), and generic TOML loaders. Paths come from `aye-fs`, adapters' names from `aye-events`. |
 | `aye-collect` | Discovery: what a run collects from (`Targets`: the paths given, the recognizers' roots, or both), the walk into a table of files (each a `FileId`, with what each recognizer, an `AdapterId` in priority order, claims of it, as a `RecognizerSet`), parsing with Ruff's parser, recognizers, refinement and its cache (`refine/cache.rs`: an entry per file and adapter, read only for a file whose `Cacheability` allows it; `refine/key.rs`: its key, typed part by part: the run's inputs, with `aye-provision`'s `EnvironmentFingerprint`, through which alone it reads the interpreter, then the adapter's and the file's), merging, collection's own diagnostics (`CollectDiagnostic`), strict mode, and the files of each adapter's session (`Collection::session_files`, within the `StartPaths` a run starts from). Knows no framework's rules. Depends on `aye-adapter`, `aye-events`, `aye-fs`, `aye-index`, `aye-protocol` and `aye-provision`. |
 | `aye-select` | Selection, in three-valued logic (`Truth`: what static analysis can't decide is `Unknown`, and kept): the positional arguments (`Selector`, each at its `SelectorIndex`, read as a path, an id, a dotted name or a key, and what a word reaches of what collection skipped, `Selector::reaches`, by a `DottedReading`, selection's or the binary's, each named), pytest's `-k`/`-m` language, the command line's `-k` and `-m` and each adapter's own `-k`, `-m` and `--deselect` (`AdapterSelection`), applied to the cases into what is kept (`Selected`: each `SelectedCase` with what of it runs, `RunAs`); last failed (`LastFailed`, each `FailedEntry` a test, or a path that failed to collect); and the order a run's cases run in (`Order`: the arguments', or under `--ff` what failed last time first). Which `-k` and `-m` count for an adapter's cases is the binary's policy, which reads the framework's arguments. Depends on `aye-events` and `aye-index`. |
 | `aye-runner` | The workers (`worker/`: the one spawn path, of the interpreter it is given, and the handshake: aye's engine, the binary's prelude, then the runtime's modules; a worker's states as types, a `LaunchedWorker`, which takes no request, until the handshake makes it a `Worker`; the transport; the process and its group; how a worker ended, its stderr and crash reports; every grace period and poll), scheduling (`schedule/`: the plan's cases grouped by `GroupKey`, their outermost affinity key or their file, and weighed by history, each batch a `BatchSpec`, with its `BatchOrigin`, `Pin` and `Priority`, and the queue that hands them out), the run (`run/`: lanes, each a `Lane` whose workers are each a `LaneWorker`, with its adapter, its `SessionState` and whether it was `Announced`; batches; crash recovery; `maxfail` across lanes, a `MaxfailBudget` of which each batch gets a `Share`; and the log thread, which stamps the log with `aye-events`' `Stamper` and says where the run is, a `RunPhase`), each adapter's runtime found by its name (`Runtimes`), a lane's environment (`LaneEnv`), refinement on workers and the session listing's workers, and the worker (`python/aye_worker.py`). |
@@ -152,9 +154,10 @@ boundaries and decisions.
 | `aye-provision` | The interpreter: what was asked for (`PythonRequest`, from a `RequestSource`), discovery (`find`, over a `DiscoveryEnv`), the `Interpreter` found and its `PythonSource` (which the binary shows as a `ValueSource`); and what the refinement cache's key holds of the environment refinement runs in (`EnvironmentFingerprint`: the interpreter, its venv's layout and installed packages, the variables workers inherit, the framework's arguments, and the `InstalledModules` whose content the key doesn't hold). Later, for the Python matrix (Step 5): environments from uv or paths you supply. Depends on `aye-events`, `aye-fs` and `aye-static`. |
 | `aye-python-stdlib` | CPython's standard library behaviour, as the adapters read it without running Python, each item for every Python aye supports (3.10 to 3.14): `fnmatch` (a pattern's `[...]` sets read as CPython reads them or as the pytest and doctest adapters always have, each adapter's `SetTranslation` named), with pytest's `fnmatch_ex` and name options over it; `glob.glob`, and the doctest adapter's approximation of it (`glob_absolute`); `os.path` (`abspath` and `normalize_absolute`, aye-fs's; `expandvars` and `expanduser`, `posixpath`'s and `ntpath`'s, over a lookup of the environment they are given); `repr` of floats, complex numbers and integer literals; the builtins (those with a `__name__`, what `float()` parses, `str.isdigit` per Unicode database); which `re` patterns surely compile; `str.isidentifier`, exact for ASCII and approximate otherwise; the standard library's modules; and unittest's loader rules (`VALID_MODULE_NAME`, the test method prefix, the bases that bring no tests, the decorators that keep a test, `load_tests`). Where the adapters' copies differed, each behaviour is kept under a name of its own. Depends on `aye-fs`. |
 | `aye-python-semantic` | What a Python module binds, read statically on Ruff's AST, each answer holding only when nothing that runs while the module is imported can change it: namespaces in dict order with each name's bindings and the branches they sit in (`Namespace`), built with a conservative escape analysis of what code aye can't follow may change; names resolved through imports and the builtins where an expression is evaluated (`Lookup`, `Resolved`); static values (`Value`) and whether building one surely succeeds; classes (`Klass`, the kinds of known classes from elsewhere, `External`) and their C3 linearization (`c3::linearize`, which the pytest and unittest adapters share); whether a decorator hands back what it decorates; import-time facts (generators, exclusive bindings, what may skip or raise while a module is imported, what in a body may not run, the `__main__` guard); what a module's code puts on `sys.path` (`SysPath`); and Python's import system on the filesystem (`FileFinder`'s order, where a chain of packages ends). It knows no framework: what the one collecting a module does with it (pytest's marks, hooks and skips) is a `Framework` its adapter gives. Depends on `aye-python-stdlib` and Ruff's AST. |
-| `aye-adapter-pytest` | The pytest adapter: pytest's config discovery, the static recognizer (for claims and `--co --no-refine`), and, embedded, aye's own `pytest` module (`python/native/aye_pytest_shim.py`, which the registry puts in every worker's prelude), the pytest front-end (`aye_pytest_frontend.py`) and its executor (`aye_pytest_native.py`), on aye's engine (`aye-engine`'s `aye_model.py`, `aye_native_engine.py`, `aye_rewrite.py`). |
+| `aye-pytest` | pytest 9.1.1 as a library, for the adapters that need it and the binary: its configuration, found by one of two named rules (`ConfigRules`: `Exact`, pytest's own, `PytestConfig`, the pytest adapter's; `Approximate`, aye 0.0.1's approximation, `ApproximateConfig`, the doctest adapter's until it switches to pytest's), each with the files pytest looks for, how it loads and locates them and how it expands `testpaths`; the configuration file read once, with the raw ini values the front-end's `getini` coerces (`getini`); iniconfig's INI reader (`ini`); what each adapter reads from the environment (`PytestEnv`, `DoctestEnv`); pytest's command line as argparse reads it (`argv`: what an argument list gives of an option, an `ArgValue`, read by one of two named `ShortOptions` sets, the options that replace the test run, and the options aye lifts out for the runner, for its own JUnit report and for the doctest adapter); its conftest rules (the confcutdir, each adapter's initial conftests); its doctest plugin's file rule, option flags and report styles (`doctest`); where a file's packages end and the name pytest imports it under (`pathlib`); what its session doesn't collect and `--deselect` in aye's ids (`session`); and the two adapters' names, which each tests the run for (`names`). Where the adapters' copies differed, each behaviour is kept under a name or a mode of its own. Depends on `aye-adapter`, `aye-config`, `aye-events`, `aye-fs`, `aye-python-stdlib` and `aye-static`. |
+| `aye-adapter-pytest` | The pytest adapter: the static recognizer (for claims and `--co --no-refine`), over pytest's configuration as `aye-pytest`'s exact rules read it, and, embedded, aye's own `pytest` module (`python/native/aye_pytest_shim.py`, which the registry puts in every worker's prelude), the pytest front-end (`aye_pytest_frontend.py`) and its executor (`aye_pytest_native.py`), on aye's engine (`aye-engine`'s `aye_model.py`, `aye_native_engine.py`, `aye_rewrite.py`). |
 | `aye-adapter-unittest` | The unittest adapter: `[tool.aye.unittest]`, discovery as `python -m unittest discover` does it, the static recognizer, and a native executor (`python/aye_engine_unittest.py`). |
-| `aye-adapter-doctest` | The doctest adapter: when doctests are on, the static recognizer of docstrings and text files (pytest's doctest options, `[tool.aye.doctest]`), and a native executor (`python/aye_engine_doctest.py`). |
+| `aye-adapter-doctest` | The doctest adapter: when doctests are on, the static recognizer of docstrings and text files (pytest's doctest options, as `aye-pytest`'s approximate rules read pytest's configuration, and `[tool.aye.doctest]`), and a native executor (`python/aye_engine_doctest.py`). |
 | `aye-test` | Not published: what the crates' tests share. The interpreter they run (`test_python`, by what a test `Needs`: Python 3.10+, with pytest or not; `AYE_TEST_PYTHON`, else the workspace's `.venv`), aye as its own tests run it, in a hermetic environment (`TestContext`), what snapshots of its output leave out (`filters`), its output read back (exit codes, JSON lines, and those lines as the records a log would hold), fixtures (a project written for a test, a copy of one, the examples, a venv without pytest), and the `fnmatch` answers aye 0.0.1's three copies gave, which the adapters pin. Each crate names it by path, as a dev-dependency, which `cargo publish` strips; the adapters' harnesses stay in their crates. Depends on `aye-fs` and `aye-static`. |
 
 The Python package under `python/aye` is only a shim, so that `python -m aye`
@@ -310,8 +313,9 @@ follows is that prediction, which the comparison harness still checks:
 every case it calls exact is plain pytest's.
 
 The recognizer follows pytest 9.1.1: config discovery as in
-`_pytest/config/findpaths.py`, ids as pytest's `IdMaker`, and collection as
-`PyCollector`, `Class` and `UnitTestCase`. Each case gets a certainty:
+`_pytest/config/findpaths.py` (`aye-pytest`'s `ConfigRules::Exact`), ids as
+pytest's `IdMaker`, and collection as `PyCollector`, `Class` and
+`UnitTestCase`. Each case gets a certainty:
 
 - **Exact**: files matching `python_files`, `Test*` classes without
   `__init__`, `test*` functions and inherited methods, unittest `TestCase`
@@ -384,10 +388,11 @@ one `skipped` info, as pytest counts one skip.
 
 Without the doctest adapter in the run (`[tool.aye] adapters = ["pytest"]`),
 the files pytest's own doctest plugin would collect (unless `-p no:doctest`
-blocks it) are claimed as test files and refused with a `usage-error` that
-names the fix, adding `doctest` to the adapters: aye's engine runs doctests
-through the doctest adapter only. `aye config` shows a `doctests` setting
-saying who would collect them.
+blocks it), by the rule the doctest adapter claims its files by
+(`aye-pytest`'s), are claimed as test files and refused with a
+`usage-error` that names the fix, adding `doctest` to the adapters: aye's
+engine runs doctests through the doctest adapter only. `aye config` shows a
+`doctests` setting saying who would collect them.
 
 A hook that makes items in `pytest_collection_modifyitems`
 (`Function.from_parent`) makes every static case partial, since the hook
@@ -538,18 +543,19 @@ then the file, as for pytest's test modules; a text file's is the file.
   `pytest_itemcollected`) or a plugin aye can't read may mark, so that `-k`
   and `-m` keep them.
 
-The adapter reads pytest's configuration itself, approximately: the first
-file holding pytest settings above the paths given, `-c`, `--rootdir` and
-`-o`, then `addopts`, `testpaths`, `norecursedirs`, `pythonpath`,
-`doctest_optionflags`, `doctest_encoding`, `filterwarnings` and the `junit_*`
-settings, and from the options `--doctest-modules`, `--doctest-glob`,
-`--doctest-report`, `--doctest-continue-on-failure`,
+The adapter reads pytest's configuration approximately, by `aye-pytest`'s
+`ConfigRules::Approximate` (aye 0.0.1's rules, kept until it switches to
+pytest's own): the first file holding pytest settings above the paths given,
+`-c`, `--rootdir` and `-o`, then `addopts`, `testpaths`, `norecursedirs`,
+`pythonpath`, `doctest_optionflags`, `doctest_encoding`, `filterwarnings`
+and the `junit_*` settings, and from the options `--doctest-modules`,
+`--doctest-glob`, `--doctest-report`, `--doctest-continue-on-failure`,
 `--doctest-ignore-import-errors`, `--ignore`, `--ignore-glob`, `--deselect`,
 `-W`, `--noconftest`, `--confcutdir`, `--import-mode`, `-x`/`--maxfail` and
 the JUnit options. When it runs, the pytest adapter lifts those five doctest
-options out of what its front-end parses. Not read: conftests' `collect_ignore`,
-what conftests' hooks and plugins do (beyond making cases partial), and
-pytest's `-k` and `-m` from `addopts` or `PYTEST_ADDOPTS`.
+options out of what its front-end parses. Not read: conftests'
+`collect_ignore`, what conftests' hooks and plugins do (beyond making cases
+partial), and pytest's `-k` and `-m` from `addopts` or `PYTEST_ADDOPTS`.
 
 ## Workers and scheduling
 

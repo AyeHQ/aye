@@ -62,33 +62,32 @@
 //!   a failure's detail, and `--doctest-ignore-import-errors` makes a module
 //!   that fails to import a skipped one (not a conftest that fails, as in
 //!   pytest). `[tool.aye.doctest]` rejects unknown keys.
-//! - **pytest's configuration is approximated**, since the pytest adapter's
-//!   isn't shared: the first file holding pytest settings (`pytest.toml`,
+//! - **pytest's configuration is approximated**, by aye-pytest's
+//!   `ConfigRules::Approximate`, aye 0.0.1's rules, until the adapter switches
+//!   to pytest's own: the first file holding pytest settings (`pytest.toml`,
 //!   `.pytest.toml`, `pytest.ini`, `.pytest.ini`, `pyproject.toml` with
 //!   `[tool.pytest]` or `[tool.pytest.ini_options]`, `tox.ini` with
 //!   `[pytest]`, `setup.cfg` with `[tool:pytest]`, in that order in each
-//!   directory) searching up from the common directory of the paths given,
-//!   or the current one, as pytest's `locate_config` does; `-c` and
-//!   `--rootdir` from the command line or the arguments after `--`; `-o`
-//!   overrides (`-o addopts=` from the environment or the command line).
-//!   Read from it: `addopts`, `testpaths` (only when run from the rootdir,
-//!   glob-expanded, as pytest), `norecursedirs`, `pythonpath`,
-//!   `consider_namespace_packages`, `doctest_optionflags`,
-//!   `doctest_encoding`, `filterwarnings` and the `junit_*` settings; from
-//!   the options also `--ignore`, `--ignore-glob`,
-//!   `--collect-in-virtualenv`, `--import-mode`, `--deselect` (whose
-//!   prefixes the context's `deselect` gives as prefixes of aye's ids: the
-//!   binary drops the cases they name and counts them, as pytest deselects
-//!   its doctest items), `-W`/`--pythonwarnings`, `--noconftest`,
-//!   `--confcutdir`, `--doctest-continue-on-failure`, and
-//!   `-x`/`--exitfirst`/`--maxfail` and `--junitxml`/`--junit-xml`/
-//!   `--junitprefix`, which the context gives as the pytest adapter's does
-//!   (`maxfail`, `junitxml`, `junit_prefix`, `junit_*`), for the binary to
-//!   make them the run's when its command line gives none. Not read:
-//!   conftests' `collect_ignore` and their hooks (but see "Marks" below),
-//!   plugins, a `setup.py` as the rootdir; nor pytest's `-k` and `-m` from
-//!   `addopts` or `PYTEST_ADDOPTS`, which a conftest's hooks may make match
-//!   doctest items (by marking them) that aye can't see.
+//!   directory) searching up from the common directory of the paths given, or
+//!   the current one, as pytest's `locate_config` does; `-c` and `--rootdir`
+//!   from the command line or the arguments after `--`; `-o` overrides
+//!   (`-o addopts=` from the environment or the command line). Read from it:
+//!   `addopts`, `testpaths` (only when run from the rootdir, glob-expanded, as
+//!   pytest), `norecursedirs`, `pythonpath`, `consider_namespace_packages`,
+//!   `doctest_optionflags`, `doctest_encoding`, `filterwarnings` and the
+//!   `junit_*` settings; from the options also `--ignore`, `--ignore-glob`,
+//!   `--collect-in-virtualenv`, `--import-mode`, `--deselect` (whose prefixes
+//!   the context's `deselect` gives as prefixes of aye's ids: the binary drops
+//!   the cases they name and counts them, as pytest deselects its doctest
+//!   items), `-W`/`--pythonwarnings`, `--noconftest`, `--confcutdir`,
+//!   `--doctest-continue-on-failure`, and `-x`/`--exitfirst`/`--maxfail` and
+//!   `--junitxml`/`--junit-xml`/`--junitprefix`, which the context gives as
+//!   the pytest adapter's does (`maxfail`, `junitxml`, `junit_prefix`,
+//!   `junit_*`), for the binary to make them the run's when its command line
+//!   gives none. Not read: conftests' `collect_ignore` and their hooks (but
+//!   see "Marks" below), plugins, a `setup.py` as the rootdir; nor pytest's
+//!   `-k` and `-m` from `addopts` or `PYTEST_ADDOPTS`, which a conftest's
+//!   hooks may make match doctest items (by marking them) that aye can't see.
 //! - **Marks**: where a conftest hook may mark doctest items
 //!   (`pytest_collection_modifyitems` in any conftest of the project, as
 //!   pytest calls it for every item; `pytest_itemcollected` in one in the

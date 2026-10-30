@@ -41,14 +41,15 @@ The engine crate (what workers run; the runner embeds it):
 
 - `crates/aye-engine`: aye's engine, in Python (`python/`: `aye_engine.py`, the model, the assertion rewriter, the native engine), standard library only, embedded in the binary (`ENGINE`, which every worker installs first); and the vocabulary's full definitions
 
-Framework libraries (what the adapters share; only the adapter crates depend on them):
+Framework libraries (what the adapters share; only the adapter crates depend on them, and the binary on `aye-pytest`, for pytest's command line):
 
 - `crates/aye-python-stdlib`: CPython's standard library behaviour in Rust (`fnmatch` with both readings of sets named, `glob` and the doctest adapter's approximation, `os.path`, reprs, builtins, `re` patterns, identifiers, the standard library's modules, unittest's loader rules); where the adapters' copies differed, each behaviour kept under a name
 - `crates/aye-python-semantic`: what a Python module binds, read statically on Ruff's AST (namespaces and the escape analysis, names resolved through imports, static values, classes and their C3 linearization, decorator and import-time facts, `sys.path` changes, module resolution); knows no framework, and takes what the one collecting a module does with it as a `Framework` its adapter gives
+- `crates/aye-pytest`: pytest 9.1.1 as a library (its configuration by one of two named `ConfigRules`, `Exact`, the pytest adapter's, and `Approximate`, the doctest adapter's 0.0.1 rules; the configuration file read once, the raw ini values `getini` coerces and iniconfig's INI reader; what each adapter reads from the environment; its command line as argparse reads it, with `ArgValue` and the two named `ShortOptions` sets, and what aye lifts out of it; conftest rules; its doctest plugin's file rule; module names and package roots; the two adapters' names); where the adapters' copies differed, each behaviour kept under a name or a mode
 
 Adapter crates (one framework each, implementing `aye-adapter`; only the binary links them):
 
-- `crates/aye-adapter-pytest`: aye's own `pytest` module, the pytest front-end and its executor (`python/native/`), standard library only; pytest's configuration and the static recognizer (`src/`); referee plain pytest
+- `crates/aye-adapter-pytest`: aye's own `pytest` module, the pytest front-end and its executor (`python/native/`), standard library only; the static recognizer, over pytest's configuration as aye-pytest reads it (`src/`); referee plain pytest
 - `crates/aye-adapter-unittest`: native, standard library only; referee `python -m unittest discover`
 - `crates/aye-adapter-doctest`: native, standard library only; referee pytest's doctest plugin
 
@@ -89,7 +90,7 @@ Cargo manages the Rust dependencies (`Cargo.lock`), and uv manages the Python on
 - The worker, aye's engine and every executor import only the standard library. The pytest front-end and its executor import aye's own `pytest` module, never pytest: nothing aye ships imports pytest.
 - Schema changes that remove or rename a field bump `SCHEMA_VERSION`.
 - `ruff_python_*` crates are pinned exactly. Bump them together, with the MSRV.
-- Rust names an environment variable only through `aye_static::EnvVars` (but for `~`'s expansion as Python does it, in `aye-fs` and `aye-python-stdlib`, which can't depend on `aye-static` and spell the home directory's variables as Python does), and a variable aye starts reading or setting, in Rust or in the Python it sends to workers, joins the catalogue. The binary reads the environment once (`EnvironmentOptions`, over `ProcessEnv::from_process`) and hands it down (an adapter reads `Project.env`, the refinement cache's key `EnvironmentFingerprint.variables`); `clippy.toml` disallows `std::env::var` and its kin everywhere else, but for the tests' own settings, each with an `#[expect]`.
+- Rust names an environment variable only through `aye_static::EnvVars` (but for `~`'s expansion as Python does it, in `aye-fs` and `aye-python-stdlib`, which can't depend on `aye-static` and spell the home directory's variables as Python does), and a variable aye starts reading or setting, in Rust or in the Python it sends to workers, joins the catalogue. The binary reads the environment once (`EnvironmentOptions`, over `ProcessEnv::from_process`) and hands it down (an adapter reads `Project.env`, the pytest and doctest adapters through aye-pytest; the refinement cache's key `EnvironmentFingerprint.variables`); `clippy.toml` disallows `std::env::var` and its kin everywhere else, but for the tests' own settings, each with an `#[expect]`.
 - A lint the code breaks on purpose gets `#[expect(lint, reason = "…")]`, not `#[allow]`.
 - A new crate gets an entry in `release-please-config.json` and, if it is published, in `[workspace.dependencies]` between the `x-release-please` markers; CI checks the first. A crate that isn't published (`aye-test`) is named by path, as a dev-dependency, which `cargo publish` strips.
 

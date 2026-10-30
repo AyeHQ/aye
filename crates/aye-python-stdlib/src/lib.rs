@@ -30,8 +30,8 @@
 //!   test, when a package may define `load_tests`.
 //!
 //! Owns: the standard library's behaviour, as the adapters read it. Does
-//! not own: a framework's rules (pytest's are the pytest and doctest
-//! adapters'), nor what a module binds (aye-python-semantic reads that).
+//! not own: a framework's rules (pytest's are aye-pytest's), nor what a
+//! module binds (aye-python-semantic reads that).
 //!
 //! Depends on: aye-fs, for `os.path`'s lexical forms. Knows no framework
 //! but the standard library's own unittest; only the adapters depend on it.

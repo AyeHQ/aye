@@ -21,7 +21,8 @@
 //! `aye-stream`, presentation in `aye-render`. Linking an adapter here is
 //! the only place an adapter is depended on.
 //!
-//! Depends on: every runner crate and every `aye-adapter-*` crate. Its
+//! Depends on: every runner crate, every `aye-adapter-*` crate, and
+//! aye-pytest, which reads the arguments after `--` as pytest does. Its
 //! end-to-end tests (`tests/`) run the binary, through aye-test.
 //!
 //! What each part decided (implementation, October 2026) is said by the
