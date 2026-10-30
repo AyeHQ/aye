@@ -1,14 +1,45 @@
-//! What a stop signal does to a run ([`install_interrupt`]): the first
-//! stops it cleanly, the same one delivered again is ignored ([`Presses`]),
-//! a later one ends aye at once.
+//! What a stop signal does to a run ([`Signals`], [`install_interrupt`]):
+//! the first stops it cleanly, the same one delivered again is ignored
+//! ([`Presses`]), a later one ends aye at once.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use aye_events::ExitCode;
+use aye_runner::Runner;
 
 use crate::printer::Printer;
+
+/// A run's stop signals, handled from the moment the runner exists:
+/// `stop`, which collection watches, and whether the run has started.
+pub(super) struct Signals {
+    /// Set by the first stop signal: collection stops when it sees it.
+    pub(super) stop: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
+}
+
+impl Signals {
+    /// Ctrl-C stops collection as well as the run: the walk of a big tree
+    /// and refinement can take a while, and must not ignore it.
+    pub(super) fn install(runner: &Runner, printer: Printer) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let running = Arc::new(AtomicBool::new(false));
+        install_interrupt(
+            runner.stop_handle(),
+            Arc::clone(&stop),
+            Arc::clone(&running),
+            printer,
+        );
+        Self { stop, running }
+    }
+
+    /// The runner starts running the plan: a stop signal now stops it,
+    /// with no grace period to end aye.
+    pub(super) fn running(&self) {
+        self.running.store(true, Ordering::SeqCst);
+    }
+}
 
 /// How long a stop signal before the run (while collecting) may take to
 /// end aye cleanly before it exits anyway: whatever runs then (a walk, an
@@ -27,7 +58,7 @@ const COLLECTING_GRACE: Duration = Duration::from_millis(1500);
     clippy::exit,
     reason = "a second signal, or a collection that doesn't stop in time, ends aye at once"
 )]
-pub(crate) fn install_interrupt(
+fn install_interrupt(
     stop: aye_runner::StopHandle,
     collecting: Arc<AtomicBool>,
     running: Arc<AtomicBool>,

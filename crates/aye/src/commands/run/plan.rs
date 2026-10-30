@@ -1,20 +1,62 @@
-//! What the run's plan takes from the command line and collection beside
-//! the cases: the ids with parameters the command line names
-//! ([`requested_ids`]) and, by adapter, the session's files
-//! ([`session_files`]).
+//! The plan a run hands the runner ([`plan`]): the cases selected, each
+//! batch's policy and each adapter's context, with what every batch's
+//! context gets beside them (the ids with parameters the command line
+//! names, [`requested_ids`]; the reruns' options; the paths the run starts
+//! from), history's durations, what runs first under `--ff`, and, by
+//! adapter, the session's files ([`session_files`]).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use aye_events::{AdapterName, Case, ProjectPath, TestId};
 use aye_fs::normalize_absolute;
+use aye_runner::Plan;
 
+use super::select::Selected;
 use crate::positional::Positional;
+use crate::settings::RunSettings;
+
+/// The plan of the run `settings` ask for, of the cases `selected`, with
+/// history's `durations` and, under `--ff`, the tests that failed last
+/// (`last_failed`) to run first.
+pub(super) fn plan(
+    settings: &RunSettings,
+    selected: Selected,
+    durations: HashMap<TestId, Duration>,
+    last_failed: HashSet<TestId>,
+) -> Plan {
+    Plan {
+        cases: selected.cases,
+        policy: settings.policy.clone(),
+        contexts: settings
+            .prepared
+            .iter()
+            .map(|(name, r)| (name.clone(), r.context()))
+            .collect(),
+        requested_ids: requested_ids(&settings.positionals),
+        rerun_args: settings.rerun_args.clone(),
+        selected_paths: selected
+            .reach
+            .map(|reach| reach.selected)
+            .unwrap_or_default()
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect(),
+        durations,
+        first: if settings.failed_first {
+            last_failed
+        } else {
+            HashSet::new()
+        },
+        session_files: selected.session_files,
+    }
+}
 
 /// The ids with parameters the command line names (`path::test[x]`),
 /// relative to the root as collection spells them, each once
 /// ([`aye_protocol::BatchContext::requested_ids`]).
-pub(crate) fn requested_ids(positionals: &[Positional]) -> Vec<TestId> {
+fn requested_ids(positionals: &[Positional]) -> Vec<TestId> {
     let mut seen = HashSet::new();
     positionals
         .iter()
@@ -41,7 +83,7 @@ pub(crate) fn requested_ids(positionals: &[Positional]) -> Vec<TestId> {
 /// root, as `within`): only the files in those paths are its session, and
 /// listing the others would load conftests that run never loads (a
 /// `test*` directory's, whose hooks reach every test).
-pub(crate) fn session_files(
+pub(super) fn session_files(
     cases: &[Case],
     within: Option<(&[PathBuf], &Path)>,
 ) -> BTreeMap<AdapterName, Vec<ProjectPath>> {

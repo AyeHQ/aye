@@ -23,24 +23,24 @@ use crate::registry;
 /// selected files>` wouldn't report it. With no positional argument, or
 /// only paths, collection walked only what the run reaches.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Reach {
+pub(super) struct Reach {
     /// The path arguments, absolute, spelled from the root.
-    pub(crate) paths: Vec<PathBuf>,
+    pub(super) paths: Vec<PathBuf>,
     /// The paths the user's run starts from: each path argument, and the
     /// files of the collected cases each other argument selects, in the
     /// order of the arguments, each once
     /// ([`aye_protocol::BatchContext::selected_paths`]).
-    pub(crate) selected: Vec<PathBuf>,
+    pub(super) selected: Vec<PathBuf>,
     /// The arguments that aren't paths, as given: dotted names and keys.
-    pub(crate) words: Vec<String>,
+    pub(super) words: Vec<String>,
     /// Whether some argument named nothing: an error collection reported
     /// elsewhere may be why, and is kept.
-    pub(crate) unmatched: bool,
+    pub(super) unmatched: bool,
 }
 
 impl Reach {
     /// `None` when every positional argument is a path, or there is none.
-    pub(crate) fn of(positionals: &[Positional], root: &Path, cases: &[Case]) -> Option<Self> {
+    pub(super) fn of(positionals: &[Positional], root: &Path, cases: &[Case]) -> Option<Self> {
         if positionals.iter().all(|p| p.path.is_some()) {
             return None;
         }
@@ -87,7 +87,7 @@ impl Reach {
     /// is when it lies in a path argument, or its directory holds a path
     /// the run starts from (as `pytest <those paths>` loads it first), or
     /// some argument named nothing. Everything else is the run's.
-    pub(crate) fn keeps(&self, root: &Path, diagnostic: &Diagnostic) -> bool {
+    pub(super) fn keeps(&self, root: &Path, diagnostic: &Diagnostic) -> bool {
         let at = || normalize_absolute(&root.join(diagnostic.path.as_str()));
         match (diagnostic.severity, &diagnostic.code) {
             (Severity::Info, DiagnosticCode::Skipped) => {
@@ -121,7 +121,7 @@ impl Reach {
 /// The directories of the conftests collection reported an error for (a
 /// `conftest.py` that failed to load, `registry::is_conftest`), relative to
 /// the root, each with its trailing `/` (the root's is empty).
-pub(crate) fn broken_conftest_dirs(diagnostics: &[Diagnostic]) -> Vec<&str> {
+pub(super) fn broken_conftest_dirs(diagnostics: &[Diagnostic]) -> Vec<&str> {
     diagnostics
         .iter()
         .filter(|d| d.severity == Severity::Error && registry::is_conftest(d.path.as_str()))
@@ -135,7 +135,7 @@ pub(crate) fn broken_conftest_dirs(diagnostics: &[Diagnostic]) -> Vec<&str> {
 /// error says (an initial one's session runs without the tests below it;
 /// another fails its directory), so the note, which says only that the file
 /// has none, is left out.
-pub(crate) fn explained_by_a_conftest(broken: &[&str], diagnostic: &Diagnostic) -> bool {
+pub(super) fn explained_by_a_conftest(broken: &[&str], diagnostic: &Diagnostic) -> bool {
     diagnostic.severity == Severity::Info
         && diagnostic.code == DiagnosticCode::NoTests
         && broken
@@ -145,7 +145,7 @@ pub(crate) fn explained_by_a_conftest(broken: &[&str], diagnostic: &Diagnostic) 
 
 /// What a dotted name names of a path collection reported skipped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Named {
+pub(super) enum Named {
     Nothing,
     /// Something the skip holds or that holds it, but not the name's
     /// whole: tests of a skipped module (`mod.test_x`), a module in a
@@ -163,7 +163,7 @@ pub(crate) enum Named {
 /// collection reported skipped (a module, or a directory a conftest
 /// skipped), relative to the root. A word that isn't a dotted name (a key,
 /// an id) names nothing.
-pub(crate) fn dotted_reach(word: &str, path: &str) -> Named {
+pub(super) fn dotted_reach(word: &str, path: &str) -> Named {
     if word.contains("::") || word.contains('/') {
         return Named::Nothing;
     }

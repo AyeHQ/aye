@@ -1,14 +1,254 @@
-//! What a run selects, beside what static selection keeps: the words of a
-//! `not-found` for a selector that names nothing ([`not_found_message`]),
-//! and which `-k` and `-m` count for each adapter's cases ([`Pick`]).
+//! What a run selects of what collection found ([`select`]): the cases
+//! static selection keeps, the diagnostics of collection's the run
+//! reaches, a `not-found` for each argument that names nothing, and each
+//! case it runs; and which `-k` and `-m` count for each adapter's cases
+//! ([`Pick`]), which static selection's resolution applies.
+
+use std::collections::{BTreeMap, HashSet};
+use std::path::Path;
 
 use aye_adapter::FrameworkDefaults;
-use aye_events::AdapterName;
+use aye_events::{
+    AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, Event, ProjectPath,
+    Severity, TestId,
+};
+use aye_fs::root_relative;
+use aye_select::Selection;
 
+use super::collect::Collected;
+use super::exit::RunVerdict;
+use super::plan::session_files;
+use super::reach::{Named, Reach, broken_conftest_dirs, dotted_reach, explained_by_a_conftest};
 use crate::framework_args::Passed;
+use crate::positional::Positional;
+use crate::settings::RunSettings;
+use crate::stream::{Passes, Stream};
+
+/// What a run selected for the runner, once collection is over: the
+/// cases it runs, what its arguments reach when some aren't paths, and the
+/// session's files by adapter.
+pub(super) struct Selected {
+    pub(super) cases: Vec<Case>,
+    pub(super) reach: Option<Reach>,
+    pub(super) session_files: BTreeMap<AdapterName, Vec<ProjectPath>>,
+}
+
+/// Select what the run runs of what collection found, through to
+/// `collection_finished`, on `out`. Static selection (`selection`, with
+/// what failed last under `--lf`: `last_failed`) keeps its cases, in the
+/// order of the arguments. Of collection's diagnostics, those the run
+/// reaches are emitted, after `passes` (a conftest's or a file's errors
+/// counted as pytest counts them), then a `not-found` for each argument
+/// that names nothing. Then each case the run runs (`case_collected`),
+/// narrowed to the parameter ids asked for and, under `--ff`, what failed
+/// last first. The errors the stream has carried so far are collection's,
+/// and so is the verdict that comes with what is selected, which says
+/// whether the run goes on (its counts hold the deselected).
+pub(super) fn select(
+    settings: &RunSettings,
+    collected: Collected,
+    selection: Selection,
+    last_failed: &HashSet<TestId>,
+    passes: &mut Passes<'_>,
+    out: &mut Stream<'_>,
+) -> (Selected, RunVerdict) {
+    let Collected {
+        collection,
+        started,
+    } = collected;
+    let selection = if settings.last_failed {
+        selection.with_last_failed(last_failed.iter().cloned())
+    } else {
+        selection
+    };
+    // Dotted names and keys are resolved among what collection found,
+    // over the whole project: what the run reaches decides which of
+    // collection's diagnostics are the run's (see `Reach`).
+    let reach = Reach::of(&settings.positionals, &settings.root, &collection.cases);
+    let session_files = session_files(
+        &collection.cases,
+        reach
+            .as_ref()
+            .map(|reach| (reach.selected.as_slice(), settings.root.as_path())),
+    );
+    let selected = selection.apply(collection.cases);
+    let skips = skips(&collection.diagnostics, reach.as_ref(), &settings.root);
+    let unmatched = unmatched(&selected.unmatched, &settings.positionals, &skips);
+    // Whether an argument named nothing is known only now; the skips were
+    // read without it.
+    let reach = reach.map(|reach| Reach {
+        unmatched: !unmatched.is_empty(),
+        ..reach
+    });
+    let collection_errors = emit_diagnostics(
+        settings,
+        &collection.diagnostics,
+        reach.as_ref(),
+        passes,
+        out,
+    );
+    for diagnostic in not_found(unmatched, &collection.diagnostics, &settings.root) {
+        out.emit(Event::Diagnostic(diagnostic));
+    }
+    // Errors so far belong to collection; only later ones are the run's.
+    let errors = out.sink.take_errors();
+
+    let mut cases: Vec<Case> = Vec::with_capacity(selected.cases.len());
+    for case in &selected.cases {
+        for id in selected.ids_for(case) {
+            let mut case = case.clone();
+            case.id = id;
+            cases.push(case);
+        }
+    }
+    if settings.failed_first && !last_failed.is_empty() {
+        cases.sort_by_key(|case| !last_failed.contains(&case.id));
+    }
+    for case in &cases {
+        out.emit(Event::CaseCollected(Box::new(case.clone())));
+    }
+    let verdict = RunVerdict {
+        // A hook that failed while pytest collected (aye's pytest
+        // front-end runs the collection hooks in refinement) is pytest's
+        // `INTERNALERROR`: the session ends there, status 3, `--co` too.
+        internal: errors.internal,
+        // pytest refuses to run when an explicit argument names nothing.
+        usage: errors.usage,
+        errors: collection_errors,
+        selected: u32::try_from(cases.len()).unwrap_or(u32::MAX),
+        counts: Counts {
+            deselected: selected.deselected,
+            ..Counts::default()
+        },
+        collect_only: settings.collect_only,
+        continue_on_collection_errors: settings.continue_on_collection_errors,
+        ..RunVerdict::default()
+    };
+    out.emit(Event::CollectionFinished {
+        selected: verdict.selected,
+        deselected: selected.deselected,
+        refined_files: collection.refined_files,
+        duration: started.elapsed(),
+    });
+    let selected = Selected {
+        cases,
+        reach,
+        session_files,
+    };
+    (selected, verdict)
+}
+
+/// The modules and directories skipped while collecting that the run
+/// reaches (all of them when `reach` is `None`): a dotted name for one
+/// names no test, but pytest found it.
+fn skips<'d>(diagnostics: &'d [Diagnostic], reach: Option<&Reach>, root: &Path) -> Vec<&'d str> {
+    diagnostics
+        .iter()
+        .filter(|d| {
+            d.code == DiagnosticCode::Skipped
+                && d.severity == Severity::Info
+                && reach.is_none_or(|reach| reach.keeps(root, d))
+        })
+        .map(|d| d.path.as_str())
+        .collect()
+}
+
+/// Selectors that match nothing (`selected`'s unmatched, each with its
+/// positional argument), as pytest's `not found:`: a missing path, or an
+/// id, dotted name or key that names no test. An existing file or
+/// directory that has no tests is not one (pytest collects it and finds
+/// nothing), and neither is a dotted name for a module or package that was
+/// skipped (in `skips`).
+fn unmatched<'a>(
+    selected: &'a [String],
+    positionals: &'a [Positional],
+    skips: &[&str],
+) -> Vec<(&'a String, &'a Positional)> {
+    selected
+        .iter()
+        .filter_map(|selector| {
+            let positional = positionals.iter().find(|p| p.selector == *selector)?;
+            let found = (positional.exists() && !positional.id)
+                || (positional.path.is_none()
+                    && skips
+                        .iter()
+                        .any(|path| dotted_reach(selector, path) == Named::Whole));
+            (!found).then_some((selector, positional))
+        })
+        .collect()
+}
+
+/// Emit the diagnostics collection reported that the run reaches, but a
+/// file's `no-tests` note below a conftest that failed to load: each
+/// through `passes`, a `refine-failed` warning as an error. Whether any is
+/// an error.
+fn emit_diagnostics(
+    settings: &RunSettings,
+    diagnostics: &[Diagnostic],
+    reach: Option<&Reach>,
+    passes: &mut Passes<'_>,
+    out: &mut Stream<'_>,
+) -> bool {
+    let pytest = aye_adapter_pytest::NAME;
+    let pytest_runs = settings.prepared.iter().any(|(name, _)| *name == pytest);
+    let refined_by = pytest_runs.then_some(&pytest);
+    let mut errors = false;
+    let broken = broken_conftest_dirs(diagnostics);
+    for diagnostic in diagnostics {
+        if reach.is_some_and(|reach| !reach.keeps(&settings.root, diagnostic))
+            || explained_by_a_conftest(&broken, diagnostic)
+        {
+            continue;
+        }
+        let mut diagnostic = diagnostic.clone();
+        if diagnostic.code == DiagnosticCode::RefineFailed {
+            // aye's pytest front-end is the only source of pytest's
+            // tests: without it there are none, which is no result.
+            diagnostic.severity = Severity::Error;
+        }
+        passes.collected(&mut diagnostic, refined_by);
+        errors |= diagnostic.severity == Severity::Error;
+        out.emit(Event::Diagnostic(diagnostic));
+    }
+    errors
+}
+
+/// A `not-found` error for each selector that names nothing
+/// (`unmatched`), but a missing path collection has reported already
+/// (among `diagnostics`), which is reported once.
+fn not_found(
+    unmatched: Vec<(&String, &Positional)>,
+    diagnostics: &[Diagnostic],
+    root: &Path,
+) -> Vec<Diagnostic> {
+    let reported: HashSet<&str> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::NotFound)
+        .map(|d| d.path.as_str())
+        .collect();
+    let mut not_found = Vec::new();
+    for (selector, positional) in unmatched {
+        let path = positional
+            .path
+            .as_deref()
+            .map(|path| root_relative(path, root))
+            .unwrap_or_default();
+        if !positional.exists() && reported.contains(path.as_str()) {
+            continue;
+        }
+        not_found.push(Diagnostic {
+            severity: Severity::Error,
+            code: DiagnosticCode::NotFound,
+            path: DiagnosticPath::as_written(path),
+            span: None,
+            message: not_found_message(selector),
+        });
+    }
+    not_found
+}
 
 /// pytest's `not found:`, with a word for those who expected a command.
-pub(crate) fn not_found_message(selector: &str) -> String {
+fn not_found_message(selector: &str) -> String {
     if matches!(selector, "run" | "test" | "tests") && !selector.contains('/') {
         format!(
             "not found: {selector} (aye has no `{selector}` command: `aye` alone runs the tests)"
