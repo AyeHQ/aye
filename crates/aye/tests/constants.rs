@@ -26,9 +26,9 @@ fn embedded() -> Vec<ModuleSource> {
         aye_engine::MODEL_MODULE,
         aye_engine::REWRITE_MODULE,
         aye_engine::NATIVE_ENGINE_MODULE,
-        aye_adapter_pytest::native::SHIM_MODULE,
+        aye_adapter_pytest::embedded::SHIM_MODULE,
     ];
-    modules.extend(aye_adapter_pytest::native::MODULES.iter().cloned());
+    modules.extend(aye_adapter_pytest::embedded::MODULES.iter().cloned());
     modules.push(aye_adapter_unittest::MODULE);
     modules.push(aye_adapter_doctest::MODULE);
     modules.push(ModuleSource::embedded(
@@ -479,7 +479,7 @@ fn python_emits_only_codes_and_severities_rust_knows() {
 /// another session.
 #[test]
 fn the_session_neutral_keys_are_the_pytest_executors_batch_keys() {
-    let module = parse(&aye_adapter_pytest::native::NATIVE_MODULE);
+    let module = parse(&aye_adapter_pytest::embedded::NATIVE_MODULE);
     let value = module
         .body
         .iter()

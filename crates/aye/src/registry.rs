@@ -43,7 +43,7 @@
 
 use anyhow::{Context as _, Result, bail};
 use aye_adapter::{Adapter, Project};
-use aye_adapter_pytest::native::SHIM_MODULE;
+use aye_adapter_pytest::embedded::SHIM_MODULE;
 use aye_collect::Prepared;
 use aye_config::ValueSource;
 use aye_engine::{MODEL_MODULE, NATIVE_ENGINE_MODULE, REWRITE_MODULE};

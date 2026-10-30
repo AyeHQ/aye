@@ -5,7 +5,7 @@
 //! inifile, ini values and the options `addopts`, `PYTEST_ADDOPTS` and the
 //! arguments after `--` add, with what the runner takes over lifted out),
 //! the files it claims, the
-//! context the front-end starts from ([`native`]), and the static
+//! context the front-end starts from ([`Recognizer::context`]), and the static
 //! recognizer: file patterns, `Test*` classes and `test*` functions from
 //! the project's pytest config, inherited methods, markers, parametrize
 //! and pytest's id algorithm (including `pytest.param`, `ids=`, stacked
@@ -13,7 +13,7 @@
 //! and collection-affecting hooks, pytest's rootdir and ini semantics
 //! (asked from aye-pytest). The static recognizer predicts the
 //! cases `aye --co --no-refine` lists without importing anything; every
-//! other run has the front-end list each test file (see [`native`]).
+//! other run has the front-end list each test file (see [`Pytest`]).
 //!
 //! Python half (embedded, standard library only): aye's own `pytest`
 //! module (`python/native/aye_pytest_shim.py`, the authoring API, which the
@@ -417,7 +417,7 @@
 //!   `pytest_collect_file`) are claimed as test files, which the pytest
 //!   front-end refuses with a `usage-error` naming the fix (add the
 //!   doctest adapter): aye's engine doesn't run pytest's own doctests
-//!   ([`native`]), and a test is never silently dropped. With
+//!   ([`Pytest`]), and a test is never silently dropped. With
 //!   `--doctest-modules`, every `.py` file but `__main__.py` and a
 //!   `setup.py` mentioning setuptools or distutils; text files matching
 //!   `--doctest-glob` (pytest appends them across addopts,
@@ -451,7 +451,7 @@
 //!   exit 4), aye runs.
 //!
 //! Decided (C5, October 2026): the adapter's executor is aye's engine
-//! with the pytest front-end ([`native`]). The executor that drove a real
+//! with the pytest front-end ([`Pytest`]). The executor that drove a real
 //! pytest session per batch, and what only fed it (its filtered options as
 //! separate vectors and a `PYTEST_ADDOPTS` string, its `-p no:` lists, the
 //! context keys only it read: `addopts`, `pytest_addopts_env`,
@@ -459,11 +459,14 @@
 //! gone. What it did that pytest users rely on is the front-end's and the
 //! engine's now; their modules say how.
 
+mod adapter;
 mod context;
+pub mod embedded;
 mod ids;
 mod marks;
 mod module;
-pub mod native;
+mod options;
+mod recognizer;
 mod support;
 
 #[cfg(test)]
@@ -494,10 +497,10 @@ use aye_python_stdlib::identifier::is_identifier;
 use aye_python_stdlib::os_path::normalize_absolute;
 use aye_python_stdlib::unittest;
 
+pub use adapter::{NAME, Pytest};
 pub use aye_pytest::argv::split_xdist;
 pub use aye_pytest::config::PytestConfig;
 pub use aye_pytest::env::PytestEnv;
-pub use native::{NAME, Pytest};
 
 use crate::context::PytestContext;
 use crate::ids::IdOptions;
@@ -1006,8 +1009,8 @@ impl PytestRecognizer {
     /// This recognizer for a run without the doctest adapter: pytest's own
     /// doctest plugin would collect doctests, as without aye. Its options
     /// reach the front-end ([`PytestConfig::keep_doctest_options`]), and
-    /// the files it collects are claimed (and refused: see
-    /// [`native::NativeRecognizer`]): with `--doctest-modules`
+    /// the files it collects are claimed (and refused by the adapter's
+    /// recognizer): with `--doctest-modules`
     /// every `.py` file but `__main__.py` and a `setup.py` mentioning
     /// setuptools or distutils, and the text files matching
     /// `--doctest-glob` (`test*.txt` without one) or named on the command
@@ -1915,7 +1918,7 @@ impl Recognizer for PytestRecognizer {
     }
 
     /// What the front-end needs to start as pytest would start itself (the
-    /// rest is the native context's: see [`native::NativeRecognizer`]), and
+    /// rest is the native context's: see the adapter's recognizer), and
     /// what the runner takes from pytest's options: [`PytestContext`].
     fn context(&self) -> AdapterContext {
         AdapterContext::of(self.pytest_context())
