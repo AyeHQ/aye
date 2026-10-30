@@ -1,6 +1,6 @@
 //! Replacing a file whole.
 
-use std::fs::{self, File};
+use std::fs::File;
 use std::io;
 use std::path::Path;
 
@@ -20,7 +20,7 @@ pub fn atomic_write(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        builder.permissions(fs::Permissions::from_mode(0o666));
+        builder.permissions(std::fs::Permissions::from_mode(0o666));
     }
     let mut file = builder.tempfile_in(dir)?;
     write(file.as_file_mut())?;
