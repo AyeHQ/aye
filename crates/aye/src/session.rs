@@ -32,6 +32,7 @@ use aye_static::{EnvVars, ProcessEnv};
 
 use crate::args::{Args, Color, Maxfail, Passed, passed, passed_maxfail};
 use crate::busy::Busy;
+use crate::environment::EnvironmentOptions;
 use crate::registry;
 
 /// A run's inputs, resolved: everything wrong with the command line or the
@@ -64,7 +65,7 @@ pub(crate) struct Session {
     workers: u32,
     /// The environment aye started in, read once: what the adapters, the
     /// interpreter's discovery and the reporters read.
-    env: ProcessEnv,
+    env: EnvironmentOptions,
 }
 
 /// A positional argument and how it was read.
@@ -85,7 +86,7 @@ impl Positional {
 }
 
 impl Session {
-    pub(crate) fn new(args: Args, env: ProcessEnv) -> Result<Self> {
+    pub(crate) fn new(args: Args, env: EnvironmentOptions) -> Result<Self> {
         let cwd = std::env::current_dir().context("cannot read the current directory")?;
         // `.` and `..` are resolved lexically, as pytest's `os.path.abspath`
         // does, before the root is searched for.
@@ -119,14 +120,14 @@ impl Session {
 
         let tool_aye = AyeSettings::load(&root)?;
         let discovery = DiscoveryEnv {
-            virtual_env: env.get_os(EnvVars::VIRTUAL_ENV).map(ToOwned::to_owned),
-            path: env.get_os(EnvVars::PATH).map(ToOwned::to_owned),
+            virtual_env: env.virtual_env.clone(),
+            path: env.path.clone(),
             current_exe: std::env::current_exe().ok(),
         };
         let interpreter = aye_provision::find(
             python_request(
                 args.python.as_deref(),
-                env.get_os(EnvVars::AYE_PYTHON),
+                env.python.as_deref(),
                 &tool_aye,
                 &root,
                 &cwd,
@@ -141,7 +142,7 @@ impl Session {
             args: &paths,
             config_file: args.config_file.as_deref(),
             framework_args: &args.passthrough,
-            env: &env,
+            env: &env.vars,
             tool_aye: &tool_aye,
         };
         // Before anything walks the tree: pytest would walk all of it, and
@@ -346,7 +347,7 @@ impl Session {
             args: &self.paths,
             config_file: self.args.config_file.as_deref(),
             framework_args: &self.args.passthrough,
-            env: &self.env,
+            env: &self.env.vars,
             tool_aye: &self.tool_aye,
         };
         // The refinement cache is keyed on what refining depends on: the
@@ -680,7 +681,7 @@ impl Session {
     /// current directory; empty means none.
     fn junit(&self) -> Option<PathBuf> {
         junit_path(
-            &self.env,
+            &self.env.vars,
             &self.cwd,
             self.args.junit_xml.as_deref(),
             &self.defaults,
@@ -723,12 +724,9 @@ impl Session {
                         live: io::stdout().is_terminal(),
                     },
                 )));
-                if aye_render::github_actions_enabled(&self.env) {
-                    let workspace = self
-                        .env
-                        .get_os(EnvVars::GITHUB_WORKSPACE)
-                        .map(PathBuf::from);
-                    let prefix = repository_prefix(&self.root, workspace.as_deref());
+                if aye_render::github_actions_enabled(&self.env.vars) {
+                    let prefix =
+                        repository_prefix(&self.root, self.env.github_workspace.as_deref());
                     tee.push(Stdout::new(
                         GithubAnnotations::new(io::stdout()).with_path_prefix(prefix),
                     ));
@@ -1719,9 +1717,9 @@ fn pick(given: Option<&str>, framework: Passed) -> Pick {
     }
 }
 
-/// The interpreter asked for: `--python`, else `$AYE_PYTHON` (`env`, unless
-/// it is empty), else `[tool.aye] python`. The first two are relative to
-/// the current directory, the configuration's to the project root.
+/// The interpreter asked for: `--python`, else `$AYE_PYTHON` (`env`), else
+/// `[tool.aye] python`. The first two are relative to the current
+/// directory, the configuration's to the project root.
 fn python_request(
     flag: Option<&Path>,
     env: Option<&std::ffi::OsStr>,
@@ -1732,7 +1730,7 @@ fn python_request(
     if let Some(flag) = flag {
         return Some((PythonRequest::parse(flag, cwd), RequestSource::Flag));
     }
-    if let Some(env) = env.filter(|env| !env.is_empty()) {
+    if let Some(env) = env {
         return Some((
             PythonRequest::parse(Path::new(env), cwd),
             RequestSource::Env,

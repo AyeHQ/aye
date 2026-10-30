@@ -245,13 +245,14 @@ use clap::error::ErrorKind;
 mod args;
 mod busy;
 mod config_cmd;
+mod environment;
 mod registry;
 mod session;
 mod show;
 
 use args::{Args, ShowArgs};
 use aye_events::ExitCode;
-use aye_static::ProcessEnv;
+use environment::EnvironmentOptions;
 use session::Session;
 
 #[expect(
@@ -298,7 +299,7 @@ fn main() -> process::ExitCode {
         return ExitCode::UsageError.into();
     }
     // The environment is read once, here: everything after reads this.
-    let session = match Session::new(args, ProcessEnv::from_process()) {
+    let session = match Session::new(args, EnvironmentOptions::from_process()) {
         Ok(session) => session,
         Err(err) => {
             eprintln!("aye: error: {err:#}");

@@ -815,15 +815,14 @@ fn the_interpreter_asked_for_is_the_first_given() {
         asked(None, None, Some("cfg/python")),
         file("/root/cfg/python", RequestSource::Config)
     );
-    // An empty `$AYE_PYTHON` counts as unset.
     assert_eq!(
-        asked(None, Some(""), Some("python3")),
+        asked(None, None, Some("python3")),
         Some((
             PythonRequest::ExecutableName("python3".to_string()),
             RequestSource::Config
         ))
     );
-    assert_eq!(asked(None, Some(""), None), None);
+    assert_eq!(asked(None, None, None), None);
 }
 
 /// `--output`, else `[tool.aye] output`, else text, and where it came
