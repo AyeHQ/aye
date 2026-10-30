@@ -266,7 +266,8 @@ pub use schedule::DEFAULT_WEIGHT;
 pub use stop::StopHandle;
 pub use summary::{BatchEnd, BatchSummary, Crash, RunSummary};
 pub use worker::{
-    Echo, Exit, Incoming, Killer, SpawnError, Worker, WorkerSpec, describe, parse_line, spawn,
+    Echo, Exit, Incoming, Killer, LaunchedWorker, SpawnError, Worker, WorkerSpec, describe,
+    parse_line, spawn,
 };
 
 /// The worker, embedded at build time and run with `python -c`.

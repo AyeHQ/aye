@@ -11,13 +11,20 @@
 //! death is noticed by its pid as well as by the end of its stream, which a
 //! process its tests started may hold open.
 //!
+//! A worker's states are types: [`Worker::launch`] starts its process, a
+//! [`LaunchedWorker`], which can be killed, waited for or asked to exit
+//! but takes no request; [`LaunchedWorker::handshake`] makes it a
+//! [`Worker`], ready for requests, with the interpreter it reported; and
+//! [`Worker::shutdown`] and [`Worker::wait`] end it, with its [`Exit`].
+//!
 //! The spawn path is in `handshake.rs` ([`Worker::launch`], then
-//! [`Worker::handshake`]), from a [`WorkerSpec`] (`spec.rs`); the protocol
-//! stream in `transport.rs`; the process and its group in `process.rs`;
-//! how a worker ended in `exit.rs`; its stderr in `stderr.rs`, and what of
-//! it goes into a crash report in `crash_report.rs`; every grace period
-//! and poll in `timeouts.rs`.
+//! [`LaunchedWorker::handshake`]), from a [`WorkerSpec`] (`spec.rs`); the
+//! protocol stream in `transport.rs`; the process and its group in
+//! `process.rs`; how a worker ended in `exit.rs`; its stderr in
+//! `stderr.rs`, and what of it goes into a crash report in
+//! `crash_report.rs`; every grace period and poll in `timeouts.rs`.
 
+use std::io;
 use std::process::ChildStdin;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
@@ -38,7 +45,7 @@ pub(crate) mod timeouts;
 mod transport;
 
 pub use exit::{Exit, describe};
-pub use handshake::SpawnError;
+pub use handshake::{LaunchedWorker, SpawnError};
 pub use process::Killer;
 pub(crate) use process::{Proc, kill_groups};
 pub use spec::WorkerSpec;
@@ -50,15 +57,22 @@ use exit::Waited;
 use stderr::Stderr;
 use timeouts::{EXIT_GRACE, KILL_WAIT, SHUTDOWN_GRACE, STDERR_GRACE, STDERR_QUIET};
 
-/// A running worker that has answered the handshake.
+/// A worker process and the runner's ends of its standard streams: what a
+/// worker holds in every state, launched ([`LaunchedWorker`]) or ready
+/// ([`Worker`]). Killed with its process group if it still runs when
+/// dropped.
 #[derive(Debug)]
-pub struct Worker {
+struct Process {
     proc: Arc<Mutex<Proc>>,
     stdin: Option<ChildStdin>,
     lines: Receiver<Incoming>,
     stderr: Stderr,
-    /// The handshake, until it is sent.
-    hello: Option<Request>,
+}
+
+/// A running worker that has answered the handshake: ready for requests.
+#[derive(Debug)]
+pub struct Worker {
+    process: Process,
     pid: u32,
     python: String,
     version: String,
@@ -66,9 +80,7 @@ pub struct Worker {
 
 /// Start a worker and complete the handshake.
 pub fn spawn(spec: &WorkerSpec) -> Result<Worker, SpawnError> {
-    let mut worker = Worker::launch(spec)?;
-    worker.handshake()?;
-    Ok(worker)
+    Worker::launch(spec)?.handshake()
 }
 
 impl Worker {
@@ -87,33 +99,81 @@ impl Worker {
         &self.version
     }
 
+    pub fn killer(&self) -> Killer {
+        self.process.killer()
+    }
+
+    /// Kill the worker and its process group.
+    pub fn kill(&self) {
+        self.process.kill();
+    }
+
+    /// Ask the worker to exit, and wait for it, killing it (and its process
+    /// group) if it takes longer than a few seconds (a thread the tests left
+    /// running).
+    pub fn shutdown(self) -> Exit {
+        self.process.shutdown()
+    }
+
+    /// Wait for a worker whose stream has ended, killing it (and its process
+    /// group) if it doesn't exit soon.
+    pub fn wait(self) -> Exit {
+        self.process.wait()
+    }
+
+    pub fn send(&mut self, request: &Request) -> io::Result<()> {
+        self.process.send(request)
+    }
+
+    /// The next message, blocking. [`Incoming::Eof`] once the stream ended
+    /// or the worker exited, and on every call after.
+    pub fn recv(&self) -> Incoming {
+        self.process.recv()
+    }
+
+    /// The next message, or `None` if nothing arrives within `timeout`.
+    ///
+    /// Once the worker has exited, the rest of what it wrote still arrives,
+    /// then [`Incoming::Eof`], even while a process its tests started holds
+    /// the stream open.
+    pub fn recv_timeout(&self, timeout: Duration) -> Option<Incoming> {
+        self.process.recv_timeout(timeout)
+    }
+
+    /// The end of what the worker wrote to stderr so far.
+    pub fn stderr_tail(&self) -> String {
+        self.process.stderr_tail()
+    }
+
+    /// Echo the worker's stderr live from now on, and where, or stop: for a
+    /// worker kept from refinement for a run that doesn't capture (`-s`).
+    pub fn set_echo(&self, echo: Option<Echo>) {
+        self.process.set_echo(echo);
+    }
+}
+
+impl Process {
     /// Whether the worker process is gone (or can't be waited for).
     fn exited(&self) -> bool {
         let mut proc = lock(&self.proc);
         proc.reaped || !matches!(proc.try_wait(), Ok(None))
     }
 
-    pub fn killer(&self) -> Killer {
+    fn killer(&self) -> Killer {
         Killer(Arc::clone(&self.proc))
     }
 
-    /// Kill the worker and its process group.
-    pub fn kill(&self) {
+    fn kill(&self) {
         lock(&self.proc).kill();
     }
 
-    /// Ask the worker to exit, and wait for it, killing it (and its process
-    /// group) if it takes longer than a few seconds (a thread the tests left
-    /// running).
-    pub fn shutdown(mut self) -> Exit {
+    fn shutdown(mut self) -> Exit {
         let _ = self.send(&Request::Shutdown);
         self.stdin.take();
         self.reap(SHUTDOWN_GRACE, STDERR_QUIET)
     }
 
-    /// Wait for a worker whose stream has ended, killing it (and its process
-    /// group) if it doesn't exit soon.
-    pub fn wait(mut self) -> Exit {
+    fn wait(mut self) -> Exit {
         self.stdin.take();
         self.reap(EXIT_GRACE, STDERR_GRACE)
     }
@@ -158,7 +218,7 @@ impl Worker {
     }
 }
 
-impl Drop for Worker {
+impl Drop for Process {
     fn drop(&mut self) {
         let polled = lock(&self.proc).try_wait();
         if matches!(polled, Ok(None)) {

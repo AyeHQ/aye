@@ -238,12 +238,12 @@ impl Shared<'_> {
         let mut spec = self.spec.clone();
         spec.runtimes = self.runtimes.get(adapter).cloned().into_iter().collect();
         spec.env.extend(lane_env(lane, self.lanes));
-        let mut worker = Worker::launch(&spec).map_err(|e| e.to_string())?;
-        if !self.busy(lane, worker.killer()) {
-            worker.kill();
+        let launched = Worker::launch(&spec).map_err(|e| e.to_string())?;
+        if !self.busy(lane, launched.killer()) {
+            launched.kill();
         }
-        let started = match worker.handshake() {
-            Ok(()) => self.list(worker, adapter, Digests::new()),
+        let started = match launched.handshake() {
+            Ok(worker) => self.list(worker, adapter, Digests::new()),
             Err(error) => Err(error.to_string()),
         };
         self.idle(lane);

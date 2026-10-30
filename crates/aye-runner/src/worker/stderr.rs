@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::sync::lock;
 
-use super::Worker;
+use super::Process;
 use super::crash_report::report;
 
 /// Bytes of stderr kept for crash reports.
@@ -121,15 +121,12 @@ fn write_flushed(out: &mut impl Write, bytes: &[u8]) {
     let _ = out.flush();
 }
 
-impl Worker {
-    /// The end of what the worker wrote to stderr so far.
-    pub fn stderr_tail(&self) -> String {
+impl Process {
+    pub(super) fn stderr_tail(&self) -> String {
         self.stderr.tail(Duration::ZERO, Duration::ZERO)
     }
 
-    /// Echo the worker's stderr live from now on, and where, or stop: for a
-    /// worker kept from refinement for a run that doesn't capture (`-s`).
-    pub fn set_echo(&self, echo: Option<Echo>) {
+    pub(super) fn set_echo(&self, echo: Option<Echo>) {
         lock(&self.stderr.0.0).echo = echo;
     }
 }

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use aye_protocol::{Request, WorkerLine};
 
-use super::Worker;
+use super::Process;
 use super::timeouts::{DRAIN, EXIT_POLL};
 
 /// One thing read from a worker's protocol stream.
@@ -37,8 +37,8 @@ impl fmt::Display for Incoming {
     }
 }
 
-impl Worker {
-    pub fn send(&mut self, request: &Request) -> io::Result<()> {
+impl Process {
+    pub(super) fn send(&mut self, request: &Request) -> io::Result<()> {
         let stdin = self
             .stdin
             .as_mut()
@@ -49,9 +49,8 @@ impl Worker {
         stdin.flush()
     }
 
-    /// The next message, blocking. [`Incoming::Eof`] once the stream ended
-    /// or the worker exited, and on every call after.
-    pub fn recv(&self) -> Incoming {
+    /// See [`Worker::recv`](super::Worker::recv).
+    pub(super) fn recv(&self) -> Incoming {
         loop {
             if let Some(incoming) = self.recv_timeout(EXIT_POLL) {
                 return incoming;
@@ -59,12 +58,10 @@ impl Worker {
         }
     }
 
-    /// The next message, or `None` if nothing arrives within `timeout`.
-    ///
-    /// Once the worker has exited, the rest of what it wrote still arrives,
-    /// then [`Incoming::Eof`], even while a process its tests started holds
-    /// the stream open.
-    pub fn recv_timeout(&self, timeout: Duration) -> Option<Incoming> {
+    /// See [`Worker::recv_timeout`](super::Worker::recv_timeout): the
+    /// worker's death is noticed by its pid, then what is left drains for
+    /// up to [`DRAIN`].
+    pub(super) fn recv_timeout(&self, timeout: Duration) -> Option<Incoming> {
         match self.lines.recv_timeout(timeout) {
             Ok(incoming) => Some(incoming),
             Err(RecvTimeoutError::Disconnected) => Some(Incoming::Eof),

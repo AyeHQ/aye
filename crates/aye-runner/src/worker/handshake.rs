@@ -1,4 +1,5 @@
-//! The spawn path: a worker's process started, then its handshake.
+//! The spawn path: a worker's process started ([`LaunchedWorker`]), then
+//! its handshake, which makes it a [`Worker`].
 
 use std::collections::VecDeque;
 use std::io;
@@ -8,7 +9,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use aye_protocol::{PROTOCOL_VERSION, Reply, WorkerLine};
+use aye_protocol::{PROTOCOL_VERSION, Reply, Request, WorkerLine};
 use aye_static::EnvVars;
 
 use crate::WORKER_SOURCE;
@@ -17,7 +18,7 @@ use super::process::{Proc, own_process_group};
 use super::stderr::Stderr;
 use super::timeouts::{EXIT_GRACE, STDERR_GRACE};
 use super::transport::{is_reply, read_lines};
-use super::{Incoming, Worker, WorkerSpec};
+use super::{Exit, Incoming, Killer, Process, Worker, WorkerSpec};
 
 /// Stray stdout lines kept from before the handshake, for the error.
 const STRAY_LINES: usize = 20;
@@ -49,10 +50,21 @@ fn output_suffix(output: &str) -> String {
     }
 }
 
+/// A worker whose process started and which hasn't answered the handshake:
+/// it takes no request until [`LaunchedWorker::handshake`] makes it a
+/// [`Worker`], but it can be killed (from any thread, by its [`Killer`]),
+/// read, asked to exit or waited for.
+#[derive(Debug)]
+pub struct LaunchedWorker {
+    process: Process,
+    /// The handshake its spec says, sent by [`LaunchedWorker::handshake`].
+    hello: Request,
+}
+
 impl Worker {
     /// Start the process, without the handshake, so that the caller can
     /// arrange to kill it before anything blocks.
-    pub fn launch(spec: &WorkerSpec) -> Result<Self, SpawnError> {
+    pub fn launch(spec: &WorkerSpec) -> Result<LaunchedWorker, SpawnError> {
         let mut command = Command::new(&spec.python);
         command
             .arg("-c")
@@ -71,7 +83,6 @@ impl Worker {
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().expect("stdout is piped");
         let stderr = child.stderr.take().expect("stderr is piped");
-        let pid = child.id();
         let proc = Arc::new(Mutex::new(Proc {
             child,
             reaped: false,
@@ -84,29 +95,39 @@ impl Worker {
         thread::spawn(move || read_lines(stdout, &tx));
         let stderr = Stderr::drain(stderr, spec.echo);
 
-        Ok(Self {
-            pid,
-            proc,
-            stdin,
-            lines,
-            stderr,
-            hello: Some(spec.hello()),
-            python: String::new(),
-            version: String::new(),
+        Ok(LaunchedWorker {
+            process: Process {
+                proc,
+                stdin,
+                lines,
+                stderr,
+            },
+            hello: spec.hello(),
         })
     }
+}
 
-    /// Send the handshake and read until the worker is ready. Lines that
-    /// aren't protocol messages (a `sitecustomize` printing at startup) are
-    /// skipped and kept for the error.
-    pub fn handshake(&mut self) -> Result<(), SpawnError> {
-        if let Some(hello) = self.hello.take() {
-            // A worker that died at once shows up below as an exit.
-            let _ = self.send(&hello);
-        }
+impl LaunchedWorker {
+    pub fn killer(&self) -> Killer {
+        self.process.killer()
+    }
+
+    /// Kill the worker and its process group.
+    pub fn kill(&self) {
+        self.process.kill();
+    }
+
+    /// Send the handshake and read until the worker is ready: the worker,
+    /// with the interpreter it reports. Lines that aren't protocol messages
+    /// (a `sitecustomize` printing at startup) are skipped and kept for the
+    /// error. A worker that refuses is killed.
+    pub fn handshake(self) -> Result<Worker, SpawnError> {
+        let Self { mut process, hello } = self;
+        // A worker that died at once shows up below as an exit.
+        let _ = process.send(&hello);
         let mut stray = VecDeque::new();
         loop {
-            match self.recv() {
+            match process.recv() {
                 Incoming::Line(WorkerLine::Reply(Reply::Ready {
                     protocol,
                     pid,
@@ -114,24 +135,26 @@ impl Worker {
                     version,
                 })) => {
                     if protocol != PROTOCOL_VERSION {
-                        self.kill();
+                        process.kill();
                         return Err(SpawnError::Protocol {
                             worker: protocol,
                             runner: PROTOCOL_VERSION,
                         });
                     }
-                    self.pid = pid;
-                    self.python = python;
-                    self.version = version;
-                    return Ok(());
+                    return Ok(Worker {
+                        process,
+                        pid,
+                        python,
+                        version,
+                    });
                 }
                 Incoming::Line(WorkerLine::Reply(Reply::Failed { message })) => {
-                    self.kill();
+                    process.kill();
                     return Err(SpawnError::Hello(message));
                 }
                 Incoming::Line(_) => {}
                 Incoming::Garbage { line, error } if is_reply(&line) => {
-                    self.kill();
+                    process.kill();
                     return Err(SpawnError::Hello(format!(
                         "unreadable answer to the handshake ({error}): {line}"
                     )));
@@ -143,7 +166,7 @@ impl Worker {
                     stray.push_back(line);
                 }
                 Incoming::Eof => {
-                    let exit = self.reap(EXIT_GRACE, STDERR_GRACE);
+                    let exit = process.reap(EXIT_GRACE, STDERR_GRACE);
                     let mut output: Vec<String> = stray.into_iter().collect();
                     if !exit.stderr.is_empty() {
                         output.push(exit.stderr.clone());
@@ -155,5 +178,23 @@ impl Worker {
                 }
             }
         }
+    }
+
+    /// What the worker writes before the handshake: lines that aren't
+    /// protocol messages, then [`Incoming::Eof`] once it is gone. See
+    /// [`Worker::recv`].
+    pub fn recv(&self) -> Incoming {
+        self.process.recv()
+    }
+
+    /// Ask the worker to exit before its handshake, and wait for it, as
+    /// [`Worker::shutdown`] does.
+    pub fn shutdown(self) -> Exit {
+        self.process.shutdown()
+    }
+
+    /// Wait for the worker, as [`Worker::wait`] does.
+    pub fn wait(self) -> Exit {
+        self.process.wait()
     }
 }
