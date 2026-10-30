@@ -1,5 +1,5 @@
 //! What a run selects of what collection found ([`select`]): the cases
-//! static selection keeps, the diagnostics of collection's the run
+//! static selection keeps, those of collection's diagnostics the run
 //! reaches, a `not-found` for each argument that names nothing, and each
 //! case it runs; and which `-k` and `-m` count for each adapter's cases
 //! ([`Pick`]), which static selection's resolution applies.
