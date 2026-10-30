@@ -1,3 +1,7 @@
+use std::collections::BTreeMap;
+
+use aye_events::{Case, Certainty, TestId};
+
 use super::*;
 
 fn exact(id: &str) -> Case {
