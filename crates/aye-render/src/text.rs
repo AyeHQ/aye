@@ -123,7 +123,7 @@
 //!
 //! # `aye show`
 //!
-//! [`Text::for_show`]: [`ShowMode::List`] writes a line per result (`✗
+//! [`Text::with_mode`]: [`ShowMode::List`] writes a line per result (`✗
 //! failed  3fae6  tests/t.py::test_x  5 ms — why`, the key on bad ones; a
 //! failed lifetime's once; a module skipped while collecting as a skipped
 //! line named after its file), the error diagnostics and failed workers as

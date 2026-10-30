@@ -8,7 +8,7 @@ use aye_events::{Event, Record, RunNumber};
 use aye_stream::Keys;
 
 use super::{feed, lines, streams};
-use crate::{ColorChoice, JsonLines, Level, ShowContext, ShowMode, Text, TextOptions};
+use crate::{ColorChoice, JsonLines, Level, RenderMode, ShowContext, ShowMode, Text, TextOptions};
 
 fn text(records: &[Record], verbosity: i8) -> String {
     let mut text = Text::new(
@@ -370,7 +370,11 @@ fn aye_show_a_key_is_its_detail_with_where_the_run_was() {
             live: false,
         },
     )
-    .for_show(ShowMode::Details, keys.clone(), context());
+    .with_mode(RenderMode::Show {
+        mode: ShowMode::Details,
+        keys: keys.clone(),
+        context: context(),
+    });
     feed(&mut text, &part);
     assert_eq!(
         String::from_utf8(text.into_inner()).unwrap(),
@@ -393,8 +397,11 @@ fn aye_show_a_key_is_its_detail_with_where_the_run_was() {
             "",
         ])
     );
-    let mut json =
-        JsonLines::new(Vec::new(), Level::VeryVerbose).for_show(ShowMode::Details, keys, context());
+    let mut json = JsonLines::new(Vec::new(), Level::VeryVerbose).with_mode(RenderMode::Show {
+        mode: ShowMode::Details,
+        keys,
+        context: context(),
+    });
     feed(&mut json, &part);
     assert_eq!(
         String::from_utf8(json.into_inner()).unwrap(),

@@ -5,21 +5,19 @@
 use std::io::{self, Write};
 
 use aye_events::{Diagnostic, Failure, LifetimeId, Outcome, TestResult, WorkerIndex};
-use aye_stream::{Again, FileChange, Keys};
+use aye_stream::{Again, FileChange};
 
 use super::limits::{ID_MAX, PATH_MAX, REASON_MAX, RERUN_MAX};
 use super::schema::{Detail, LifetimeFail, Line, Shown};
 use super::{JsonLines, at};
-use crate::{ShowContext, ShowMode, failure, rerun, words};
+use crate::{RenderMode, ShowMode, failure, rerun, words};
 
 impl<W: Write> JsonLines<W> {
-    /// For `aye show`: `mode`, the keys of the whole log the records fed
-    /// come from, and what the run store knows of the run beside it.
+    /// Fed as `mode` says: a run's stream ([`RenderMode::Run`], as
+    /// [`Self::new`] is), or part of a stored log for `aye show`.
     #[must_use]
-    pub fn for_show(mut self, mode: ShowMode, keys: Keys, context: ShowContext) -> Self {
-        self.show = Some(mode);
-        self.keys = keys;
-        self.context = context;
+    pub fn with_mode(mut self, mode: RenderMode) -> Self {
+        (self.keys, self.show, self.context) = mode.into_parts();
         self
     }
 

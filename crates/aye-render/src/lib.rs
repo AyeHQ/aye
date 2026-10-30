@@ -133,16 +133,16 @@
 //!   which both summaries keep, and which the binary keeps beside a stored
 //!   run (`aye_stream::Extra`, worded by [`summary_words`] for `aye show
 //!   --runs`).
-//! - **`aye show`** ([`ShowMode`], [`Text::for_show`],
-//!   [`JsonLines::for_show`]): the binary feeds a renderer part of a stored
-//!   log with the whole log's keys and what the run store knows beside it
-//!   ([`ShowContext`]: the run's number, how long ago it finished, the
-//!   files changed since), so a test shows the key it had in the run.
-//!   [`ShowMode::List`] makes a line per result then the summary;
-//!   [`ShowMode::Details`] shows the records as a run does, adding to a
-//!   bad outcome the run, its worker's Python and whether its file
-//!   changed. `stale` warns, before anything else, of a file that changed
-//!   since the run.
+//! - **`aye show`** ([`RenderMode::Show`], [`ShowMode`]): the binary feeds
+//!   a renderer ([`Text::with_mode`], [`JsonLines::with_mode`]) part of a
+//!   stored log with the whole log's keys and what the run store knows
+//!   beside it ([`ShowContext`]: the run's number, how long ago it
+//!   finished, the files changed since), so a test shows the key it had
+//!   in the run. [`ShowMode::List`] makes a line per result then the
+//!   summary; [`ShowMode::Details`] shows the records as a run does,
+//!   adding to a bad outcome the run, its worker's Python and whether its
+//!   file changed. `stale` warns, before anything else, of a file that
+//!   changed since the run.
 //! - **GitHub annotations** ([`GithubAnnotations`]): one `::error` per failure
 //!   signature (the first test or bad sub-outcome names it, the rest are
 //!   counted), one per failed lifetime, error diagnostic and failed worker.
@@ -169,7 +169,7 @@ pub use github::{GithubAnnotations, github_actions_enabled};
 pub use json::JsonLines;
 pub use junit::{Junit, JunitDuration, JunitFamily, JunitLogging, JunitOptions};
 pub use level::{DetailLevel, Ladder, Level};
-pub use show::{ShowContext, ShowMode};
+pub use show::{RenderMode, ShowContext, ShowMode};
 pub use text::{Text, TextOptions, summary_words};
 
 #[cfg(test)]

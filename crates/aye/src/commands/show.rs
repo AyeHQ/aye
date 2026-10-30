@@ -63,7 +63,7 @@ use std::io::{self, Write as _};
 use aye_config::OutputFormat;
 use aye_events::RunNumber;
 use aye_history::{RunMeta, RunStore, StoredRunId};
-use aye_render::{JsonLines, ShowMode, Text, TextOptions};
+use aye_render::{JsonLines, RenderMode, ShowMode, Text, TextOptions};
 use aye_stream::{Consumer, Keys, RunIndex, RunItem};
 
 use crate::cli::ShowArgs;
@@ -157,6 +157,11 @@ pub(crate) fn show(args: &ShowArgs, printer: Printer) -> Result<(), AyeError> {
     let stale = stale(&meta, root, &shown);
     let context = context(&meta, &stale, now_ms());
     let verbosity = settings.level(details);
+    let shown = RenderMode::Show {
+        mode,
+        keys,
+        context,
+    };
     let mut out: Box<dyn Consumer> = match format {
         OutputFormat::Text => {
             let mut text = Text::new(
@@ -167,14 +172,14 @@ pub(crate) fn show(args: &ShowArgs, printer: Printer) -> Result<(), AyeError> {
                     live: false,
                 },
             )
-            .for_show(mode, keys, context);
+            .with_mode(shown);
             for (path, change) in &stale {
                 text.stale(path.as_str(), *change)?;
             }
             Box::new(text)
         }
         OutputFormat::Json => {
-            let mut json = JsonLines::new(io::stdout(), verbosity).for_show(mode, keys, context);
+            let mut json = JsonLines::new(io::stdout(), verbosity).with_mode(shown);
             for (path, change) in &stale {
                 json.stale(path.as_str(), *change)?;
             }

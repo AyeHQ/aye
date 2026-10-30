@@ -13,7 +13,8 @@ use aye_stream::{Extra, FileChange, Keys, Tally};
 
 use super::{feed, lines, streams};
 use crate::{
-    ColorChoice, JsonLines, Level, ShowContext, ShowMode, Text, TextOptions, summary_words,
+    ColorChoice, JsonLines, Level, RenderMode, ShowContext, ShowMode, Text, TextOptions,
+    summary_words,
 };
 
 fn text_for(records: &[Record], verbosity: i8, show: Option<(ShowMode, Keys)>) -> String {
@@ -35,7 +36,11 @@ fn text_with(
         },
     );
     if let Some((mode, keys)) = show {
-        text = text.for_show(mode, keys, context);
+        text = text.with_mode(RenderMode::Show {
+            mode,
+            keys,
+            context,
+        });
     }
     feed(&mut text, records);
     String::from_utf8(text.into_inner()).unwrap()
@@ -53,7 +58,11 @@ fn json_with(
 ) -> String {
     let mut json = JsonLines::new(Vec::new(), Level::from_count(verbosity.into()));
     if let Some((mode, keys)) = show {
-        json = json.for_show(mode, keys, context);
+        json = json.with_mode(RenderMode::Show {
+            mode,
+            keys,
+            context,
+        });
     }
     feed(&mut json, records);
     String::from_utf8(json.into_inner()).unwrap()

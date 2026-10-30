@@ -1,11 +1,45 @@
-//! What `aye show` asks of [`Text`](crate::Text) and
-//! [`JsonLines`](crate::JsonLines) ([`ShowMode`]), and what it tells them of
-//! the stored run beside its log ([`ShowContext`]).
+//! What [`Text`](crate::Text) and [`JsonLines`](crate::JsonLines) are fed
+//! ([`RenderMode`]): a run's stream, or, for `aye show`, part of a stored
+//! log, with what `aye show` asks of them ([`ShowMode`]) and what it tells
+//! them of the stored run beside its log ([`ShowContext`]).
 
 use std::collections::BTreeMap;
 
 use aye_events::{ProjectPath, RunNumber};
-use aye_stream::FileChange;
+use aye_stream::{FileChange, Keys};
+
+/// What [`Text`](crate::Text) and [`JsonLines`](crate::JsonLines) are fed,
+/// and so what they make of it.
+#[derive(Debug, Clone, Default)]
+pub enum RenderMode {
+    /// A run's stream, as it comes: the renderer folds the keys from it.
+    #[default]
+    Run,
+    /// For `aye show`: part of a stored log, `mode` saying what to make of
+    /// it, with the whole log's `keys` (so a test shows the key it had in
+    /// the run) and what the run store knows of the run beside it
+    /// (`context`).
+    Show {
+        mode: ShowMode,
+        keys: Keys,
+        context: ShowContext,
+    },
+}
+
+impl RenderMode {
+    /// The keys a renderer starts from (a run's fold from none), what
+    /// `aye show` asks for (`None` in a run), and what it knows of the run.
+    pub(crate) fn into_parts(self) -> (Keys, Option<ShowMode>, ShowContext) {
+        match self {
+            Self::Run => (Keys::new(), None, ShowContext::default()),
+            Self::Show {
+                mode,
+                keys,
+                context,
+            } => (keys, Some(mode), context),
+        }
+    }
+}
 
 /// What [`Text`](crate::Text) and [`JsonLines`](crate::JsonLines) make of a
 /// stored run's records, for `aye show`, which feeds them part of a log

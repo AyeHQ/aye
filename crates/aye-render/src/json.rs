@@ -108,7 +108,7 @@
 //!
 //! # `aye show`
 //!
-//! [`JsonLines::for_show`]: [`ShowMode::List`] writes, whatever the level
+//! [`JsonLines::with_mode`]: [`ShowMode::List`] writes, whatever the level
 //! from 0, a `test` line per `test_finished` fed (`key`, `id`, `outcome`,
 //! `ms`, and `why` for a bad one, `reason` for one skipped or expected to
 //! fail, `cause` for one a failed lifetime kept from running; one per

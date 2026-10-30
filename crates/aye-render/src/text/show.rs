@@ -6,21 +6,19 @@ use std::time::Duration;
 
 use anstream::stream::{AsLockedWrite, RawStream};
 use aye_events::{Failure, LifetimeId, Outcome, TestResult};
-use aye_stream::{Again, FileChange, Keys};
+use aye_stream::{Again, FileChange};
 
 use super::Text;
 use super::bad::lifetime_name;
 use super::stylesheet::YELLOW;
-use crate::{ShowContext, ShowMode, failure, rerun};
+use crate::{RenderMode, failure, rerun};
 
 impl<W: RawStream + AsLockedWrite> Text<W> {
-    /// For `aye show`: `mode`, the keys of the whole log the records fed
-    /// come from, and what the run store knows of the run beside it.
+    /// Fed as `mode` says: a run's stream ([`RenderMode::Run`], as
+    /// [`Self::new`] is), or part of a stored log for `aye show`.
     #[must_use]
-    pub fn for_show(mut self, mode: ShowMode, keys: Keys, context: ShowContext) -> Self {
-        self.show = Some(mode);
-        self.keys = keys;
-        self.context = context;
+    pub fn with_mode(mut self, mode: RenderMode) -> Self {
+        (self.keys, self.show, self.context) = mode.into_parts();
         self
     }
 
