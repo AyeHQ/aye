@@ -17,7 +17,6 @@ use aye_events::{
     Diagnostic, DiagnosticCode, Event, Failure, LifetimeId, Outcome, Phase, Record, Severity,
     TestId, TestResult, WorkerIndex,
 };
-use aye_static::{EnvVars, ProcessEnv};
 use aye_stream::{
     Again, BlockedTests, Consumer, DefinitionLines, FirstBySignature, Repeats, SubOutcomes,
 };
@@ -36,16 +35,6 @@ const DIFF_LINES: usize = 10;
 
 /// Lines of a worker's error in an annotation.
 const WORKER_LINES: usize = 10;
-
-/// Whether aye runs as a GitHub Actions step, as its environment `env`
-/// says.
-pub fn github_actions_enabled(env: &ProcessEnv) -> bool {
-    is_github_actions(env.get_os(EnvVars::GITHUB_ACTIONS))
-}
-
-fn is_github_actions(value: Option<&std::ffi::OsStr>) -> bool {
-    value.is_some_and(|value| value == "true")
-}
 
 pub struct GithubAnnotations<W: Write> {
     out: W,
@@ -372,18 +361,5 @@ impl<W: Write> Consumer for GithubAnnotations<W> {
 
     fn finish(&mut self) -> io::Result<()> {
         self.write()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn enabled_only_when_github_says_so() {
-        assert!(is_github_actions(Some("true".as_ref())));
-        assert!(!is_github_actions(Some("false".as_ref())));
-        assert!(!is_github_actions(Some("".as_ref())));
-        assert!(!is_github_actions(None));
     }
 }

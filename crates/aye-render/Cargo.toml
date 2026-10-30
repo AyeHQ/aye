@@ -13,7 +13,6 @@ authors.workspace = true
 anstream = { workspace = true }
 anstyle = { workspace = true }
 aye-events = { workspace = true }
-aye-static = { workspace = true }
 aye-stream = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

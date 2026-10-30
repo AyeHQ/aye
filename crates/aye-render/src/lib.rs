@@ -11,8 +11,9 @@
 //! each signature, definition lines, the run's facts) are aye-stream's
 //! folds, and each renderer is an `aye_stream::Consumer`.
 //!
-//! Depends on: aye-stream, aye-events, and aye-static for the one variable
-//! it reads, `GITHUB_ACTIONS`.
+//! Depends on: aye-stream and aye-events. It reads no environment: the
+//! binary says what it found there (whether to annotate for GitHub, the
+//! colour choice, a live terminal).
 //!
 //! Decided (implementation, October 2026):
 //! - **Two formats, one ladder.** `--output text` ([`Text`]) and
@@ -151,8 +152,8 @@
 //!   the run finishes, capped at 50; paths can be prefixed for projects below
 //!   the repository's root (the binary prefixes the root's path relative to
 //!   `GITHUB_WORKSPACE`). A diagnostic about no file is annotated on none.
-//!   The binary enables them when [`github_actions_enabled`] says of the
-//!   environment it read.
+//!   The binary enables them in a GitHub Actions step (`GITHUB_ACTIONS`
+//!   is `true` in the environment it read).
 
 mod failure;
 mod github;
@@ -165,7 +166,7 @@ mod text;
 pub mod words;
 
 pub use anstream::ColorChoice;
-pub use github::{GithubAnnotations, github_actions_enabled};
+pub use github::GithubAnnotations;
 pub use json::JsonLines;
 pub use junit::{Junit, JunitDuration, JunitFamily, JunitLogging, JunitOptions};
 pub use level::{DetailLevel, Ladder, Level};

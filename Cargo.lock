@@ -337,7 +337,6 @@ dependencies = [
  "anstream 0.6.21",
  "anstyle",
  "aye-events",
- "aye-static",
  "aye-stream",
  "serde",
  "serde_json",

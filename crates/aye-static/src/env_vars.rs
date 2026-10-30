@@ -90,7 +90,7 @@ catalogue! {
     /// doctest. Read by the doctest adapter.
     PYTHONOPTIMIZE;
     /// `true` in a GitHub Actions step, where aye adds annotations to its
-    /// output. Read by aye-render.
+    /// output. Read by the binary.
     GITHUB_ACTIONS;
     /// The repository's checkout in a GitHub Actions step: annotations'
     /// paths are relative to it. Read by the binary.

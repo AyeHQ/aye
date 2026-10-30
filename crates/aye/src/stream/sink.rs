@@ -170,7 +170,7 @@ pub(crate) fn reporters<'a>(
                     live: io::stdout().is_terminal(),
                 },
             )));
-            if aye_render::github_actions_enabled(&settings.env.vars) {
+            if settings.env.github_actions {
                 let prefix =
                     repository_prefix(&settings.root, settings.env.github_workspace.as_deref());
                 tee.push(StopAfterError::new(
