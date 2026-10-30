@@ -14,6 +14,7 @@
 pub mod argv;
 pub mod config;
 pub mod conftest;
+pub mod doctest;
 pub mod env;
 pub mod getini;
 pub mod ini;

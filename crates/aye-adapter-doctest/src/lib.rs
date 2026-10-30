@@ -330,6 +330,7 @@ use aye_events::{
 };
 use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
 use aye_pytest::conftest;
+use aye_pytest::doctest;
 use aye_pytest::names;
 use aye_pytest::pathlib::resolve_pkg_root_and_module_name;
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
@@ -1206,40 +1207,13 @@ impl Recognizer for DoctestRecognizer {
         let explicit = requested.is_named();
         let name = rel.rsplit('/').next().unwrap_or(rel);
         let abs = self.root.join(rel);
-        let extension = Path::new(name).extension().map(|e| e.to_string_lossy());
-        if extension.as_deref() == Some("py") {
-            if !self.config.modules.value || name == "__main__.py" {
-                return Claim::Ignore;
-            }
-            if name == "setup.py"
-                && std::fs::read(&abs).is_ok_and(|bytes| {
-                    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
-                    has(b"setuptools") || has(b"distutils")
-                })
-            {
-                return Claim::Ignore;
-            }
-            if !explicit && self.ignored(&abs) {
-                return Claim::Ignore;
-            }
-            return Claim::Tests;
-        }
-        if explicit && matches!(extension.as_deref(), Some("txt" | "rst")) {
-            return Claim::Tests;
-        }
-        if !explicit && self.ignored(&abs) {
-            return Claim::Ignore;
-        }
-        if self
-            .config
-            .globs
-            .value
-            .iter()
-            .any(|glob| fnmatch::fnmatch_ex(glob, &abs, SETS))
-        {
-            Claim::Tests
-        } else {
-            Claim::Ignore
+        let modules = self.config.modules.value;
+        let globs = &self.config.globs.value;
+        match doctest::collects(name, &abs, explicit, modules, globs, SETS, || {
+            self.ignored(&abs)
+        }) {
+            Some(_) => Claim::Tests,
+            None => Claim::Ignore,
         }
     }
 

@@ -8,26 +8,10 @@ use std::path::{Path, PathBuf};
 use aye_adapter::{AdapterError, Project, Setting};
 use aye_config::{Sourced, ValueSource};
 use aye_pytest::config::approximate::ApproximateConfig;
+use aye_pytest::doctest;
 use aye_python_stdlib::os_path;
 
 use crate::parser::known_option;
-
-/// The option flags pytest's `doctest_optionflags` accepts
-/// (`_get_flag_lookup`); any other name fails pytest's collection.
-pub(crate) const PYTEST_OPTIONFLAGS: [&str; 9] = [
-    "DONT_ACCEPT_TRUE_FOR_1",
-    "DONT_ACCEPT_BLANKLINE",
-    "NORMALIZE_WHITESPACE",
-    "ELLIPSIS",
-    "IGNORE_EXCEPTION_DETAIL",
-    "COMPARISON_FLAGS",
-    "ALLOW_UNICODE",
-    "ALLOW_BYTES",
-    "NUMBER",
-];
-
-/// `--doctest-report`'s choices.
-const REPORT_CHOICES: [&str; 5] = ["none", "cdiff", "ndiff", "udiff", "only_first_failure"];
 
 /// The keys `[tool.aye.doctest]` accepts.
 const AYE_KEYS: [&str; 4] = ["modules", "glob", "optionflags", "encoding"];
@@ -273,12 +257,12 @@ impl DoctestConfig {
             && let Some(bad) = optionflags
                 .value
                 .iter()
-                .find(|f| !PYTEST_OPTIONFLAGS.contains(&f.as_str()))
+                .find(|f| !doctest::OPTIONFLAGS.contains(&f.as_str()))
         {
             return Err(AdapterError::Config(format!(
                 "doctest_optionflags: unknown flag {bad:?} in {} (pytest accepts {})",
                 optionflags.source,
-                PYTEST_OPTIONFLAGS.join(", ")
+                doctest::OPTIONFLAGS.join(", ")
             )));
         }
         if let Some(extra) = aye_settings.optionflags {
@@ -295,10 +279,10 @@ impl DoctestConfig {
             (None, None) => Sourced::default_value("utf-8".to_string()),
         };
         let report = doctest_report.unwrap_or_else(|| "udiff".to_string());
-        if active && !REPORT_CHOICES.contains(&report.as_str()) {
+        if active && !doctest::REPORT_CHOICES.contains(&report.as_str()) {
             return Err(AdapterError::Config(format!(
                 "--doctest-report: invalid choice {report:?} (choose from {})",
-                REPORT_CHOICES.join(", ")
+                doctest::REPORT_CHOICES.join(", ")
             )));
         }
         let import_mode = match import_mode.as_deref() {

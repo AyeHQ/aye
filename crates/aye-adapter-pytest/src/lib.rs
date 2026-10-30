@@ -482,6 +482,7 @@ use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticP
 use aye_protocol::AdapterContext;
 use aye_pytest::config;
 use aye_pytest::conftest::{in_confcutdir, initial_dirs};
+use aye_pytest::doctest::{self, DoctestFile};
 use aye_pytest::pathlib::{compute_module_name, resolve_package_path};
 use aye_python_semantic::framework::Framework;
 use aye_python_semantic::module_resolver::{absolute_imports, find_module, found_in};
@@ -565,15 +566,6 @@ pub struct PytestRecognizer {
     doctests: Option<config::DoctestOptions>,
     /// The context, built once (see [`Self::pytest_context`]).
     context: OnceLock<PytestContext>,
-}
-
-/// What pytest's doctest plugin makes of a file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DoctestFile {
-    /// A `DoctestModule` (`--doctest-modules`).
-    Module,
-    /// A `DoctestTextfile` (`--doctest-glob`, `test*.txt` by default).
-    Text,
 }
 
 /// What walking the project once finds ([`PytestRecognizer::scan`]).
@@ -1076,41 +1068,16 @@ impl PytestRecognizer {
         let doctests = self.doctests.as_ref()?;
         let name = rel.rsplit('/').next().unwrap_or(rel);
         let abs = self.root.join(rel);
-        let extension = Path::new(name).extension().and_then(|e| e.to_str());
-        // pytest never asks its ignore rules about a path on its command
-        // line.
-        let ignored = || !explicit && self.ignored(&abs) == Ignored::Yes;
-        if extension == Some("py") {
-            let setup_py = || {
-                name == "setup.py"
-                    && std::fs::read(&abs).is_ok_and(|bytes| {
-                        [&b"setuptools"[..], b"distutils"]
-                            .iter()
-                            .any(|word| bytes.windows(word.len()).any(|w| w == *word))
-                    })
-            };
-            if !doctests.modules || name == "__main__.py" || setup_py() || ignored() {
-                return None;
-            }
-            return Some(DoctestFile::Module);
-        }
-        if explicit && matches!(extension, Some("txt" | "rst")) {
-            return Some(DoctestFile::Text);
-        }
+        // pytest's `--doctest-glob` without one.
         let default = ["test*.txt".to_string()];
         let globs = if doctests.globs.is_empty() {
             &default[..]
         } else {
             &doctests.globs[..]
         };
-        if globs
-            .iter()
-            .any(|glob| fnmatch::fnmatch_ex(glob, &abs, SETS))
-            && !ignored()
-        {
-            return Some(DoctestFile::Text);
-        }
-        None
+        doctest::collects(name, &abs, explicit, doctests.modules, globs, SETS, || {
+            self.ignored(&abs) == Ignored::Yes
+        })
     }
 
     /// The conftest pytest loads from `dir`, if any (none with
