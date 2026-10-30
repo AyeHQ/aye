@@ -38,15 +38,39 @@ const CLAIMS: u64 = 1000;
 pub struct RunWriter {
     dir: PathBuf,
     keep: usize,
-    /// The number claimed for the run, and its log, created; `None` before
-    /// a claim, and once the run took it.
-    claimed: Option<io::Result<Claimed>>,
-    /// The run being written, from its `run_started`.
-    run: Option<Run>,
-    /// Whether a `run_started` came, and said the run only collects.
-    started: Option<bool>,
-    /// Why the run can't be kept, for `finish` to report.
-    failed: Option<io::Error>,
+    /// Where the run is, from its claim to the end of the stream.
+    state: WriterState,
+}
+
+/// Where the run fed to a [`RunWriter`] is: before its `run_started` (with
+/// its number claimed, or the claim failed, or neither), then, from it,
+/// being written, not stored, or failed.
+#[derive(Debug)]
+enum WriterState {
+    /// No `run_started` yet, and no number claimed.
+    Idle,
+    /// No `run_started` yet; the run's number claimed, its log created.
+    Claimed(Claimed),
+    /// No `run_started` yet; claiming a number failed, which `finish` says
+    /// if a run to keep starts.
+    ClaimFailed(io::Error),
+    /// From its `run_started`: the run's log being written.
+    Writing(Box<Writing>),
+    /// From its `run_started`: the run isn't stored, for this reason.
+    NotStored(NotStored),
+    /// From its `run_started`: the run can't be kept, for this reason,
+    /// which `finish` says.
+    Failed(io::Error),
+}
+
+/// Why a run that started isn't stored.
+#[derive(Debug)]
+enum NotStored {
+    /// It only collects: `finish` frees the number claimed for it, if one
+    /// was.
+    CollectOnly(Option<Claimed>),
+    /// No run is kept (`keep` 0): `finish` deletes the runs stored.
+    KeepNone,
 }
 
 /// A run's number, and its log, created empty.
@@ -58,7 +82,7 @@ struct Claimed {
 
 /// A run whose log is being written.
 #[derive(Debug)]
-struct Run {
+struct Writing {
     /// Records serialized, not yet handed to the thread.
     lines: Vec<u8>,
     sender: Option<mpsc::Sender<Chunk>>,
@@ -90,10 +114,7 @@ impl RunWriter {
         Self {
             dir: dir.into(),
             keep,
-            claimed: None,
-            run: None,
-            started: None,
-            failed: None,
+            state: WriterState::Idle,
         }
     }
 
@@ -110,11 +131,19 @@ impl RunWriter {
     /// A number claimed for a run that turns out to have nothing to show,
     /// or only to collect, is free again once it finishes.
     pub fn claim(&mut self) -> Option<RunNumber> {
-        if self.keep == 0 || self.started.is_some() {
+        if self.keep == 0 {
             return None;
         }
-        let claimed = self.claimed.get_or_insert_with(|| claim(&self.dir));
-        claimed.as_ref().ok().map(|claimed| claimed.number)
+        if matches!(self.state, WriterState::Idle) {
+            self.state = match claim(&self.dir) {
+                Ok(claimed) => WriterState::Claimed(claimed),
+                Err(err) => WriterState::ClaimFailed(err),
+            };
+        }
+        match &self.state {
+            WriterState::Claimed(claimed) => Some(claimed.number),
+            _ => None,
+        }
     }
 
     /// Takes one record of the run's log.
@@ -122,25 +151,10 @@ impl RunWriter {
         if let Event::RunStarted {
             collect_only, root, ..
         } = &record.event
-            && self.started.is_none()
         {
-            self.started = Some(*collect_only);
-            if self.keep > 0 && !*collect_only {
-                match self.claimed.take().unwrap_or_else(|| claim(&self.dir)) {
-                    Ok(claimed) => {
-                        let number = claimed.number;
-                        self.run = Run::start(&self.dir, claimed, root);
-                        if self.run.is_none() {
-                            let _ = fs::remove_file(self.log(number));
-                            self.failed =
-                                Some(io::Error::other("the run store's writer could not start"));
-                        }
-                    }
-                    Err(err) => self.failed = Some(err),
-                }
-            }
+            self.start(*collect_only, root);
         }
-        let Some(run) = self.run.as_mut() else {
+        let WriterState::Writing(run) = &mut self.state else {
             return;
         };
         if run.sender.is_none() {
@@ -166,19 +180,24 @@ impl RunWriter {
     /// not (its log is deleted, and its number free again).
     pub fn finish(mut self, extra: BTreeMap<String, u32>) -> io::Result<Option<StoredRunId>> {
         let store = RunStore::new(&self.dir);
-        // A number claimed for a run that never started, or only collected.
-        if let Some(Ok(claimed)) = self.claimed.take() {
-            drop(claimed.log);
-            remove(&self.log(claimed.number))?;
-        }
-        if let Some(err) = self.failed.take() {
-            return Err(err);
-        }
-        let Some(mut run) = self.run.take() else {
-            if self.keep == 0 && self.started == Some(false) {
-                store.retain(0, None)?;
+        let mut run = match std::mem::replace(&mut self.state, WriterState::Idle) {
+            WriterState::Writing(run) => *run,
+            // A number claimed for a run that never started, or only
+            // collected.
+            WriterState::Claimed(claimed)
+            | WriterState::NotStored(NotStored::CollectOnly(Some(claimed))) => {
+                drop(claimed.log);
+                remove(&self.log(claimed.number))?;
+                return Ok(None);
             }
-            return Ok(None);
+            WriterState::NotStored(NotStored::KeepNone) => {
+                store.retain(0, None)?;
+                return Ok(None);
+            }
+            WriterState::Failed(err) => return Err(err),
+            WriterState::Idle
+            | WriterState::ClaimFailed(_)
+            | WriterState::NotStored(NotStored::CollectOnly(None)) => return Ok(None),
         };
         let lines = std::mem::take(&mut run.lines);
         run.send(Chunk::Lines(lines));
@@ -200,6 +219,41 @@ impl RunWriter {
         store.add(&meta)?;
         store.retain(self.keep, Some(&meta.run))?;
         Ok(Some(meta.run))
+    }
+
+    /// The run's `run_started` came, saying whether it only collects, and
+    /// its `root`: where the writer goes from there. A second one is a
+    /// record like any other.
+    fn start(&mut self, collect_only: bool, root: &str) {
+        let claimed = match std::mem::replace(&mut self.state, WriterState::Idle) {
+            WriterState::Idle => None,
+            WriterState::Claimed(claimed) => Some(Ok(claimed)),
+            WriterState::ClaimFailed(err) => Some(Err(err)),
+            started => {
+                self.state = started;
+                return;
+            }
+        };
+        self.state = if collect_only {
+            WriterState::NotStored(NotStored::CollectOnly(claimed.and_then(Result::ok)))
+        } else if self.keep == 0 {
+            WriterState::NotStored(NotStored::KeepNone)
+        } else {
+            match claimed.unwrap_or_else(|| claim(&self.dir)) {
+                Ok(claimed) => {
+                    let number = claimed.number;
+                    if let Some(run) = Writing::start(&self.dir, claimed, root) {
+                        WriterState::Writing(Box::new(run))
+                    } else {
+                        let _ = fs::remove_file(self.log(number));
+                        WriterState::Failed(io::Error::other(
+                            "the run store's writer could not start",
+                        ))
+                    }
+                }
+                Err(err) => WriterState::Failed(err),
+            }
+        };
     }
 
     /// The log of the run numbered `number`.
@@ -268,7 +322,7 @@ fn remove(path: &Path) -> io::Result<()> {
     }
 }
 
-impl Run {
+impl Writing {
     /// Starts the thread that writes the log of the run `claimed` in `dir`.
     fn start(dir: &Path, claimed: Claimed, root: &str) -> Option<Self> {
         let (sender, chunks) = mpsc::channel();
