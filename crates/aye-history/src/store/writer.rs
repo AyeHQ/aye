@@ -96,7 +96,7 @@ struct Writing {
     /// The files of the tests collected so far, each once.
     files: Vec<ProjectPath>,
     seen: HashSet<ProjectPath>,
-    /// Whether the run has something to show (see the module's docs).
+    /// Whether the run has something to show (see the store's docs).
     worth: bool,
 }
 

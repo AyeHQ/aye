@@ -89,8 +89,8 @@ impl<'de> Deserialize<'de> for StoredRunId {
 /// `--run`; a run's number (`r81` or `81`, in either case); or the start of
 /// the id of a run stored before runs were numbered (its hex digits, in
 /// either case). A number no stored run has is the start of such an id
-/// too, as it was written, so `--run 81` names a run `81ab…` when no `r81`
-/// is stored.
+/// too, as it was given (lower-cased), so `--run 81` names a run `81ab…`
+/// when no `r81` is stored, and `--run r9` names none when no `r9` is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunSelector {
     /// The last run ([`RunStore::last`](super::RunStore::last)).

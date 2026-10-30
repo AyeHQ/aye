@@ -44,8 +44,9 @@
 //! - **What the summaries count beside the tests** (modules skipped while
 //!   collecting, failed lifetimes that kept no test from running, error
 //!   diagnostics by kind) is one fold, [`Tally`], which both summaries
-//!   keep, and which the binary keeps beside a stored run ([`Extra`], which
-//!   aye-render words for `aye show --runs`).
+//!   keep, and which the run store's writer folds itself and keeps beside
+//!   a stored run ([`Extra`], which aye-render words for `aye show
+//!   --runs`).
 //! - **A stored run's results** ([`RunIndex`]) are its tests' results, its
 //!   failed lifetimes, error diagnostics and modules skipped while
 //!   collecting (each once, as the summary counts them), and its failed

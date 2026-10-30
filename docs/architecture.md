@@ -146,7 +146,7 @@ boundaries and decisions.
 | `aye-runner` | The spawn path (of the interpreter it is given) and the handshake (aye's engine, the binary's prelude, then each runtime's modules), the transport, scheduling, `maxfail`, crash recovery, the log's stamping (with `aye-events`' `Stamper`), and the worker (`python/aye_worker.py`). |
 | `aye-stream` | The folds over the event stream that aren't presentation, which the renderers, the run store and `aye show` share: what consumes the log (`Consumer`), one stream fanned out to several (`Tee`) and what a consumer's error does to the rest (`StopAfterError` on stdout, `FailOnFinish` for a report written at the end); test keys (`Keys`, of a `Subject`, a test or a lifetime, shown as a `ShortKey`); what the summaries count beside the tests (`Tally`, `Extra`, `ModuleSkips`); a test's bad sub-outcomes held until it finishes (`SubOutcomes`, and which of its own failures `Repeats` theirs); tests a failed lifetime kept from running (`BlockedTests`, and whether a lifetime that fails `Again` is shown again); the first failure of each signature (`FirstBySignature`), the diagnostics that came already (`SeenDiagnostics`, so each is shown once), the line each test is defined on (`DefinitionLines`) and the run's facts (`RunFacts`); a stored run's log indexed for `aye show` (`RunIndex`: its `RunItem`s, by `ItemIndex`, and their records, by `RecordIndex`); and how a file changed since a run (`FileChange`). Where the renderers' rules differ, each says which it takes. Depends on `aye-events` and `aye-index`. |
 | `aye-render` | Renderers, presentation only, each an `aye_stream::Consumer` over aye-stream's folds, each a module tree by concept: text, JSON lines (its line types typed, their fields in the order they are written), JUnit XML, GitHub annotations; how much each shows (`Level`, the net count of `-v` less `-q`; `DetailLevel`, how much of a bad outcome; `Ladder`, a table per format, tested against the ladder below); what a renderer is fed (`RenderMode`: a run's stream, or for `aye show` part of a stored log with `ShowMode`, the log's keys and `ShowContext`, with each stale file's `FileChange`); what they say of a failure alike (`failure`, with the adapters' text rules, kept for 0.1.0 so that logs 0.0.1 stored read the same); the words they share (`words`: durations, plurals, and the times `aye show` says, which the binary reuses) and the summary's (`summary_words`, which `aye show --runs` reuses). Depends on `aye-stream` and `aye-events`; the binary reads the environment for it (`GITHUB_ACTIONS`). |
-| `aye-history` | `.aye/history.json`: durations, outcomes (the last, and the recent ones, with when a bad streak began) and last failed, folded from the stream; and the run store, `.aye/runs` (`runs.rs`): each run's id (`StoredRunId`: its number, `r81`, or a hex id from before runs were numbered), log, gzip-compressed, its summary, `last`, retention, and how a file changed since a run (`RunMeta::change`, an `aye_stream::FileChange`). Both are written through `aye-fs`. Depends on `aye-events`, `aye-fs` and `aye-stream`. |
+| `aye-history` | `.aye/history.json` (`history`): durations, outcomes (the last, and the recent ones, with when a bad streak began) and last failed, folded from the stream (`History`, over each test's `TestStats`); and the run store, `.aye/runs` (`store`): each run's id (`StoredRunId`: its number, `r81`, or a hex id from before runs were numbered) and what `aye show --run` names of them (`RunSelector`); its log, gzip-compressed, written as the records arrive (`RunWriter`, whose `WriterState` says where the run is: claimed, written, not stored or failed, and which folds what the run's summary counts beside the tests itself, with `aye_stream::Tally`); its summary (`RunMeta`), `last`, numbering, retention, and how a file changed since a run (`RunMeta::change`, an `aye_stream::FileChange`); and the runs read back (`RunStore`). Both are written through `aye-fs`. Depends on `aye-events`, `aye-fs` and `aye-stream`. |
 | `aye-provision` | The interpreter: what was asked for (`PythonRequest`, from a `RequestSource`), discovery (`find`, over a `DiscoveryEnv`), the `Interpreter` found and its `PythonSource` (which the binary shows as a `ValueSource`); and what the refinement cache's key holds of the environment refinement runs in (`EnvironmentFingerprint`: the interpreter, its venv's layout and installed packages, the variables workers inherit, the framework's arguments, and the `InstalledModules` whose content the key doesn't hold). Later, for the Python matrix (Step 5): environments from uv or paths you supply. Depends on `aye-events`, `aye-fs` and `aye-static`. |
 | `aye-adapter-pytest` | The pytest adapter: pytest's config discovery, the static recognizer (for claims and `--co --no-refine`), and, embedded, aye's own `pytest` module (`python/native/aye_pytest_shim.py`, which the registry puts in every worker's prelude), the pytest front-end (`aye_pytest_frontend.py`) and its executor (`aye_pytest_native.py`), on aye's engine (`aye-engine`'s `aye_model.py`, `aye_native_engine.py`, `aye_rewrite.py`). |
 | `aye-adapter-unittest` | The unittest adapter: `[tool.aye.unittest]`, discovery as `python -m unittest discover` does it, the static recognizer, and a native executor (`python/aye_engine_unittest.py`). |
@@ -760,9 +760,10 @@ limits in `crates/aye-render/src/json.rs` (their types in `json/schema.rs`).
 With `-s`, workers' output is echoed to stdout beside text output, and to
 stderr beside JSON lines, so those stay whole.
 
-History is one more consumer. `.aye/history.json` keeps per-test durations
-(a moving average, the maximum, the count and the last), outcomes and the
-last-failed set that `--lf` and `--ff` read. A test that finishes `failed`
+History is one more consumer (`aye-history`'s `history`, `History`).
+`.aye/history.json` keeps per-test durations (a moving average, the
+maximum, the count and the last), outcomes and the last-failed set that
+`--lf` and `--ff` read. A test that finishes `failed`
 or `error` joins the set, and one that finishes any other way leaves it, as
 in pytest; every skip leaves it, whatever its reason. A test that did not
 run changes nothing, outcome and durations included: one with no
@@ -806,12 +807,13 @@ name that doesn't exist: `not-found` before any batch, `unclaimed`); a
 collect-only run and one that ran nothing else (a typo in a path, a `-k`
 that matches nothing, a collection interrupted) leave no trace, so `last`
 stays the run before them and retention keeps the runs that did run. The
-store (`aye-history`'s `runs.rs`) is one more consumer of the stream, the
-last to get each record: it serializes the record where it arrives and
-hands the serialized log, in chunks of 256 KiB, to a thread of its own that
-compresses it and reads the files' digests, so the run never waits on
-either. (Moving the records themselves to that thread cost more: freeing
-them there slowed the run.) On `packaging`'s suite, 62,000 tests and 57 MB
+store (`aye-history`'s `store`; its writer is `RunWriter`) is one more
+consumer of the stream, the last to get each record: it serializes the
+record where it arrives and hands the serialized log, in chunks of 256
+KiB, to a thread of its own that compresses it and reads the files'
+digests, so the run never waits on either. (Moving the records
+themselves to that thread cost more: freeing them there slowed the run.)
+On `packaging`'s suite, 62,000 tests and 57 MB
 of records a run, the log is 3.5 MB, the store's work is about 0.13 s of
 CPU (serializing on the run's thread, compressing on its own), and the
 run's time is the same within the noise of repeated runs (7.2 to 7.6 s,
@@ -819,11 +821,11 @@ either way). When the stream ends it writes the run's summary,
 `r<N>.json` (when it started and finished by the store's clock, its
 exit code, counts and duration; what its summary counts beside the tests'
 counts, modules skipped while collecting, failed lifetimes that kept no
-test from running and error diagnostics, which the binary folds with
-`aye_stream::Tally` as the summaries do and hands over, so `aye show
---runs` words a run as its summary did; and the digest, FNV-1a 128, of
-each file holding a test it collected or that collection reported an
-error on or skipped, read when collection finished), then
+test from running and error diagnostics, which the writer folds from
+every record it gets with `aye_stream::Tally`, as the summaries do, so
+`aye show --runs` words a run as its summary did; and the digest, FNV-1a
+128, of each file holding a test it collected or that collection reported
+an error on or skipped, read when collection finished), then
 `.aye/runs/last`, the id of the run that finished last; each is written to
 a temporary file and renamed over, so a reader sees the old one or the new
 one. A run is stored once its summary exists: a log still being written,
@@ -887,7 +889,9 @@ as `interrupted`) is the run's whatever is shown of it, as in the whole
 list; text says `no tests shown` when nothing is.
 - `--run r81` (or `81`) picks an older stored run, and the start of a
   hex id one stored before runs were numbered (one no run is, or several
-  runs' ids start with, is a usage error); `--runs` lists the stored runs,
+  runs' ids start with, is a usage error): a number no stored run has is
+  the start of such an id too (`aye_history::RunSelector`, which
+  `RunStore::select` finds); `--runs` lists the stored runs,
   the last first: `r81`, start time (UTC), exit code and the counts its
   summary had.
 

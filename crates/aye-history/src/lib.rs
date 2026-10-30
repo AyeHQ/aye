@@ -1,13 +1,26 @@
-//! History as another consumer of the stream. Per-test duration statistics
-//! (ewma, max, count, last run), outcomes and last-failed, flake rates, the
-//! per-test coverage map, run metadata, and the queries built on them: run
-//! diffs, tests-for, parallel floor. Same schema locally and in the cloud;
-//! durations are advisory and separate from result caching, which has stricter
-//! invalidation.
+//! What aye keeps of earlier runs, each one more consumer of the stream:
+//! - [`history`], `.aye/history.json`: per-test duration statistics (ewma,
+//!   max, count, last run), the last and the recent outcomes, and
+//!   last-failed, folded from each run's records ([`History`]), which
+//!   `--lf`, `--ff`, the scheduler's durations and each bad outcome's
+//!   `history` read (`stats.rs`: [`TestStats`]; `file.rs`: the file).
+//! - [`store`], `.aye/runs`: each run's whole log, numbered (`r81`, a
+//!   [`StoredRunId`]), written as the records arrive by [`RunWriter`],
+//!   whose state says where the run is (claimed, written, not stored,
+//!   failed) and which folds what the run's summary counts beside the
+//!   tests; its summary ([`RunMeta`]: counts, that `extra`, the files'
+//!   digests, why it stopped), `last`, numbering and retention; read back
+//!   for `aye show` by [`RunStore`], which finds the run `--run` names
+//!   ([`RunSelector`]).
+//!
+//! Later: flake rates, the per-test coverage map, run metadata, and the
+//! queries built on them: run diffs, tests-for, parallel floor. Same schema
+//! locally and in the cloud; durations are advisory and separate from
+//! result caching, which has stricter invalidation.
 //!
 //! Depends on: aye-events, aye-fs for the state directory, and aye-stream
 //! for what the run store tells of a file that changed since a run
-//! (`FileChange`).
+//! (`FileChange`) and the summary's counts its writer folds (`Tally`).
 //!
 //! Native features (October 2026): the fingerprint that decides whether a
 //! cached result holds carries its own version, so changing its inputs
