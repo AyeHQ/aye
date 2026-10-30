@@ -326,6 +326,16 @@ fn case<'c>(collection: &'c Collection, id: &str) -> &'c Case {
 }
 
 #[test]
+#[should_panic(expected = "at most 64 recognizers")]
+fn at_most_64_recognizers_are_prepared() {
+    let recognizers: Vec<Prepared> = (0..65)
+        .map(|_| -> Prepared { ("fake".into(), Box::new(Fake::new())) })
+        .collect();
+    let root = Path::new("/");
+    let _ = Collector::new(Project::new(root, root), &recognizers, Options::default());
+}
+
+#[test]
 fn walks_sorted_and_honours_descend() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

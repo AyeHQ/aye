@@ -8,17 +8,16 @@ use aye_events::{
     Case, Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPathRef, Severity, TestId,
 };
 
-use crate::recognize::{Job, Recognized};
+use crate::recognize::TestFile;
 use crate::refine::Refinement;
-use crate::walk::{Tree, WalkKey};
+use crate::walk::{AdapterId, FileId, Tree, WalkKey};
 use crate::{Collection, Collector, Prepared};
 
 impl Collector<'_> {
     pub(crate) fn assemble(
         &self,
         tree: &Tree<'_>,
-        jobs: &[Job],
-        recognized: Vec<Recognized>,
+        test_files: Vec<TestFile>,
         mut refinement: Refinement,
         mut diagnostics: Vec<Diagnostic>,
     ) -> Collection {
@@ -27,13 +26,13 @@ impl Collector<'_> {
             /// The file's path, empty for what belongs to no file.
             rel: String,
             notes: Vec<Diagnostic>,
-            groups: Vec<(usize, Vec<Case>)>,
+            groups: Vec<(AdapterId, Vec<Case>)>,
         }
 
         // Cases a reply put in files it wasn't asked about: those in the
         // package of a requested `__init__.py` are anchored there, the rest
         // go after every file.
-        let mut anchored: BTreeMap<usize, Vec<(usize, Case)>> = BTreeMap::new();
+        let mut anchored: BTreeMap<FileId, Vec<(AdapterId, Case)>> = BTreeMap::new();
         let mut unanchored = Vec::new();
         for stray in std::mem::take(&mut refinement.stray) {
             let mut rest = Vec::new();
@@ -60,13 +59,13 @@ impl Collector<'_> {
         let mut files = Vec::new();
         let mut refined_files = 0;
         let mut probes = HashMap::new();
-        for (job, found) in jobs.iter().zip(recognized) {
+        for TestFile { job, found } in test_files {
             let mut notes: Vec<Diagnostic> = found.diagnostic.into_iter().collect();
             let mut groups = Vec::new();
             let (mut refined, mut fell_back) = (false, false);
-            let rel = &tree.entries[job.at].rel;
+            let rel = &tree.entries[job.file].rel;
             for (i, recognition) in found.by {
-                let cases = if let Some(result) = refinement.refined.remove(&(job.at, i)) {
+                let cases = if let Some(result) = refinement.refined.remove(&(job.file, i)) {
                     refined = true;
                     // The framework's import has the final word on whether
                     // the file collects, and reports its own error: a static
@@ -82,7 +81,7 @@ impl Collector<'_> {
                     result.cases
                 } else {
                     notes.extend(recognition.diagnostics);
-                    if let Some(diagnostic) = refinement.fallbacks.remove(&(job.at, i)) {
+                    if let Some(diagnostic) = refinement.fallbacks.remove(&(job.file, i)) {
                         fell_back = true;
                         notes.push(diagnostic);
                     }
@@ -103,7 +102,7 @@ impl Collector<'_> {
             if found.parsed
                 && quiet
                 && !fell_back
-                && !anchored.contains_key(&job.at)
+                && !anchored.contains_key(&job.file)
                 && groups.iter().all(|(_, c)| c.is_empty())
                 && groups.iter().any(|(i, _)| {
                     !claims_any_name(&mut probes, &self.recognizers[*i], *i, rel.as_str())
@@ -131,7 +130,7 @@ impl Collector<'_> {
             let package = tree.entries[anchor].rel.as_str();
             let package = &package[..package.len() - INIT.len()];
             // By file, in walk order; by recognizer within each.
-            let mut by_file: BTreeMap<WalkKey, Vec<(usize, Vec<Case>)>> = BTreeMap::new();
+            let mut by_file: BTreeMap<WalkKey, Vec<(AdapterId, Vec<Case>)>> = BTreeMap::new();
             for (i, case) in cases {
                 let groups = by_file
                     .entry(WalkKey::new(case.id.path().as_str()))
@@ -179,7 +178,7 @@ impl Collector<'_> {
             });
         }
 
-        let mut best: HashMap<TestId, usize> = HashMap::new();
+        let mut best: HashMap<TestId, AdapterId> = HashMap::new();
         for (i, case) in files
             .iter()
             .flat_map(|file| &file.groups)
@@ -218,7 +217,7 @@ impl Collector<'_> {
     }
 
     /// A case the adapter `by` collects again under an id it already gave.
-    fn duplicate(&self, case: &Case, by: usize) -> Diagnostic {
+    fn duplicate(&self, case: &Case, by: AdapterId) -> Diagnostic {
         // The framework selects by id, so it runs them all (pytest does).
         Diagnostic {
             severity: Severity::Warning,
@@ -242,7 +241,7 @@ const INIT: &str = "__init__.py";
 /// importing a package can make tests in files of it the walk didn't claim
 /// (unittest's `load_tests` discovering another pattern), which belong at
 /// the package's place.
-fn package_anchor(tree: &Tree<'_>, requested: &[usize], path: &str) -> Option<usize> {
+fn package_anchor(tree: &Tree<'_>, requested: &[FileId], path: &str) -> Option<FileId> {
     requested
         .iter()
         .filter_map(|&at| {
@@ -260,9 +259,9 @@ fn package_anchor(tree: &Tree<'_>, requested: &[usize], path: &str) -> Option<us
 /// then a file of that kind without tests is no surprise, and gets no
 /// `no-tests` note. Asked once per directory, extension and recognizer.
 fn claims_any_name(
-    probes: &mut HashMap<(String, String, usize), bool>,
+    probes: &mut HashMap<(String, String, AdapterId), bool>,
     recognizer: &Prepared,
-    index: usize,
+    index: AdapterId,
     rel: &str,
 ) -> bool {
     let (dir, name) = rel.rsplit_once('/').unwrap_or(("", rel));

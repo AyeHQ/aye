@@ -244,6 +244,7 @@ dependencies = [
  "aye-config",
  "aye-events",
  "aye-fs",
+ "aye-index",
  "aye-protocol",
  "aye-provision",
  "aye-static",

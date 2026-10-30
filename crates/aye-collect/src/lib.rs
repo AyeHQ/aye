@@ -179,6 +179,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use aye_adapter::{Project, Recognizer};
 use aye_events::{AdapterName, Case, Diagnostic, ProjectPath, Severity};
 use aye_fs::normalize_absolute;
+use aye_index::IndexSlice;
 use aye_protocol::Refiner;
 use aye_provision::{EnvironmentFingerprint, InstalledModules};
 
@@ -192,9 +193,9 @@ mod walk;
 
 pub use targets::Targets;
 
-use recognize::{Job, Recognized};
+use recognize::{Job, Recognized, TestFile};
 use refine::standalone::Scope;
-use walk::{Mask, Tree, bits};
+use walk::{AdapterId, RecognizerSet, Tree};
 
 /// A prepared recognizer and its adapter's name.
 pub type Prepared = (AdapterName, Box<dyn Recognizer>);
@@ -282,7 +283,8 @@ impl Collection {
 /// Finds the tests in a project with the recognizers prepared for it.
 pub struct Collector<'a> {
     project: Project<'a>,
-    recognizers: &'a [Prepared],
+    /// In priority order.
+    recognizers: IndexSlice<'a, AdapterId, Prepared>,
     options: Options,
     /// What refinement depends on outside the project's files; without
     /// it, no cache.
@@ -299,13 +301,13 @@ impl<'a> Collector<'a> {
     /// first one's case is kept.
     pub fn new(project: Project<'a>, recognizers: &'a [Prepared], options: Options) -> Self {
         assert!(
-            recognizers.len() <= Mask::BITS as usize,
+            recognizers.len() <= RecognizerSet::CAPACITY,
             "at most {} recognizers",
-            Mask::BITS
+            RecognizerSet::CAPACITY
         );
         Self {
             project,
-            recognizers,
+            recognizers: IndexSlice::from_raw(recognizers),
             options,
             environment: None,
             installed: OnceLock::new(),
@@ -401,11 +403,13 @@ impl<'a> Collector<'a> {
         tick(&tree);
 
         let mut jobs = Vec::new();
-        for at in tree.tests() {
-            let claimants = bits(tree.entries[at].tests)
-                .map(|i| (i, tree.support(at, i)))
+        for file in tree.tests() {
+            let claimants = tree.entries[file]
+                .tests
+                .iter()
+                .map(|i| (i, tree.support(file, i)))
                 .collect();
-            jobs.push(Job { at, claimants });
+            jobs.push(Job { file, claimants });
         }
         let mut diagnostics = std::mem::take(&mut tree.diagnostics);
 
@@ -433,14 +437,22 @@ impl<'a> Collector<'a> {
         if self.stopped() {
             return interrupted();
         }
-        let refining = recognized
+        // The map keeps the jobs' order.
+        let test_files: Vec<TestFile> = jobs
+            .into_iter()
+            .zip(recognized)
+            .map(|(job, found)| TestFile { job, found })
+            .collect();
+        let refining = test_files
             .iter()
-            .filter(|r| {
-                r.by.iter()
+            .filter(|file| {
+                file.found
+                    .by
+                    .iter()
                     .any(|(_, recognition)| recognition.refine.is_some())
             })
             .count();
-        let refine = || self.refine(&tree, &support, &jobs, &recognized, refiner, &seen);
+        let refine = || self.refine(&tree, &support, &test_files, refiner, &seen);
         let refinement = if refining > 0 && refiner.is_some() {
             let report = Progress {
                 walked: tree.walked,
@@ -462,7 +474,7 @@ impl<'a> Collector<'a> {
         if self.stopped() {
             return interrupted();
         }
-        let mut collection = self.assemble(&tree, &jobs, recognized, refinement, diagnostics);
+        let mut collection = self.assemble(&tree, test_files, refinement, diagnostics);
         if self.options.strict {
             for diagnostic in &mut collection.diagnostics {
                 if diagnostic.severity == Severity::Warning {

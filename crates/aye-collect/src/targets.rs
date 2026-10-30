@@ -8,7 +8,7 @@ use aye_adapter::Project;
 use aye_events::{Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 
 use crate::Collector;
-use crate::walk::{Mask, Tree};
+use crate::walk::{RecognizerSet, Tree};
 
 /// What a collection walks, from the paths a run was given.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -51,7 +51,7 @@ impl Collector<'_> {
             }
             return true;
         }
-        let all = (0..self.recognizers.len()).fold(0, |all: Mask, i| all | 1 << i);
+        let all: RecognizerSet = self.recognizers.indices().collect();
         for (abs, target) in self.normalize_targets(&targets) {
             let rel = aye_fs::relative_through_root(&abs, self.project.root);
             let (code, message) = if abs.is_dir() {
@@ -62,7 +62,7 @@ impl Collector<'_> {
             } else if abs.is_file() {
                 let at = tree.visit(abs, all, true);
                 let entry = &tree.entries[at];
-                if entry.tests | entry.support != 0 {
+                if !entry.tests.union(entry.support).is_empty() {
                     continue;
                 }
                 (
@@ -151,14 +151,14 @@ impl Collector<'_> {
 
     /// The recognizers' roots, in order and without repeats, each with the
     /// recognizers that listed it.
-    fn roots(&self) -> Vec<(PathBuf, Mask)> {
-        let mut roots: Vec<(PathBuf, Mask)> = Vec::new();
-        for (i, (_, recognizer)) in self.recognizers.iter().enumerate() {
+    fn roots(&self) -> Vec<(PathBuf, RecognizerSet)> {
+        let mut roots: Vec<(PathBuf, RecognizerSet)> = Vec::new();
+        for (i, (_, recognizer)) in self.recognizers.iter_enumerated() {
             for root in recognizer.roots(&self.project) {
                 let root = aye_fs::absolute(self.project.cwd, &root);
                 match roots.iter_mut().find(|(seen, _)| *seen == root) {
-                    Some((_, mask)) => *mask |= 1 << i,
-                    None => roots.push((root, 1 << i)),
+                    Some((_, mask)) => mask.insert(i),
+                    None => roots.push((root, RecognizerSet::of(i))),
                 }
             }
         }

@@ -10,9 +10,9 @@ use aye_events::{ContentDigest, Diagnostic, DiagnosticCode, Fnv128, ProjectPath,
 use aye_protocol::{RefineRequest, Refined, Refiner};
 
 use crate::Collector;
-use crate::recognize::{Job, Recognized};
+use crate::recognize::{Job, Recognized, TestFile};
 use crate::source::Source;
-use crate::walk::Tree;
+use crate::walk::{AdapterId, FileId, Tree};
 
 mod cache;
 pub(crate) mod standalone;
@@ -27,18 +27,18 @@ const FORMAT: &str = "refine-2";
 #[derive(Default)]
 pub(crate) struct Refinement {
     /// What a worker or the cache reported, by file and recognizer.
-    pub refined: HashMap<(usize, usize), Refined>,
+    pub refined: HashMap<(FileId, AdapterId), Refined>,
     /// Why a file kept its static guess, by file and recognizer.
-    pub fallbacks: HashMap<(usize, usize), Diagnostic>,
+    pub fallbacks: HashMap<(FileId, AdapterId), Diagnostic>,
     /// Reported cases and diagnostics outside the requested files.
     pub stray: Vec<Stray>,
 }
 
 /// What one request's reply held outside the files it named.
 pub(crate) struct Stray {
-    pub recognizer: usize,
+    pub recognizer: AdapterId,
     /// The files the request named.
-    pub requested: Vec<usize>,
+    pub requested: Vec<FileId>,
     pub refined: Refined,
 }
 
@@ -49,25 +49,23 @@ impl Collector<'_> {
     pub(crate) fn refine(
         &self,
         tree: &Tree<'_>,
-        support: &HashMap<usize, Source>,
-        jobs: &[Job],
-        recognized: &[Recognized],
+        support: &HashMap<FileId, Source>,
+        test_files: &[TestFile],
         refiner: Option<&(dyn Refiner + Sync)>,
         seen: &Mutex<HashMap<PathBuf, bool>>,
     ) -> Refinement {
         let mut out = Refinement::default();
-        let mut digests: HashMap<usize, ContentDigest> = HashMap::new();
+        let mut digests: HashMap<FileId, ContentDigest> = HashMap::new();
         // Computed once, when a file first needs it.
         let mut environment: Option<Option<ContentDigest>> = None;
         // By support file and recognizer: whether it is standalone.
-        let mut supports_standalone: HashMap<(usize, usize), bool> = HashMap::new();
+        let mut supports_standalone: HashMap<(FileId, AdapterId), bool> = HashMap::new();
         // By package `__init__.py` and recognizer: its digest when standalone.
-        let mut inits: HashMap<(PathBuf, usize), Option<ContentDigest>> = HashMap::new();
-        for (i, (adapter, recognizer)) in self.recognizers.iter().enumerate() {
-            let pending: Vec<(&Job, &Recognized, &RefineReason)> = jobs
+        let mut inits: HashMap<(PathBuf, AdapterId), Option<ContentDigest>> = HashMap::new();
+        for (i, (adapter, recognizer)) in self.recognizers.iter_enumerated() {
+            let pending: Vec<(&Job, &Recognized, &RefineReason)> = test_files
                 .iter()
-                .zip(recognized)
-                .filter_map(|(job, found)| {
+                .filter_map(|TestFile { job, found }| {
                     let (_, recognition) = found.by.iter().find(|(by, _)| *by == i)?;
                     Some((job, found, recognition.refine.as_ref()?))
                 })
@@ -128,7 +126,7 @@ impl Collector<'_> {
                         })
                     });
                 let packages = if standalone {
-                    self.package_inits(&tree.entries[job.at].abs, i, &scope, &mut inits)
+                    self.package_inits(&tree.entries[job.file].abs, i, &scope, &mut inits)
                 } else {
                     None
                 };
@@ -147,7 +145,7 @@ impl Collector<'_> {
                             .chain(packages)
                             .collect();
                         cache.key(
-                            tree.entries[job.at].rel.as_str(),
+                            tree.entries[job.file].rel.as_str(),
                             content,
                             chain.iter().map(|(rel, digest)| (rel.as_str(), *digest)),
                         )
@@ -158,9 +156,9 @@ impl Collector<'_> {
                     .zip(key.as_deref())
                     .and_then(|(c, k)| c.read(k))
                 {
-                    out.refined.insert((job.at, i), hit);
+                    out.refined.insert((job.file, i), hit);
                 } else {
-                    misses.push((job.at, reason, key));
+                    misses.push((job.file, reason, key));
                 }
             }
             if misses.is_empty() {
@@ -217,7 +215,7 @@ impl Collector<'_> {
                     // conftest that failed to import, a usage error, cases
                     // from elsewhere) may have shaped every part: cache none.
                     let clean = stray.cases.is_empty() && stray.diagnostics.is_empty();
-                    let requested: Vec<usize> = misses.iter().map(|(at, _, _)| *at).collect();
+                    let requested: Vec<FileId> = misses.iter().map(|(at, _, _)| *at).collect();
                     for (at, _, key) in misses {
                         let part = parts
                             .remove(tree.entries[at].rel.as_str())
@@ -266,9 +264,9 @@ impl Collector<'_> {
     fn package_inits(
         &self,
         abs: &Path,
-        recognizer: usize,
+        recognizer: AdapterId,
         scope: &Scope<'_>,
-        memo: &mut HashMap<(PathBuf, usize), Option<ContentDigest>>,
+        memo: &mut HashMap<(PathBuf, AdapterId), Option<ContentDigest>>,
     ) -> Option<Vec<(ProjectPath, ContentDigest)>> {
         let root = self.project.root;
         let mut out = Vec::new();
@@ -301,7 +299,7 @@ fn fallback(
     severity: Severity,
     code: DiagnosticCode,
     tree: &Tree<'_>,
-    at: usize,
+    at: FileId,
     message: String,
 ) -> Diagnostic {
     Diagnostic {

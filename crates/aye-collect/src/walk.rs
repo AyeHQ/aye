@@ -11,7 +11,7 @@ mod order;
 mod tree;
 
 pub(crate) use order::{WalkKey, walk_order};
-pub(crate) use tree::{Mask, Tree, bits};
+pub(crate) use tree::{AdapterId, FileId, RecognizerSet, Tree};
 
 /// How often a walk reports and asks whether to go on, in entries.
 const TICK: u64 = 256;
@@ -27,7 +27,7 @@ impl Tree<'_> {
     pub(crate) fn walk(
         &mut self,
         top: &Path,
-        mask: Mask,
+        mask: RecognizerSet,
         tick: &mut dyn FnMut(&Self) -> bool,
     ) -> bool {
         let mut masks = vec![mask];
@@ -73,7 +73,7 @@ impl Tree<'_> {
             let parent = masks[depth - 1];
             if entry.file_type().is_dir() {
                 let wanted = self.descend(entry.path(), parent);
-                if wanted == 0 {
+                if wanted.is_empty() {
                     walker.skip_current_dir();
                     continue;
                 }
@@ -86,9 +86,9 @@ impl Tree<'_> {
         true
     }
 
-    fn descend(&self, dir: &Path, mask: Mask) -> Mask {
-        bits(mask)
+    fn descend(&self, dir: &Path, mask: RecognizerSet) -> RecognizerSet {
+        mask.iter()
             .filter(|&i| self.recognizers[i].1.descend(dir))
-            .fold(0, |wanted, i| wanted | 1 << i)
+            .collect()
     }
 }
