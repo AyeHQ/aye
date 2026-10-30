@@ -24,10 +24,16 @@ use aye_stream::{
 
 use crate::{failure, words};
 
+mod command;
+
+use command::command;
+
 /// Failure annotations written per run.
 const ANNOTATIONS: usize = 50;
+
 /// Explanation lines in an annotation.
 const DIFF_LINES: usize = 10;
+
 /// Lines of a worker's error in an annotation.
 const WORKER_LINES: usize = 10;
 
@@ -329,30 +335,6 @@ fn message(failure: &Failure) -> String {
     message
 }
 
-/// `::error file=…,line=…,title=…::message`.
-fn command(file: Option<&str>, line: Option<u32>, title: &str, message: &str) -> String {
-    let mut properties = Vec::new();
-    if let Some(file) = file {
-        properties.push(format!("file={}", property(file)));
-        if let Some(line) = line.filter(|line| *line > 0) {
-            properties.push(format!("line={line}"));
-        }
-    }
-    properties.push(format!("title={}", property(title)));
-    format!("::error {}::{}", properties.join(","), data(message))
-}
-
-fn data(value: &str) -> String {
-    value
-        .replace('%', "%25")
-        .replace('\r', "%0D")
-        .replace('\n', "%0A")
-}
-
-fn property(value: &str) -> String {
-    data(value).replace(':', "%3A").replace(',', "%2C")
-}
-
 impl<W: Write> Consumer for GithubAnnotations<W> {
     fn consume(&mut self, record: &Record) -> io::Result<()> {
         self.lines.note(record);
@@ -403,23 +385,5 @@ mod tests {
         assert!(!is_github_actions(Some("false".as_ref())));
         assert!(!is_github_actions(Some("".as_ref())));
         assert!(!is_github_actions(None));
-    }
-
-    #[test]
-    fn commands_escape_like_the_actions_toolkit() {
-        assert_eq!(
-            command(
-                Some("tests/a,b.py"),
-                Some(3),
-                "tests/a,b.py::test_x[50%]",
-                "100% broken\r\nsecond: line"
-            ),
-            "::error file=tests/a%2Cb.py,line=3,title=tests/a%2Cb.py%3A%3Atest_x[50%25]::100%25 broken%0D%0Asecond: line"
-        );
-        assert_eq!(command(None, Some(3), "aye", "m"), "::error title=aye::m");
-        assert_eq!(
-            command(Some("t.py"), Some(0), "x", "m"),
-            "::error file=t.py,title=x::m"
-        );
     }
 }
