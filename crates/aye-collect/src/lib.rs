@@ -1,9 +1,23 @@
-//! Discovery infrastructure. Walks the tree, parses files with Ruff's parser,
-//! hands each file and its AST to every registered recognizer, merges the
-//! results, runs the refinement protocol for files any adapter marked
-//! runtime-dependent, caches refinement by file content hash, and emits
-//! diagnostics (duplicate definitions, uncollected tests, files with no tests)
-//! with the strict-mode policy.
+//! Discovery, in the order a collection goes:
+//! - what it collects from ([`Targets`], `targets.rs`): the paths given,
+//!   the recognizers' roots, or both;
+//! - the walk (`walk.rs`), into the table of the files it finds (each a
+//!   `FileId`), with what each recognizer (an `AdapterId`, in priority
+//!   order) claims of each, as a `RecognizerSet`, and each test file's
+//!   support files (`walk/tree.rs`), in the walk's order (`walk/order.rs`);
+//! - each test file read, parsed with Ruff's parser (`source.rs`) and
+//!   recognized by the recognizers claiming it (`recognize.rs`);
+//! - refinement (`refine.rs`): a worker imports the files an adapter can't
+//!   predict, unless the refinement cache answers (`refine/cache.rs`),
+//!   which it does for a file only when its `Cacheability` says it may
+//!   (`refine/standalone.rs`), under a key made of the run's, the
+//!   adapter's and the file's inputs, part by part (`refine/key.rs`);
+//! - the merge (`assemble.rs`) into a [`Collection`], whose diagnostics are
+//!   the recognizers', the workers' and collection's own
+//!   (`CollectDiagnostic`, `diagnostic.rs`: files with no tests, ids given
+//!   twice, what can't be found, read, parsed or refined), strict mode
+//!   applied, and which gives a run its sessions' files
+//!   ([`Collection::session_files`]).
 //!
 //! Owns: the mechanism of discovery. Does not own: what counts as a test, which
 //! is each adapter's recognizer. If a framework's name pattern or id algorithm
@@ -11,7 +25,7 @@
 //!
 //! Depends on: aye-adapter (the recognizers it drives, and Ruff's syntax
 //! tree), aye-events, aye-fs (paths, and marking the state directory),
-//! aye-protocol (refinement's messages and the `Refiner` it asks),
+//! aye-index (the files' and recognizers' indices), aye-protocol (refinement's messages and the `Refiner` it asks),
 //! aye-provision (the environment's fingerprint, which the cache's key
 //! holds: collection reads the interpreter only through it). Must not
 //! depend on any `aye-adapter-*`.
@@ -30,7 +44,11 @@
 //!   as Python's `os.path.abspath` does; one spelled through another name of
 //!   a directory in the project, as macOS's `/tmp` is `/private/tmp`, is
 //!   spelled from the root), otherwise the union of every recognizer's
-//!   roots, each walked only for the recognizers that listed it. Like
+//!   roots, each walked only for the recognizers that listed it. With
+//!   dotted names or keys among the paths ([`Targets::PathsAndDefault`]),
+//!   which name tests wherever the recognizers look, the recognizers' roots
+//!   that exist (as they give them for no path) come before the paths, all
+//!   explicit. Like
 //!   pytest's `normalize_collection_arguments`, an existing explicit path
 //!   below another explicit directory, or repeating an earlier one, is
 //!   dropped, so the files keep the order of the path that subsumes them.
@@ -137,7 +155,8 @@
 //!   [`Collector::with_environment`], giving the interpreter workers run;
 //!   without an interpreter (the default) there is no cache. A
 //!   file is read from or written to the cache only when it, its support
-//!   files and those `__init__.py` files are standalone (`standalone.rs`):
+//!   files and those `__init__.py` files are standalone
+//!   (`refine/standalone.rs`):
 //!   they import only pure standard-library modules and the adapter's
 //!   framework, never touch files, processes, the clock or randomness, never
 //!   run code by name (`__import__`, `import_module`, `importorskip`), and
