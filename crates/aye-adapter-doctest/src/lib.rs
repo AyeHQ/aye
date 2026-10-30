@@ -328,6 +328,7 @@ use aye_events::{
 };
 use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
+use aye_python_stdlib::glob;
 use aye_static::{EnvVars, ProcessEnv};
 
 pub use config::{DoctestConfig, ImportMode};
@@ -855,7 +856,7 @@ impl DoctestRecognizer {
         if project.cwd == self.config.rootdir && !self.config.testpaths.is_empty() {
             let mut roots = Vec::new();
             for pattern in &self.config.testpaths {
-                for found in glob(&self.config.rootdir, pattern) {
+                for found in glob::glob_absolute(&self.config.rootdir, pattern, SETS) {
                     if !roots.contains(&found) {
                         roots.push(found);
                     }
@@ -1399,75 +1400,5 @@ impl DoctestRecognizer {
                 }
             })
             .collect()
-    }
-}
-
-/// Python's `glob.glob(pattern, recursive=True)` from `base`: the existing
-/// paths matching `pattern`, sorted per directory, `**` matching any depth.
-fn glob(base: &Path, pattern: &str) -> Vec<PathBuf> {
-    let absolute = aye_fs::absolute(base, Path::new(pattern));
-    let has_magic = |s: &str| s.contains(['*', '?', '[']);
-    if !has_magic(pattern) {
-        return if absolute.exists() {
-            vec![absolute]
-        } else {
-            Vec::new()
-        };
-    }
-    // Split the pattern after the longest literal prefix.
-    let mut prefix = PathBuf::new();
-    let mut parts: Vec<String> = Vec::new();
-    for component in absolute.components() {
-        let text = component.as_os_str().to_string_lossy().into_owned();
-        if parts.is_empty() && !has_magic(&text) {
-            prefix.push(component);
-        } else {
-            parts.push(text);
-        }
-    }
-    let mut found = Vec::new();
-    expand(&prefix, &parts, &mut found);
-    // `sorted(glob.iglob(...))`: by the whole path.
-    found.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
-    found.dedup();
-    found
-}
-
-fn expand(dir: &Path, parts: &[String], out: &mut Vec<PathBuf>) {
-    let Some((part, rest)) = parts.split_first() else {
-        if dir.exists() {
-            out.push(dir.to_path_buf());
-        }
-        return;
-    };
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map(|entries| entries.filter_map(Result::ok).map(|e| e.path()).collect())
-        .unwrap_or_default();
-    entries.sort();
-    if part == "**" {
-        // Zero directories, then each subdirectory, recursively (hidden
-        // ones aside, as glob does).
-        expand(dir, rest, out);
-        for entry in &entries {
-            let hidden = entry
-                .file_name()
-                .is_some_and(|n| n.to_string_lossy().starts_with('.'));
-            if entry.is_dir() && !hidden {
-                expand(entry, parts, out);
-            }
-        }
-        return;
-    }
-    for entry in entries {
-        let name = entry
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if name.starts_with('.') && !part.starts_with('.') {
-            continue;
-        }
-        if fnmatch::fnmatch(&name, part, SETS) && (rest.is_empty() || entry.is_dir()) {
-            expand(&entry, rest, out);
-        }
     }
 }

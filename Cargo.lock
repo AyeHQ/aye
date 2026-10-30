@@ -338,7 +338,9 @@ dependencies = [
 name = "aye-python-stdlib"
 version = "0.0.1"
 dependencies = [
+ "aye-fs",
  "aye-test",
+ "tempfile",
 ]
 
 [[package]]

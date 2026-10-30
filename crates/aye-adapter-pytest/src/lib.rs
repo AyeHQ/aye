@@ -456,7 +456,6 @@
 
 mod config;
 mod context;
-mod glob;
 mod ids;
 mod marks;
 mod module;
@@ -480,6 +479,7 @@ use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticP
 use aye_fs::normalize_absolute;
 use aye_protocol::AdapterContext;
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
+use aye_python_stdlib::glob;
 use aye_static::{EnvVars, ProcessEnv};
 
 pub use config::{PytestConfig, split_xdist};
@@ -1688,7 +1688,7 @@ impl Recognizer for PytestRecognizer {
             }
             let mut roots: Vec<PathBuf> = Vec::new();
             for pattern in testpaths {
-                for found in glob::glob(rootdir, pattern) {
+                for found in glob::glob(rootdir, pattern, SETS) {
                     let path = normalize_absolute(&rootdir.join(found));
                     if !roots.contains(&path) {
                         roots.push(path);

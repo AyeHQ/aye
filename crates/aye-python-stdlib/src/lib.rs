@@ -11,14 +11,17 @@
 //!   CPython reads them or as the pytest and doctest adapters always have
 //!   ([`fnmatch::SetTranslation`]), and pytest's `fnmatch_ex` and name
 //!   options, which both of those adapters match with.
+//! - [`glob`]: `glob.glob(pattern, recursive=True)`, and the doctest
+//!   adapter's approximation of it.
 //! - [`unittest`]: unittest's loader rules (`VALID_MODULE_NAME`).
 //!
 //! Owns: the standard library's behaviour, as the adapters read it. Does
 //! not own: a framework's rules (pytest's are the pytest and doctest
 //! adapters'), nor what a module binds (each adapter reads that itself).
 //!
-//! Depends on no aye crate. Knows no framework but the standard library's
-//! own unittest; only the adapters depend on it.
+//! Depends on: aye-fs, for `os.path`'s lexical forms. Knows no framework
+//! but the standard library's own unittest; only the adapters depend on it.
 
 pub mod fnmatch;
+pub mod glob;
 pub mod unittest;
