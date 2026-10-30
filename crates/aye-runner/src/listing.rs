@@ -11,7 +11,7 @@ use aye_events::{AdapterName, ProjectPath, WorkerIndex};
 use aye_protocol::{ListingDigest, RefineRequest, Request, Runtime};
 
 use crate::Runner;
-use crate::env::lane_env;
+use crate::env::LaneEnv;
 use crate::sync::lock;
 use crate::worker::timeouts::POLL;
 use crate::worker::{Worker, spawn};
@@ -24,8 +24,9 @@ pub(crate) type Digests = BTreeMap<ProjectPath, ListingDigest>;
 pub(crate) struct Warm {
     pub(crate) adapter: AdapterName,
     pub(crate) worker: Worker,
-    /// The lanes its environment was made for (see [`lane_env`]).
-    pub(crate) lanes: u32,
+    /// The environment it was given: the first lane's, among as many lanes
+    /// as the runner has workers.
+    pub(crate) env: LaneEnv,
     pub(crate) digests: Digests,
 }
 
@@ -35,9 +36,9 @@ pub(crate) struct Warm {
 #[derive(Debug)]
 pub(crate) struct Prelisting {
     pub(crate) adapter: AdapterName,
-    pub(crate) lane: WorkerIndex,
-    /// The lanes its environment was made for (see [`lane_env`]).
-    pub(crate) lanes: u32,
+    /// The environment it was given: its lane's, among as many lanes as the
+    /// runner has workers.
+    pub(crate) env: LaneEnv,
     /// Starts the worker and sends it its listings, in the background.
     pub(crate) worker: thread::JoinHandle<Result<Worker, String>>,
     /// Its listings sent and not answered yet.
@@ -80,17 +81,18 @@ impl Runner {
         let (mut kept, other): (Vec<Prelisting>, Vec<Prelisting>) =
             std::mem::take(&mut *prelisting)
                 .into_iter()
-                .partition(|p| p.adapter == request.adapter && p.lanes == lanes);
+                .partition(|p| p.adapter == request.adapter && p.env.lanes == lanes);
         shut_down(other, false);
         let listing = RefineRequest {
             digests_only: true,
             ..request.clone()
         };
         for lane in (1..lanes).map(WorkerIndex::from_u32) {
+            let env = LaneEnv { lane, lanes };
             let listing = listing.clone();
             // A worker that died shows up as the end of its stream when its
             // answer is read.
-            let (worker, pending) = if let Some(at) = kept.iter().position(|p| p.lane == lane) {
+            let (worker, pending) = if let Some(at) = kept.iter().position(|p| p.env == env) {
                 // An earlier refinement's: it lists these files too.
                 let earlier = kept.swap_remove(at);
                 let worker = earlier.worker;
@@ -102,7 +104,7 @@ impl Runner {
                 (listed, earlier.pending + 1)
             } else {
                 let mut spec = self.spec(vec![runtime.clone()]);
-                spec.env.extend(lane_env(lane, lanes));
+                spec.env.extend(env.vars());
                 let listed = thread::spawn(move || {
                     let mut worker = spawn(&spec).map_err(|e| e.to_string())?;
                     let _ = worker.send(&Request::Refine(listing));
@@ -112,8 +114,7 @@ impl Runner {
             };
             kept.push(Prelisting {
                 adapter: request.adapter.clone(),
-                lane,
-                lanes,
+                env,
                 worker,
                 pending,
             });

@@ -22,6 +22,7 @@ use aye_events::{
 };
 use aye_protocol::Runtime;
 
+use crate::env::LaneEnv;
 use crate::listing::{Listings, Prelisting, Warm, shut_down};
 use crate::options::{Plan, RunnerOptions, Runtimes};
 use crate::schedule::{self, Queue};
@@ -200,7 +201,7 @@ impl Runner {
         // The worker kept from refinement is the first lane's, if the run
         // needs its adapter and gives that lane the environment it has.
         let warm = match lock(&self.warm).take() {
-            Some(warm) if adapters.contains(&warm.adapter) && warm.lanes == lanes => {
+            Some(warm) if adapters.contains(&warm.adapter) && warm.env == LaneEnv::first(lanes) => {
                 warm.worker.set_echo(spec.echo);
                 Some(warm)
             }
@@ -241,7 +242,7 @@ impl Runner {
         let (prelisted, unused): (Vec<Prelisting>, Vec<Prelisting>) =
             std::mem::take(&mut *lock(&self.prelisting))
                 .into_iter()
-                .partition(|p| adapters.contains(&p.adapter) && p.lanes == lanes);
+                .partition(|p| adapters.contains(&p.adapter) && p.env.lanes == lanes);
         let queue = Queue::new(batches);
         if reference.is_some() {
             queue.expect_pins(lanes);
@@ -260,7 +261,7 @@ impl Runner {
             reference,
             early,
             warm: Mutex::new(warm),
-            prelisted: Mutex::new(prelisted.into_iter().map(|p| (p.lane, p)).collect()),
+            prelisted: Mutex::new(prelisted.into_iter().map(|p| (p.env.lane, p)).collect()),
             lanes,
             stop: &self.stop,
         };

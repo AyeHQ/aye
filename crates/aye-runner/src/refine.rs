@@ -1,11 +1,10 @@
 //! Refinement on workers: the runner as collection's
 //! [`Refiner`].
 
-use aye_events::WorkerIndex;
 use aye_protocol::{RefineError, RefineRequest, Refined, Refiner, Reply, Request, WorkerLine};
 
 use crate::Runner;
-use crate::env::lane_env;
+use crate::env::LaneEnv;
 use crate::listing::{Digests, Warm};
 use crate::sync::lock;
 use crate::worker::timeouts::POLL;
@@ -54,11 +53,12 @@ impl Refiner for Runner {
                     other.worker.shutdown();
                 }
                 let mut spec = self.spec(vec![runtime]);
-                spec.env.extend(lane_env(WorkerIndex::FIRST, lanes));
+                let env = LaneEnv::first(lanes);
+                spec.env.extend(env.vars());
                 Warm {
                     adapter: request.adapter.clone(),
                     worker: spawn(&spec).map_err(|e| RefineError(e.to_string()))?,
-                    lanes,
+                    env,
                     digests: Digests::new(),
                 }
             }

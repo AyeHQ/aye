@@ -9,7 +9,7 @@ use std::sync::mpsc::Sender;
 use aye_events::{AdapterName, Diagnostic, DiagnosticCode, ProjectPath, Severity, WorkerIndex};
 use aye_protocol::RefineRequest;
 
-use crate::env::lane_env;
+use crate::env::LaneEnv;
 use crate::listing::{Digests, Prelisting, Warm, shut_down, started};
 use crate::refine::{Unrefined, refine_on, refined_by};
 use crate::schedule::{Assigned, Queue};
@@ -142,7 +142,11 @@ impl Shared<'_> {
         }
         let mut spec = self.spec.clone();
         spec.runtimes = self.runtimes.get(adapter).cloned().into_iter().collect();
-        spec.env.extend(lane_env(lane, self.lanes));
+        let env = LaneEnv {
+            lane,
+            lanes: self.lanes,
+        };
+        spec.env.extend(env.vars());
         let launched = Worker::launch(&spec).map_err(|e| e.to_string())?;
         if !self.busy(lane, launched.killer()) {
             launched.kill();
