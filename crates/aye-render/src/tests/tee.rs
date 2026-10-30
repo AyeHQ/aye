@@ -3,7 +3,7 @@ use std::io;
 use aye_events::{Event, Record};
 
 use super::streams;
-use crate::{JsonLines, Reporter, Tee};
+use crate::{JsonLines, Level, Reporter, Tee};
 
 /// Fails on every record, and counts how often it was asked.
 struct Broken<'a>(&'a mut u32);
@@ -26,8 +26,8 @@ fn every_reporter_sees_every_record() {
     {
         let mut tee = Tee::new()
             .with(Broken(&mut calls))
-            .with(JsonLines::new(&mut all, 3));
-        tee.push(JsonLines::new(&mut verbose, 1));
+            .with(JsonLines::new(&mut all, Level::Engine));
+        tee.push(JsonLines::new(&mut verbose, Level::Verbose));
         assert_eq!(tee.len(), 3);
         assert!(!tee.is_empty());
         for record in &records {
@@ -58,7 +58,7 @@ fn an_empty_tee_does_nothing() {
 fn boxed_and_borrowed_reporters_are_reporters() {
     let mut out = Vec::new();
     {
-        let mut json = JsonLines::new(&mut out, 3);
+        let mut json = JsonLines::new(&mut out, Level::Engine);
         let mut boxed: Box<dyn Reporter> = Box::new(&mut json);
         boxed
             .report(&Record::new(Event::RunFinished {

@@ -22,6 +22,10 @@ use aye_events::{Event, Outcome, TestResult};
 use serde_json::Value;
 
 #[expect(clippy::print_stderr, reason = "a test says why it skips")]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' own settings, not the environment aye reads"
+)]
 fn python() -> Option<PathBuf> {
     let candidate = std::env::var_os("AYE_TEST_PYTHON").map_or_else(
         || {
@@ -85,7 +89,7 @@ fn run(python: &Path) -> (tempfile::TempDir, BTreeMap<String, TestResult>) {
     let store = aye_history::RunStore::new(dir.path().join(".aye/runs"));
     let last = store.last().expect("a stored run");
     let results = store
-        .log(&last.run)
+        .log(&last.run.to_string())
         .unwrap()
         .into_iter()
         .filter_map(|record| match record.event {

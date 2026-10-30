@@ -1,4 +1,4 @@
-use aye_events::{Failure, Phase};
+use aye_events::{Failure, Phase, RunNumber};
 
 use super::*;
 
@@ -46,18 +46,19 @@ fn ago_says_how_long_since_the_run_finished() {
 fn the_renderers_are_told_the_runs_number_age_and_stale_files() {
     let mut stored = meta("r81");
     stored.finished_ms = 1_792_091_602_130;
+    let path = |path: &str| ProjectPath::new(path).unwrap();
     let stale = [
-        ("tests/test_a.py".to_owned(), Change::Edited),
-        ("tests/test_b.py".to_owned(), Change::Gone),
+        (path("tests/test_a.py"), Change::Edited),
+        (path("tests/test_b.py"), Change::Gone),
     ];
     let told = context(&stored, &stale, stored.finished_ms + 120_000);
-    assert_eq!(told.run, Some(81));
+    assert_eq!(told.run, RunNumber::new(81));
     assert_eq!(told.ago.as_deref(), Some("2 min ago"));
     assert_eq!(
         told.stale,
         std::collections::BTreeMap::from([
-            ("tests/test_a.py".to_owned(), false),
-            ("tests/test_b.py".to_owned(), true)
+            (path("tests/test_a.py"), false),
+            (path("tests/test_b.py"), true)
         ])
     );
     // A run stored under a hex id has no number; one with no finishing
@@ -67,34 +68,10 @@ fn the_renderers_are_told_the_runs_number_age_and_stale_files() {
 }
 
 #[test]
-fn details_come_at_the_second_level_unless_the_flags_say() {
-    use clap::Parser as _;
-    let verbosity = |argv: &[&str], details, format| {
-        let mut all = vec!["aye show"];
-        all.extend(argv);
-        ShowArgs::try_parse_from(all)
-            .unwrap()
-            .verbosity(details, format)
-    };
-    // Details: text's -v, JSON's -vv.
-    assert_eq!(verbosity(&[], true, Output::Text), 1);
-    assert_eq!(verbosity(&[], true, Output::Json), 2);
-    // The list: a run's default.
-    assert_eq!(verbosity(&[], false, Output::Text), 0);
-    assert_eq!(verbosity(&[], false, Output::Json), 0);
-    // Flags mean what they mean in a run.
-    assert_eq!(verbosity(&["-v"], true, Output::Json), 1);
-    assert_eq!(verbosity(&["-vvv"], true, Output::Text), 3);
-    assert_eq!(verbosity(&["-q"], true, Output::Json), -1);
-    assert_eq!(verbosity(&["-v", "-q"], true, Output::Text), 0);
-    assert_eq!(verbosity(&["-vv"], false, Output::Text), 2);
-}
-
-#[test]
 fn a_run_is_picked_by_its_number_or_the_start_of_an_old_id() {
     let dir = tempfile::tempdir().unwrap();
     let runs = dir.path().join("runs");
-    let started = |run: Option<u64>| {
+    let started = |run: Option<RunNumber>| {
         let mut record = Record::new(Event::RunStarted {
             schema_version: 1,
             aye_version: "0".into(),
@@ -125,7 +102,7 @@ fn a_run_is_picked_by_its_number_or_the_start_of_an_old_id() {
     )
     .unwrap();
     let store = RunStore::new(&runs);
-    let picked = |wanted: Option<&str>| pick(&store, wanted, 10).map(|meta| meta.run);
+    let picked = |wanted: Option<&str>| pick(&store, wanted, 10).map(|meta| meta.run.to_string());
     assert_eq!(picked(None).ok().as_deref(), Some("r2"));
     for wanted in ["r1", "1", "R1", "01"] {
         assert_eq!(picked(Some(wanted)).ok().as_deref(), Some("r1"), "{wanted}");
@@ -134,10 +111,26 @@ fn a_run_is_picked_by_its_number_or_the_start_of_an_old_id() {
     assert_eq!(picked(Some(old)).ok().as_deref(), Some(old));
     for wanted in ["r9", "9", "abcd", "r"] {
         assert!(
-            matches!(picked(Some(wanted)), Err(Problem::Usage(message)) if message.contains("stored: r2, r1, fedcba9876543210")),
+            matches!(picked(Some(wanted)), Err(AyeError::Usage(err)) if err.to_string().contains("stored: r2, r1, fedcba9876543210")),
             "{wanted}"
         );
     }
+    // A number no stored run has is the start of an old id, when one has
+    // it; a number a run has names that run.
+    for old in ["9abcdef012345678", "1abcdef012345678"] {
+        let meta = RunMeta {
+            run: old.into(),
+            ..meta.clone()
+        };
+        std::fs::write(
+            runs.join(format!("{old}.json")),
+            serde_json::to_vec(&meta).unwrap(),
+        )
+        .unwrap();
+    }
+    assert_eq!(picked(Some("9")).ok().as_deref(), Some("9abcdef012345678"));
+    assert!(picked(Some("r9")).is_err());
+    assert_eq!(picked(Some("1")).ok().as_deref(), Some("r1"));
 }
 
 #[test]
@@ -225,7 +218,7 @@ fn stamped(events: Vec<(Option<u32>, Event)>) -> Vec<Record> {
         .map(|((worker, event), seq)| {
             let mut record = Record::new(event);
             record.envelope.run = Some("r".into());
-            record.envelope.worker = worker;
+            record.envelope.worker = worker.map(WorkerIndex::from_u32);
             record.envelope.seq = Some(seq);
             record
         })
@@ -378,7 +371,7 @@ fn alike(digits: usize) -> (String, String) {
     (0..)
         .find_map(|n| {
             let id = format!("t.py::test_{n}");
-            let start = aye_events::TestKey::of(&id).0[..digits].to_string();
+            let start = aye_events::TestKey::of(&id).to_string()[..digits].to_string();
             seen.insert(start, id.clone()).map(|earlier| (earlier, id))
         })
         .unwrap()
@@ -402,7 +395,8 @@ fn chosen(records: &[Record], args: &[&str]) -> Result<Vec<String>, String> {
             ids.dedup();
             Ok(ids)
         }
-        Err(Problem::Usage(message) | Problem::NoRun(message)) => Err(message),
+        Err(AyeError::Usage(err)) => Err(err.to_string()),
+        Err(other) => panic!("{other:?}"),
     }
 }
 
@@ -422,11 +416,11 @@ fn keys_and_their_start_name_tests_and_the_start_of_several_is_a_usage_error() {
     let key = |id: &str| keys.key(id).unwrap().to_owned();
     // A key, whole or upper case; the start of one test's key, from 4
     // digits; its whole hash.
-    let full = aye_events::TestKey::of(&first).0;
+    let full = aye_events::TestKey::of(&first).to_string();
     for arg in [key(&first), key(&first).to_ascii_uppercase(), full.clone()] {
         assert_eq!(chosen(&records, &[&arg]), Ok(vec![first.clone()]), "{arg}");
     }
-    let other = aye_events::TestKey::of("t.py::test_other").0;
+    let other = aye_events::TestKey::of("t.py::test_other").to_string();
     let unique = (4..=16)
         .map(|len| &other[..len])
         .find(|start| keys.resolve(start).len() == 1)

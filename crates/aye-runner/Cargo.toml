@@ -12,11 +12,13 @@ authors.workspace = true
 [dependencies]
 aye-engine = { workspace = true }
 aye-events = { workspace = true }
+aye-protocol = { workspace = true }
 aye-static = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+aye-provision = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

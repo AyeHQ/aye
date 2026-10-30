@@ -46,58 +46,28 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{self, Write as _};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use aye_config::AyeConfig;
+use aye_config::OutputFormat;
 use aye_events::{
-    Case, Certainty, Counts, Diagnostic, Event, ExitCode, LifetimeId, Outcome, Record, Severity,
-    TestId, TestResult,
+    AdapterName, Case, Certainty, Counts, Diagnostic, Event, ExitCode, LifetimeId, Outcome,
+    ProjectPath, Record, RunNumber, Severity, TestId, TestResult, WorkerIndex,
 };
-use aye_history::{Change, RunMeta, RunStore};
+use aye_history::{Change, RunMeta, RunStore, StoredRunId};
 use aye_render::{
-    ColorChoice, Extra, JsonLines, Keys, Reporter, ShowContext, ShowMode, Text, TextOptions,
-    summary_words,
+    Extra, JsonLines, Keys, Reporter, ShowContext, ShowMode, Text, TextOptions, summary_words,
 };
 use aye_select::Selection;
 
-use crate::args::{Color, Output, ShowArgs};
-use crate::session;
+use crate::cli::ShowArgs;
+use crate::error::AyeError;
+use crate::positional;
+use crate::printer::Printer;
+use crate::settings::ShowSettings;
 
 /// How many of the closest names a selector naming nothing lists.
 const CLOSEST: usize = 5;
-
-/// Why `aye show` shows nothing.
-enum Problem {
-    /// What was asked can't be shown (exit 4).
-    Usage(String),
-    /// No run is stored (exit 5).
-    NoRun(String),
-}
-
-impl From<io::Error> for Problem {
-    fn from(err: io::Error) -> Self {
-        Self::Usage(format!("cannot write output: {err}"))
-    }
-}
-
-#[expect(
-    clippy::print_stderr,
-    reason = "aye's own messages, outside the event stream"
-)]
-pub(crate) fn main(args: &ShowArgs) -> ExitCode {
-    match show(args) {
-        Ok(()) => ExitCode::Ok,
-        Err(Problem::Usage(message)) => {
-            eprintln!("aye: error: {message}");
-            ExitCode::UsageError
-        }
-        Err(Problem::NoRun(message)) => {
-            eprintln!("aye: {message}");
-            ExitCode::NoTests
-        }
-    }
-}
 
 /// A positional argument, as `aye show` reads it.
 #[derive(Debug, Clone)]
@@ -109,40 +79,28 @@ enum Wanted {
     Test(String),
 }
 
-fn show(args: &ShowArgs) -> Result<(), Problem> {
-    args.check().map_err(Problem::Usage)?;
-    let cwd = std::env::current_dir()
-        .map_err(|err| Problem::Usage(format!("cannot read the current directory: {err}")))?;
-    let given: Vec<PathBuf> = args
-        .tests
-        .iter()
-        .map(|test| session::path_part(test))
-        .filter(|path| session::is_path_like(&cwd, path))
-        .map(|path| aye_fs::normalize_absolute(&cwd.join(path)))
-        .collect();
-    let root = aye_fs::normalize_absolute(&aye_config::project_root(&cwd, &given));
-    let config = AyeConfig::load(&root).map_err(|err| Problem::Usage(err.to_string()))?;
-    let format = args
-        .output
-        .or_else(|| config.settings.output.as_deref()?.parse().ok())
-        .unwrap_or(Output::Text);
-    let store = RunStore::new(aye_fs::StateDir::for_root(&root).bucket(aye_fs::StateBucket::Runs));
-    let keep = config.settings.keep_runs();
+/// Show what `args` ask for of a stored run, through `printer` where it
+/// isn't a renderer's.
+pub(crate) fn show(args: &ShowArgs, printer: Printer) -> Result<(), AyeError> {
+    let settings = ShowSettings::resolve(args).map_err(AyeError::usage)?;
+    let (cwd, root, format) = (&settings.cwd, &settings.root, settings.format);
+    let store = RunStore::new(aye_fs::StateDir::for_root(root).bucket(aye_fs::StateBucket::Runs));
+    let keep = settings.keep_runs;
     if args.runs {
-        return list_runs(&store, format, keep);
+        return list_runs(&store, format, keep, printer);
     }
     let meta = pick(&store, args.run.as_deref(), keep)?;
     let unreadable = |err: io::Error| {
-        Problem::NoRun(format!(
+        AyeError::NoRun(format!(
             "the log of run {} can't be read from {}: {err}",
             meta.run,
             store.dir().display()
         ))
     };
     if args.log {
-        let mut out = io::BufWriter::new(io::stdout().lock());
+        let mut out = io::BufWriter::new(printer.stdout().lock());
         return match store
-            .copy_log(&meta.run, &mut out)
+            .copy_log(&meta.run.to_string(), &mut out)
             .and_then(|()| out.flush())
         {
             Err(err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
@@ -159,14 +117,14 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
             other => Ok(other?),
         };
     }
-    let records = store.log(&meta.run).map_err(unreadable)?;
+    let records = store.log(&meta.run.to_string()).map_err(unreadable)?;
     let log = Log::of(&records);
     let keys = Keys::of(&records);
 
     let wanted: Vec<(&str, Wanted)> = args
         .tests
         .iter()
-        .map(|arg| (arg.as_str(), read(&cwd, &root, arg)))
+        .map(|arg| (arg.as_str(), read(cwd, root, arg)))
         .collect();
     let details = args.failed
         || wanted
@@ -197,34 +155,29 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
         .collect();
 
     let feed = feed(&records, &log, &shown, mode, filtered, meta.exit_code);
-    let stale = stale(&meta, &root, &shown);
+    let stale = stale(&meta, root, &shown);
     let context = context(&meta, &stale, now_ms());
-    let verbosity = args.verbosity(details, format);
+    let verbosity = settings.level(details);
     let mut out: Box<dyn Reporter> = match format {
-        Output::Text => {
-            let color = match args.color {
-                Color::Auto => ColorChoice::Auto,
-                Color::Always => ColorChoice::Always,
-                Color::Never => ColorChoice::Never,
-            };
+        OutputFormat::Text => {
             let mut text = Text::new(
                 io::stdout(),
                 TextOptions {
                     verbosity,
-                    color,
+                    color: settings.color,
                     live: false,
                 },
             )
             .for_show(mode, keys, context);
             for (path, change) in &stale {
-                text.stale(path, *change == Change::Gone)?;
+                text.stale(path.as_str(), *change == Change::Gone)?;
             }
             Box::new(text)
         }
-        Output::Json => {
+        OutputFormat::Json => {
             let mut json = JsonLines::new(io::stdout(), verbosity).for_show(mode, keys, context);
             for (path, change) in &stale {
-                json.stale(path, *change == Change::Gone)?;
+                json.stale(path.as_str(), *change == Change::Gone)?;
             }
             Box::new(json)
         }
@@ -242,13 +195,13 @@ fn show(args: &ShowArgs) -> Result<(), Problem> {
 }
 
 /// No run is stored: why, when the configuration says.
-fn no_run(store: &RunStore, keep: usize) -> Problem {
+fn no_run(store: &RunStore, keep: usize) -> AyeError {
     if keep == 0 {
-        Problem::NoRun(
+        AyeError::NoRun(
             "no run is kept: [tool.aye] keep-runs = 0 (set it above 0 for aye show)".into(),
         )
     } else {
-        Problem::NoRun(format!(
+        AyeError::NoRun(format!(
             "no run is stored in {} yet: run aye first",
             store.dir().display()
         ))
@@ -259,7 +212,7 @@ fn no_run(store: &RunStore, keep: usize) -> Problem {
 /// stored when the one `last` names is gone). `--run` takes a run's number
 /// (`r81` or `81`) or, for a run stored before runs were numbered, the
 /// start of its hex id.
-fn pick(store: &RunStore, wanted: Option<&str>, keep: usize) -> Result<RunMeta, Problem> {
+fn pick(store: &RunStore, wanted: Option<&str>, keep: usize) -> Result<RunMeta, AyeError> {
     let Some(wanted) = wanted else {
         return store.last().ok_or_else(|| no_run(store, keep));
     };
@@ -268,21 +221,21 @@ fn pick(store: &RunStore, wanted: Option<&str>, keep: usize) -> Result<RunMeta, 
         return Err(no_run(store, keep));
     }
     let lower = wanted.to_ascii_lowercase();
-    let number = aye_history::runs::number(&lower)
-        .or_else(|| aye_history::runs::number(&format!("r{lower}")));
-    if let Some(number) = number
+    if let Ok(number) = lower.parse::<RunNumber>()
         && let Some(meta) = runs.iter().find(|meta| meta.number() == Some(number))
     {
         return Ok(meta.clone());
     }
     let mut found: Vec<RunMeta> = runs
         .iter()
-        .filter(|meta| meta.number().is_none() && meta.run.starts_with(&lower))
+        .filter(
+            |meta| matches!(&meta.run, StoredRunId::Legacy(id) if id.as_str().starts_with(&lower)),
+        )
         .cloned()
         .collect();
     match found.len() {
         1 => Ok(found.remove(0)),
-        0 => Err(Problem::Usage(format!(
+        0 => Err(AyeError::usage(format!(
             "--run {wanted}: no stored run is numbered so{}; stored: {}",
             if runs.iter().any(|meta| meta.number().is_none()) {
                 " or has an id that starts with it"
@@ -291,7 +244,7 @@ fn pick(store: &RunStore, wanted: Option<&str>, keep: usize) -> Result<RunMeta, 
             },
             ids(&runs)
         ))),
-        _ => Err(Problem::Usage(format!(
+        _ => Err(AyeError::usage(format!(
             "--run {wanted}: several stored runs' ids start with it: {}",
             ids(&found)
         ))),
@@ -300,14 +253,19 @@ fn pick(store: &RunStore, wanted: Option<&str>, keep: usize) -> Result<RunMeta, 
 
 fn ids(runs: &[RunMeta]) -> String {
     runs.iter()
-        .map(|meta| meta.run.as_str())
+        .map(|meta| meta.run.to_string())
         .collect::<Vec<_>>()
         .join(", ")
 }
 
 /// `aye show --runs`: the stored runs, the last first (the one `aye show`
 /// shows), then the one that finished last.
-fn list_runs(store: &RunStore, format: Output, keep: usize) -> Result<(), Problem> {
+fn list_runs(
+    store: &RunStore,
+    format: OutputFormat,
+    keep: usize,
+    printer: Printer,
+) -> Result<(), AyeError> {
     let runs = store.runs();
     if runs.is_empty() {
         return Err(no_run(store, keep));
@@ -316,8 +274,8 @@ fn list_runs(store: &RunStore, format: Output, keep: usize) -> Result<(), Proble
     for (at, meta) in runs.iter().enumerate() {
         let is_last = at == 0;
         match format {
-            Output::Json => writeln!(out, "{}", run_line(meta, is_last))?,
-            Output::Text => {
+            OutputFormat::Json => writeln!(out, "{}", run_line(meta, is_last))?,
+            OutputFormat::Text => {
                 let exit = meta.exit_code.map_or_else(
                     || "exit ?".to_owned(),
                     |code| format!("exit {}", u8::from(code)),
@@ -339,7 +297,7 @@ fn list_runs(store: &RunStore, format: Output, keep: usize) -> Result<(), Proble
             }
         }
     }
-    match io::stdout().lock().write_all(&out) {
+    match printer.stdout().lock().write_all(&out) {
         Err(err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
         other => Ok(other?),
     }
@@ -354,7 +312,7 @@ fn run_line(meta: &RunMeta, last: bool) -> String {
     let string = |text: &str| serde_json::Value::from(text).to_string();
     let mut fields = vec![
         r#""type":"run""#.to_owned(),
-        format!(r#""id":{}"#, string(&meta.run)),
+        format!(r#""id":{}"#, string(&meta.run.to_string())),
         format!(r#""started":{}"#, string(&rfc3339(meta.started_ms))),
     ];
     if let Some(code) = meta.exit_code {
@@ -365,7 +323,7 @@ fn run_line(meta: &RunMeta, last: bool) -> String {
     }
     fields.push(format!(r#""ms":{}"#, meta.ms));
     if let Some(stopped) = &meta.stopped {
-        fields.push(format!(r#""stopped":{}"#, string(stopped)));
+        fields.push(format!(r#""stopped":{}"#, string(stopped.as_str())));
     }
     if last {
         fields.push(r#""last":true"#.to_owned());
@@ -399,7 +357,7 @@ fn counts(counts: &Counts, extra: &Extra) -> Vec<(&'static str, u32)> {
 /// How `aye show` reads a positional argument: a path (read as a run reads
 /// one), or a test's key or its start, id or dotted name.
 fn read(cwd: &Path, root: &Path, arg: &str) -> Wanted {
-    let positional = session::resolve(cwd, root, arg);
+    let positional = positional::resolve(cwd, root, arg);
     match positional.path {
         Some(_) if !positional.id => Wanted::Path(positional.selector),
         _ => Wanted::Test(positional.selector),
@@ -418,7 +376,7 @@ fn choose(
     keys: &Keys,
     wanted: &[(&str, Wanted)],
     meta: &RunMeta,
-) -> Result<HashSet<usize>, Problem> {
+) -> Result<HashSet<usize>, AyeError> {
     if wanted.is_empty() {
         return Ok((0..log.items.len()).collect());
     }
@@ -473,7 +431,7 @@ fn choose(
     if problems.is_empty() {
         Ok(chosen)
     } else {
-        Err(Problem::Usage(problems.join("\naye: error: ")))
+        Err(AyeError::usage(problems.join("\naye: error: ")))
     }
 }
 
@@ -486,7 +444,7 @@ fn by_key<'a>(
     found: &'a [String],
     with_results: &HashSet<&str>,
     keys: &Keys,
-    run: &str,
+    run: &StoredRunId,
 ) -> Result<&'a str, String> {
     let shown: Vec<&str> = found
         .iter()
@@ -517,7 +475,7 @@ fn by_key<'a>(
     }
 }
 
-fn nothing_named(arg: &str, run: &str, closest: &[&str]) -> String {
+fn nothing_named(arg: &str, run: &StoredRunId, closest: &[&str]) -> String {
     let mut message = format!("{arg}: no test of run {run} has that name");
     if !closest.is_empty() {
         message.push_str("; the closest:");
@@ -556,12 +514,15 @@ fn closest<'a>(arg: &str, names: &'a [TestId]) -> Vec<&'a str> {
     let mut seen = HashSet::new();
     let mut scored: Vec<(usize, &str)> = names
         .iter()
-        .map(TestId::without_params)
-        .filter(|name| seen.insert(*name))
-        .map(|name| {
-            let path = name.split_once("::").map_or(name, |(path, _)| path);
-            let file = path.rsplit_once('/').map_or(path, |(_, file)| file);
-            let last = name.rsplit_once("::").map_or(file, |(_, last)| last);
+        .filter(|id| seen.insert(id.without_params()))
+        .map(|id| {
+            let name = id.without_params();
+            let file = id.path().file_name();
+            let last = if id.is_file() {
+                file
+            } else {
+                id.parts().names.rsplit("::").next().unwrap_or(file)
+            };
             let score = lasts
                 .iter()
                 .flat_map(|arg| [distance(arg, last), distance(arg, file)])
@@ -599,7 +560,7 @@ struct Filter {
 }
 
 impl Filter {
-    fn new(args: &ShowArgs) -> Result<Option<Self>, Problem> {
+    fn new(args: &ShowArgs) -> Result<Option<Self>, AyeError> {
         let mut outcomes: HashSet<Outcome> = args.outcome.iter().copied().collect();
         if args.failed {
             outcomes.extend([Outcome::Failed, Outcome::Error]);
@@ -608,12 +569,12 @@ impl Filter {
         if let Some(expr) = &args.keyword {
             selection = selection
                 .with_keyword(expr)
-                .map_err(|err| Problem::Usage(err.to_string()))?;
+                .map_err(|err| AyeError::usage(err.to_string()))?;
         }
         if let Some(expr) = &args.tags {
             selection = selection
                 .with_tags(expr)
-                .map_err(|err| Problem::Usage(err.to_string()))?;
+                .map_err(|err| AyeError::usage(err.to_string()))?;
         }
         Ok(
             (!outcomes.is_empty() || !selection.is_empty()).then_some(Self {
@@ -665,7 +626,7 @@ enum What<'a> {
 
 /// A test's records before its `test_finished`: the worker that runs it,
 /// and their places in the log.
-type Open = (Option<u32>, Vec<usize>);
+type Open = (Option<WorkerIndex>, Vec<usize>);
 
 /// What `aye show` reads of a stored log.
 struct Log<'a> {
@@ -691,7 +652,7 @@ impl<'a> Log<'a> {
         // A test's `test_started` and `sub_outcome` records not yet
         // finished, by id and worker.
         let mut open: HashMap<&TestId, Vec<Open>> = HashMap::new();
-        let mut causes: HashSet<&str> = HashSet::new();
+        let mut causes: HashSet<&LifetimeId> = HashSet::new();
         let mut diagnostics: HashSet<(&str, &str, &str)> = HashSet::new();
         for (at, record) in records.iter().enumerate() {
             let worker = record.envelope.worker;
@@ -789,7 +750,7 @@ impl<'a> Log<'a> {
         }
         for item in &mut log.items {
             if let What::Lifetime(lifetime) = item.what {
-                item.blocking = causes.contains(lifetime.as_str());
+                item.blocking = causes.contains(lifetime);
             }
         }
         log
@@ -815,7 +776,9 @@ impl<'a> Log<'a> {
             .get(id)
             .copied()
             .or_else(|| self.cases.get(&TestId::new(id.without_params())).copied());
-        let mut case = found.cloned().unwrap_or_else(|| Case::new(id.as_str(), ""));
+        let mut case = found
+            .cloned()
+            .unwrap_or_else(|| Case::new(id.as_str(), AdapterName::default()));
         case.id = id.clone();
         if case.certainty == Certainty::Partial {
             case.certainty = Certainty::Refined;
@@ -860,7 +823,7 @@ fn feed(
     if mode == ShowMode::Details {
         // The `worker_started` of each worker that ran a result shown: it
         // says which Python ran it.
-        let workers: HashSet<u32> = places
+        let workers: HashSet<WorkerIndex> = places
             .iter()
             .filter_map(|at| records[*at].envelope.worker)
             .collect();
@@ -916,13 +879,13 @@ fn feed(
 
 /// The files of the results shown that changed since the run, each once,
 /// in the order their results come.
-fn stale(meta: &RunMeta, root: &Path, shown: &[&Item<'_>]) -> Vec<(String, Change)> {
+fn stale(meta: &RunMeta, root: &Path, shown: &[&Item<'_>]) -> Vec<(ProjectPath, Change)> {
     let mut seen = HashSet::new();
     shown
         .iter()
         .map(|item| item.name.path())
-        .filter(|path| !path.is_empty() && seen.insert(*path))
-        .filter_map(|path| Some((path.to_owned(), meta.change(root, path)?)))
+        .filter(|path| !path.as_str().is_empty() && seen.insert(*path))
+        .filter_map(|path| Some((path.to_project_path(), meta.change(root, path.as_str())?)))
         .collect()
 }
 
@@ -930,7 +893,7 @@ fn stale(meta: &RunMeta, root: &Path, shown: &[&Item<'_>]) -> Vec<(String, Chang
 /// `now_ms`: its number, how long ago it finished, and the files of the
 /// results shown that changed since (`stale`), each with whether it is
 /// gone.
-fn context(meta: &RunMeta, stale: &[(String, Change)], now_ms: u64) -> ShowContext {
+fn context(meta: &RunMeta, stale: &[(ProjectPath, Change)], now_ms: u64) -> ShowContext {
     ShowContext {
         run: meta.number(),
         ago: (meta.finished_ms > 0).then(|| ago(now_ms, meta.finished_ms)),

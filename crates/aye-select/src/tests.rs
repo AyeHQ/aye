@@ -90,7 +90,9 @@ fn positional_arguments_select_their_union() {
         ids(&by_dotted),
         ["tests/auth/test_api.py::TestLogin::test_bad"]
     );
-    let key = TestId::new("tests/test_cart.py::test_add[usd]").key().0;
+    let key = TestId::new("tests/test_cart.py::test_add[usd]")
+        .key()
+        .to_string();
     let by_key = Selection::default().with_ids([&key[..8]]).apply(project());
     assert_eq!(ids(&by_key), ["tests/test_cart.py::test_add[usd]"]);
 }
@@ -181,7 +183,9 @@ fn cases_follow_the_arguments_order() {
         ids(&Selection::default().apply(project()))
     );
     // Keys and dotted names take their place too.
-    let key = TestId::new("tests/test_cart.py::test_add[usd]").key().0;
+    let key = TestId::new("tests/test_cart.py::test_add[usd]")
+        .key()
+        .to_string();
     assert_eq!(
         order(&[&key[..8], "tests.auth.test_api.test_logout"]),
         [
@@ -588,7 +592,7 @@ fn last_failed_counts_deselected_as_pytests_summary_does() {
 #[test]
 fn an_adapters_own_expressions_apply_to_its_cases() {
     let mut doctest = exact("tests/test_cart.py::tests.test_cart.slow");
-    doctest.adapter = "doctest".to_string();
+    doctest.adapter = "doctest".into();
     let mut cases = project();
     cases.push(doctest);
     let own = Selection::default()
@@ -636,7 +640,7 @@ fn an_adapters_own_expressions_apply_to_its_cases() {
 #[test]
 fn deselect_prefixes_drop_and_count_their_adapters_cases() {
     let mut doctest = exact("tests/test_cart.py::tests.test_cart.add");
-    doctest.adapter = "doctest".to_string();
+    doctest.adapter = "doctest".into();
     let mut cases = project();
     cases.push(doctest);
     let selected = Selection::default()

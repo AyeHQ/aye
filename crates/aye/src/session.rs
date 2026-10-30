@@ -1,5 +1,5 @@
-//! One run: configuration, collection, selection, the runner and the
-//! reporters, wired around the event stream.
+//! One run, from its settings ([`RunSettings`]): collection, selection, the
+//! runner and the reporters, wired around the event stream.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -9,755 +9,460 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result};
-use aye_collect::{Collector, Environment, Options, Prepared};
-use aye_config::AyeConfig;
-use aye_engine::{Adapter, Policy, Project, Refiner};
-use aye_events::{Case, Counts, Diagnostic, Event, ExitCode, Record, SCHEMA_VERSION, Severity};
-use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
-use aye_history::{History, RunWriter};
-use aye_render::{
-    ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
-    JunitOptions, Reporter, Tally, Tee, Text, TextOptions,
+use aye_adapter::Project;
+use aye_collect::{Collector, Options};
+use aye_config::OutputFormat;
+use aye_events::{
+    AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event,
+    ExitCode, ProjectPath, Record, RerunCommand, RunId, SCHEMA_VERSION, Severity, Stamper,
+    StopReason, TestId,
 };
-use aye_runner::{Echo, Plan, Runner, RunnerOptions, Stamper, new_run_id};
+use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
+use aye_history::{History, RunWriter, StoredRunId};
+use aye_protocol::Refiner;
+use aye_provision::EnvironmentFingerprint;
+use aye_render::{GithubAnnotations, JsonLines, Junit, Reporter, Tally, Tee, Text, TextOptions};
+use aye_runner::{Echo, Plan, Runner, RunnerOptions};
 use aye_select::Selection;
 use aye_static::EnvVars;
 
-use crate::args::{Args, Color, Maxfail, Output, Passed, Workers, passed, passed_maxfail};
-use crate::busy::Busy;
+use crate::error::AyeError;
+use crate::exit::{Errors, RunEnd, RunStage, RunVerdict};
+use crate::positional::Positional;
+use crate::printer::Printer;
 use crate::registry;
+use crate::settings::{JunitTarget, RunSettings};
 
-/// Diagnostic codes the binary acts on. Collection's are in
-/// `aye_collect::codes`; the rest come from adapters and the runner.
-mod codes {
-    /// An explicit path doesn't exist, or an id matches no test.
-    pub(super) const NOT_FOUND: &str = "not-found";
-    /// No adapter collects an explicit file (pytest's "found no collectors").
-    pub(super) const UNCLAIMED: &str = "unclaimed";
-    /// The framework rejected its arguments.
-    pub(super) const USAGE_ERROR: &str = "usage-error";
-    /// The framework's own internal error (pytest's `INTERNALERROR`).
-    pub(super) const INTERNAL_ERROR: &str = "internal-error";
-    /// The framework failed to collect a file.
-    pub(super) const COLLECTION_ERROR: &str = "collection-error";
-    /// The framework skipped a module or a directory while collecting it.
-    pub(super) const SKIPPED: &str = "skipped";
-}
-
-/// Keys of an adapter's context the binary reads or adds.
-mod keys {
-    /// Added by the binary: the ids with parameters the command line names
-    /// (`path::test[x]`), relative to the root, so the framework reports
-    /// one it can't find instead of running its test's other parameters in
-    /// its place.
-    pub(super) const REQUESTED_IDS: &str = "requested_ids";
-    /// Added by the binary: aye's own options that shape the run (`-c
-    /// FILE`), as given, which a test's rerun command repeats before its id
-    /// (`aye -c FILE <id>`), so that it reruns from where aye ran as aye ran
-    /// it.
-    pub(super) const RERUN_ARGS: &str = "rerun_args";
-    /// Set by an adapter whose framework drops the tests whose ids start
-    /// with one of these (pytest's `--deselect`, relative to the root):
-    /// selection drops that adapter's cases and counts them as deselected.
-    pub(super) const DESELECT: &str = "deselect";
-    /// Added by the binary when a positional argument isn't a path (a
-    /// dotted name, a test key): the paths the user's run starts from,
-    /// absolute, in the order of the arguments, each once: each path
-    /// argument (an id's file), and the files of the cases each other
-    /// argument selects, as `pytest <these>` would be given them. The
-    /// adapter's own context saw only the path arguments (with none, its
-    /// framework's default), so an adapter whose framework starts from the
-    /// paths it is given (pytest's start-up conftests and initial paths)
-    /// starts from these instead.
-    pub(super) const SELECTED_PATHS: &str = "selected_paths";
-}
-
-/// A run's inputs, resolved: everything wrong with the command line or the
-/// configuration fails here, before anything is reported. Selectors that
-/// match nothing are found after collection, and reported in the stream.
-pub(crate) struct Session {
-    args: Args,
-    cwd: PathBuf,
-    root: PathBuf,
-    /// Each positional argument, resolved.
-    positionals: Vec<Positional>,
-    /// Positional arguments that are paths: as given, or absolute when only
-    /// the project root makes sense of them.
-    paths: Vec<PathBuf>,
-    /// Whether every positional argument is a path (collection can then be
-    /// limited to them).
-    only_paths: bool,
-    config: AyeConfig,
-    /// The adapters the run uses, in priority order, and why.
-    adapters: Vec<Box<dyn Adapter>>,
-    adapters_why: registry::Why,
-    prepared: Vec<Prepared>,
-    selection: Selection,
-    python: PathBuf,
-    python_source: aye_runner::PythonSource,
-    workers: u32,
-}
-
-/// A positional argument and how it was read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Positional {
-    /// What selection gets: relative to the root, with `/` separators.
-    pub(crate) selector: String,
-    /// For a path or an id, its file or directory, absolute and normalized.
-    pub(crate) path: Option<PathBuf>,
-    /// Whether it has a `::` part.
-    pub(crate) id: bool,
-}
-
-impl Positional {
-    fn exists(&self) -> bool {
-        self.path.as_deref().is_some_and(Path::exists)
+/// Run what `settings` ask for, and say how it ended ([`RunEnd`]), or why
+/// it couldn't start: a JUnit report that can't be written, before any
+/// event. What aye says beside the stream goes to `printer`.
+pub(crate) fn run(mut settings: RunSettings, printer: Printer) -> Result<RunEnd, AyeError> {
+    let started = Instant::now();
+    // A report that can't be written fails before anything runs, not
+    // after the whole suite.
+    let junit = settings.junit.take();
+    if let Some(junit) = &junit
+        && let Err(err) = writable(&junit.path)
+    {
+        return Err(AyeError::usage(format!(
+            "cannot write the JUnit XML report to {}: {err}",
+            junit.path.display()
+        )));
     }
-}
-
-impl Session {
-    pub(crate) fn new(args: Args) -> Result<Self> {
-        let cwd = std::env::current_dir().context("cannot read the current directory")?;
-        // `.` and `..` are resolved lexically, as pytest's `os.path.abspath`
-        // does, before the root is searched for.
-        let given: Vec<PathBuf> = args
-            .tests
-            .iter()
-            .map(|test| path_part(test))
-            .filter(|path| is_path_like(&cwd, path))
-            .map(|path| normalize_absolute(&cwd.join(path)))
-            .collect();
-        let root = normalize_absolute(&aye_config::project_root(&cwd, &given));
-        let positionals: Vec<Positional> = args
-            .tests
-            .iter()
-            .map(|test| resolve(&cwd, &root, test))
-            .collect();
-        let mut paths = Vec::new();
-        let mut only_paths = true;
-        for (test, positional) in args.tests.iter().zip(&positionals) {
-            let Some(path) = &positional.path else {
-                only_paths = false;
-                continue;
-            };
-            let as_given = path_part(test);
-            if normalize_absolute(&cwd.join(as_given)) == *path {
-                paths.push(PathBuf::from(as_given));
-            } else {
-                paths.push(path.clone());
-            }
-        }
-
-        let config = AyeConfig::load(&root)?;
-        let (python, python_source) = aye_runner::find_python(
-            args.python.as_deref(),
-            config.settings.python.as_deref(),
-            &root,
-            &cwd,
-        )
-        .context("no Python interpreter found: pass --python, or set [tool.aye] python")?;
-        let project = Project {
-            root: &root,
-            cwd: &cwd,
-            args: &paths,
-            config_file: args.config_file.as_deref(),
-            framework_args: &args.passthrough,
-        };
-        // Before anything walks the tree: pytest would walk all of it, and
-        // nobody means that.
-        if paths.is_empty()
-            && let Some(whole) = everything(&cwd)
-        {
-            anyhow::bail!(
-                "with no path given, aye would collect {whole}. Run aye inside a project, \
-                 or name what to test (aye tests/)"
-            );
-        }
-        // Choosing and preparing the adapters can walk the project; on a
-        // terminal, say so if it takes a while.
-        let text = output(&args, &config).0 == Output::Text;
-        let busy = Busy::start(text && io::stdout().is_terminal());
-        // `--co --no-refine` lists without importing: pytest's cases are the
-        // static recognizer's prediction.
-        let static_listing = args.no_refine && args.collect_only;
-        let chosen = registry::choose(&config.settings, &project, static_listing)?;
-        let adapters_why = chosen.why;
-        let adapters = chosen.adapters;
-        // A run imports every pytest file it runs: aye's pytest front-end
-        // lists each one, so there is no static run to fall back on.
-        if args.no_refine
-            && !args.collect_only
-            && adapters
-                .iter()
-                .any(|adapter| adapter.name() == aye_engine_pytest::NAME)
-        {
-            anyhow::bail!(
-                "--no-refine lists tests without importing them, with --co; a run of \
-                 pytest's tests imports every file it runs (aye's pytest front-end reads \
-                 each one), so it can't do without"
-            );
-        }
-        let prepared = prepare(&adapters, &project)?;
-
-        let selection = selection(
-            &args,
-            positionals.iter().map(|p| p.selector.as_str()),
-            &prepared,
-        )?;
-
-        let from_framework = prepared.iter().find_map(|(_, r)| {
-            r.context()
-                .get("xdist_workers")
-                .and_then(|w| w.as_str())
-                .map(str::to_string)
-        });
-        let workers = match (args.workers, config.settings.workers, from_framework) {
-            (Some(w), _, _) => w.resolve(),
-            (None, Some(aye_config::Workers::Count(n)), _) => n.max(1),
-            (None, Some(aye_config::Workers::Keyword(_)), _) => Workers::Auto.resolve(),
-            (None, None, Some(w)) => w.parse::<Workers>().map_or(1, Workers::resolve),
-            (None, None, None) => 1,
-        };
-
-        drop(busy);
-        Ok(Self {
-            args,
-            cwd,
-            root,
-            positionals,
-            paths,
-            only_paths,
-            config,
-            adapters,
-            adapters_why,
-            prepared,
-            selection,
-            python,
-            python_source,
-            workers,
-        })
+    let state = StateDir::for_root(&settings.root);
+    let mut history = History::load(state.path());
+    let durations = history.durations();
+    let last_failed = history.last_failed();
+    let mut selection = std::mem::take(&mut settings.selection);
+    if settings.last_failed {
+        selection = selection.with_last_failed(last_failed.iter().cloned());
     }
 
-    pub(crate) fn root(&self) -> &Path {
-        &self.root
-    }
+    let run_id = RunId::random();
+    let runner = Runner::new(RunnerOptions {
+        python: settings.interpreter.value.executable.clone(),
+        root: settings.root.clone(),
+        cwd: settings.cwd.clone(),
+        workers: settings.workers,
+        prelude: registry::PRELUDE,
+        runtimes: settings.adapters.iter().map(|a| a.runtime()).collect(),
+        // pytest-xdist's `testrun_uid`, which its workers share: one per
+        // run, the run's id.
+        env: vec![(
+            EnvVars::PYTEST_XDIST_TESTRUNUID.into(),
+            run_id.as_str().into(),
+        )],
+        // `-s` output stays off a machine-readable stdout.
+        echo: match settings.output.format.value {
+            OutputFormat::Text => Echo::Stdout,
+            OutputFormat::Json => Echo::Stderr,
+        },
+        collect_only: settings.collect_only,
+    });
+    // Ctrl-C stops collection as well as the run: the walk of a big tree
+    // and refinement can take a while, and must not ignore it.
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let running = Arc::new(AtomicBool::new(false));
+    install_interrupt(
+        runner.stop_handle(),
+        Arc::clone(&interrupted),
+        Arc::clone(&running),
+        printer,
+    );
 
-    pub(crate) fn python(&self) -> &Path {
-        &self.python
-    }
+    let file_failed = Arc::new(AtomicBool::new(false));
+    // The run's number in the store (`r81`), which `run_started` says,
+    // when the run will be stored.
+    let mut writer = RunWriter::new(
+        state.bucket(StateBucket::Runs),
+        settings.tool_aye.keep_runs(),
+    );
+    let number = if settings.collect_only {
+        None
+    } else {
+        writer.claim()
+    };
+    let mut out = Stream {
+        reporters: reporters(&settings, junit, &file_failed, printer),
+        history: Some(Remember {
+            history: &mut history,
+            dir: state.path().to_path_buf(),
+        }),
+        store: Keep::new(writer),
+        stamper: Stamper::with_run(run_id),
+        errors: Errors::default(),
+        started,
+        printer,
+    };
 
-    pub(crate) const fn python_source(&self) -> aye_runner::PythonSource {
-        self.python_source
-    }
+    out.emit(Event::RunStarted {
+        schema_version: SCHEMA_VERSION,
+        aye_version: env!("CARGO_PKG_VERSION").to_string(),
+        root: settings.root.display().to_string(),
+        collect_only: settings.collect_only,
+        workers: settings.workers,
+        run: number,
+    });
 
-    pub(crate) const fn workers(&self) -> u32 {
-        self.workers
-    }
-
-    pub(crate) const fn config(&self) -> &AyeConfig {
-        &self.config
-    }
-
-    pub(crate) fn prepared(&self) -> &[Prepared] {
-        &self.prepared
-    }
-
-    /// The names of the adapters the run uses, in priority order, and why
-    /// those.
-    pub(crate) fn adapters(&self) -> (Vec<&'static str>, registry::Why) {
-        (
-            self.adapters.iter().map(|a| a.name()).collect(),
-            self.adapters_why,
-        )
-    }
-
-    #[expect(
-        clippy::print_stderr,
-        reason = "aye's own messages, outside the event stream"
-    )]
-    pub(crate) fn run(mut self) -> ExitCode {
-        let started = Instant::now();
-        // A report that can't be written fails before anything runs, not
-        // after the whole suite.
-        let junit = self.junit();
-        if let Some(path) = &junit
-            && let Err(err) = writable(path)
-        {
-            eprintln!(
-                "aye: error: cannot write the JUnit XML report to {}: {err}",
-                path.display()
-            );
-            return ExitCode::UsageError;
-        }
-        let state = StateDir::for_root(&self.root);
-        let mut history = History::load(state.path());
-        let durations = history.durations();
-        let last_failed = history.last_failed();
-        let mut selection = std::mem::take(&mut self.selection);
-        if self.args.last_failed {
-            selection = selection.with_last_failed(last_failed.iter().cloned());
-        }
-
-        let run_id = new_run_id();
-        let runner = Runner::new(RunnerOptions {
-            python: self.python.clone(),
-            root: self.root.clone(),
-            cwd: self.cwd.clone(),
-            workers: self.workers,
-            executors: self.adapters.iter().map(|a| a.executor()).collect(),
-            // pytest-xdist's `testrun_uid`, which its workers share: one per
-            // run, the run's id.
-            env: vec![(
-                EnvVars::PYTEST_XDIST_TESTRUNUID.into(),
-                run_id.clone().into(),
-            )],
-            // `-s` output stays off a machine-readable stdout.
-            echo: match self.output() {
-                Output::Text => Echo::Stdout,
-                Output::Json => Echo::Stderr,
-            },
-            collect_only: self.args.collect_only,
-        });
-        // Ctrl-C stops collection as well as the run: the walk of a big tree
-        // and refinement can take a while, and must not ignore it.
-        let interrupted = Arc::new(AtomicBool::new(false));
-        let running = Arc::new(AtomicBool::new(false));
-        install_interrupt(
-            runner.stop_handle(),
-            Arc::clone(&interrupted),
-            Arc::clone(&running),
-        );
-
-        let file_failed = Arc::new(AtomicBool::new(false));
-        // The run's number in the store (`r81`), which `run_started` says,
-        // when the run will be stored.
-        let mut writer = RunWriter::new(
-            state.bucket(StateBucket::Runs),
-            self.config.settings.keep_runs(),
-        );
-        let number = if self.args.collect_only {
-            None
-        } else {
-            writer.claim()
+    // -- collect and select ---------------------------------------------
+    out.emit(Event::CollectionStarted);
+    let collect_started = Instant::now();
+    let project = settings.project();
+    // The refinement cache is keyed on what refining depends on: the
+    // interpreter and its packages, the arguments after `--`, and the
+    // environment workers inherit (aye's own, as it read it; the
+    // `PYTEST_XDIST_TESTRUNUID` the runner adds changes every run and
+    // refinement has no use for it).
+    let collector = Collector::new(
+        project,
+        &settings.prepared,
+        Options {
+            strict: settings.strict,
+            cache_dir: Some(state.bucket(StateBucket::Cache)),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+    )
+    .with_environment(EnvironmentFingerprint {
+        interpreter: settings.interpreter.value.executable.clone(),
+        framework_args: settings.framework_args.clone(),
+        variables: settings.env.vars.clone(),
+    })
+    .with_stop(Arc::clone(&interrupted));
+    let targets: Vec<PathBuf> = if settings.only_paths {
+        settings.paths.clone()
+    } else if settings.paths.is_empty() {
+        Vec::new()
+    } else {
+        // Paths mixed with dotted names or keys: the paths, and wherever
+        // the adapters look when no path is given, for the rest.
+        let bare = Project {
+            args: &[],
+            ..project
         };
-        let mut out = Stream {
-            reporters: self.reporters(junit, &file_failed),
-            history: Some(Remember {
-                history: &mut history,
-                dir: state.path().to_path_buf(),
-            }),
-            store: Keep::new(writer),
-            stamper: Stamper::with_run(run_id),
-            errors: Errors::default(),
-            started,
-        };
-
-        out.emit(Event::RunStarted {
-            schema_version: SCHEMA_VERSION,
-            aye_version: env!("CARGO_PKG_VERSION").to_string(),
-            root: self.root.display().to_string(),
-            collect_only: self.args.collect_only,
-            workers: self.workers,
-            run: number,
-        });
-
-        // -- collect and select ---------------------------------------------
-        out.emit(Event::CollectionStarted);
-        let collect_started = Instant::now();
-        let project = Project {
-            root: &self.root,
-            cwd: &self.cwd,
-            args: &self.paths,
-            config_file: self.args.config_file.as_deref(),
-            framework_args: &self.args.passthrough,
-        };
-        // The refinement cache is keyed on what refining depends on: the
-        // interpreter and its packages, the arguments after `--`, and the
-        // environment workers inherit (aye's own; `PYTEST_XDIST_TESTRUNUID`
-        // changes every run and refinement has no use for it).
-        let collector = Collector::new(
-            project,
-            &self.prepared,
-            Options {
-                strict: self.args.strict,
-                cache_dir: Some(state.bucket(StateBucket::Cache)),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            },
-        )
-        .with_environment(Environment {
-            interpreter: Some(self.python.clone()),
-            framework_args: self.args.passthrough.clone(),
-            variables: None,
-        })
-        .with_stop(Arc::clone(&interrupted));
-        let targets: Vec<PathBuf> = if self.only_paths {
-            self.paths.clone()
-        } else if self.paths.is_empty() {
-            Vec::new()
-        } else {
-            // Paths mixed with dotted names or keys: the paths, and wherever
-            // the adapters look when no path is given, for the rest.
-            let bare = Project {
-                args: &[],
-                ..project
-            };
-            let mut targets: Vec<PathBuf> = self
-                .prepared
-                .iter()
-                .flat_map(|(_, recognizer)| recognizer.roots(&bare))
-                .filter(|root| root.exists())
-                .collect();
-            targets.extend(self.paths.iter().cloned());
-            targets
-        };
-        let refiner: Option<&(dyn Refiner + Sync)> = if self.args.no_refine {
-            None
-        } else {
-            Some(&runner)
-        };
-        let collection = {
-            let mut pace = Pace::new(collect_started);
-            collector.collect_watching(&targets, refiner, &mut |progress| {
-                if pace.due() {
-                    out.emit(Event::CollectionProgress {
-                        walked: progress.walked,
-                        test_files: progress.test_files,
-                        refining: progress.refining,
-                    });
-                }
-            })
-        };
-        if collection.interrupted {
-            out.emit(Event::CollectionFinished {
-                selected: 0,
-                deselected: 0,
-                refined_files: 0,
-                duration: collect_started.elapsed(),
-            });
-            let stopped = aye_runner::StopReason::Interrupted.as_str();
-            return out.finish(
-                ExitCode::Interrupted,
-                Counts::default(),
-                Some(stopped),
-                &file_failed,
-            );
-        }
-        // Dotted names and keys are resolved among what collection found,
-        // over the whole project: what the run reaches decides which of
-        // collection's diagnostics are the run's (see `Reach`).
-        let reach = Reach::of(&self.positionals, &self.root, &collection.cases);
-        let session_files = session_files(
-            &collection.cases,
-            reach
-                .as_ref()
-                .map(|reach| (reach.selected.as_slice(), self.root.as_path())),
-        );
-        let selected = selection.apply(collection.cases);
-        let kept = |diagnostic: &Diagnostic| {
-            reach
-                .as_ref()
-                .is_none_or(|reach| reach.keeps(&self.root, diagnostic))
-        };
-        // The modules and directories skipped while collecting that the run
-        // reaches: a dotted name for one names no test, but pytest found it.
-        let skips: Vec<&str> = collection
-            .diagnostics
-            .iter()
-            .filter(|d| d.code == codes::SKIPPED && d.severity == Severity::Info && kept(d))
-            .map(|d| d.path.as_str())
-            .collect();
-        // Selectors that match nothing, as pytest's `not found:`: a missing
-        // path, or an id, dotted name or key that names no test. An existing
-        // file or directory that has no tests is not one (pytest collects it
-        // and finds nothing).
-        let unmatched: Vec<(&String, &Positional)> = selected
-            .unmatched
-            .iter()
-            .filter_map(|selector| {
-                let positional = self.positionals.iter().find(|p| p.selector == *selector)?;
-                let found = (positional.exists() && !positional.id)
-                    || (positional.path.is_none()
-                        && skips
-                            .iter()
-                            .any(|path| dotted_reach(selector, path) == Named::Whole));
-                (!found).then_some((selector, positional))
-            })
-            .collect();
-        let reach = reach.map(|reach| Reach {
-            unmatched: !unmatched.is_empty(),
-            ..reach
-        });
-        let mut conftests = OneConftestError::default();
-        let mut once = OneModuleErrors::default();
-        let pytest_runs = self
+        let mut targets: Vec<PathBuf> = settings
             .prepared
             .iter()
-            .any(|(name, _)| *name == aye_engine_pytest::NAME);
-        let mut collection_errors = false;
-        let broken = broken_conftest_dirs(&collection.diagnostics);
-        for diagnostic in &collection.diagnostics {
-            if reach
-                .as_ref()
-                .is_some_and(|reach| !reach.keeps(&self.root, diagnostic))
-                || explained_by_a_conftest(&broken, diagnostic)
-            {
-                continue;
-            }
-            let mut diagnostic = diagnostic.clone();
-            if diagnostic.code == aye_collect::codes::REFINE_FAILED {
-                // aye's pytest front-end is the only source of pytest's
-                // tests: without it there are none, which is no result.
-                diagnostic.severity = Severity::Error;
-            }
-            conftests.see(None, &mut diagnostic);
-            if pytest_runs {
-                once.refined(aye_engine_pytest::NAME, &diagnostic);
-            }
-            collection_errors |= diagnostic.severity == Severity::Error;
-            out.emit(Event::Diagnostic(diagnostic));
-        }
-
-        // A missing path collection has reported already is reported once.
-        let reported: HashSet<&str> = collection
-            .diagnostics
-            .iter()
-            .filter(|d| d.code == codes::NOT_FOUND)
-            .map(|d| d.path.as_str())
+            .flat_map(|(_, recognizer)| recognizer.roots(&bare))
+            .filter(|root| root.exists())
             .collect();
-        let mut not_found = Vec::new();
-        for (selector, positional) in unmatched {
-            let path = positional
-                .path
-                .as_deref()
-                .map(|path| root_relative(path, &self.root))
-                .unwrap_or_default();
-            if !positional.exists() && reported.contains(path.as_str()) {
-                continue;
+        targets.extend(settings.paths.iter().cloned());
+        targets
+    };
+    let refiner: Option<&(dyn Refiner + Sync)> = if settings.no_refine {
+        None
+    } else {
+        Some(&runner)
+    };
+    let collection = {
+        let mut pace = Pace::new(collect_started);
+        collector.collect_watching(&targets, refiner, &mut |progress| {
+            if pace.due() {
+                out.emit(Event::CollectionProgress {
+                    walked: progress.walked,
+                    test_files: progress.test_files,
+                    refining: progress.refining,
+                });
             }
-            not_found.push(Diagnostic {
-                severity: Severity::Error,
-                code: codes::NOT_FOUND.to_string(),
-                path,
-                span: None,
-                message: not_found_message(selector),
-            });
-        }
-        for diagnostic in not_found {
-            out.emit(Event::Diagnostic(diagnostic));
-        }
-        // pytest refuses to run when an explicit argument names nothing.
-        let usage_error = out.errors.not_found || out.errors.usage;
-        // A hook that failed while pytest collected (aye's pytest front-end
-        // runs the collection hooks in refinement) is pytest's
-        // `INTERNALERROR`: the session ends there, status 3, `--co` too.
-        let internal_error = out.errors.internal;
-        // Errors so far belong to collection; only later ones are the run's.
-        out.errors = Errors::default();
-
-        let mut cases: Vec<Case> = Vec::with_capacity(selected.cases.len());
-        for case in &selected.cases {
-            for id in selected.ids_for(case) {
-                let mut case = case.clone();
-                case.id = id;
-                cases.push(case);
-            }
-        }
-        if self.args.failed_first && !last_failed.is_empty() {
-            cases.sort_by_key(|case| !last_failed.contains(&case.id));
-        }
-        for case in &cases {
-            out.emit(Event::CaseCollected(Box::new(case.clone())));
-        }
+        })
+    };
+    if collection.interrupted {
         out.emit(Event::CollectionFinished {
-            selected: u32::try_from(cases.len()).unwrap_or(u32::MAX),
-            deselected: selected.deselected,
-            refined_files: collection.refined_files,
+            selected: 0,
+            deselected: 0,
+            refined_files: 0,
             duration: collect_started.elapsed(),
         });
+        let verdict = RunVerdict {
+            interrupted: true,
+            ..RunVerdict::default()
+        };
+        return Ok(out.finish(
+            verdict.exit_code(RunStage::Collection),
+            verdict.counts,
+            Some(StopReason::Interrupted),
+            &file_failed,
+        ));
+    }
+    // Dotted names and keys are resolved among what collection found,
+    // over the whole project: what the run reaches decides which of
+    // collection's diagnostics are the run's (see `Reach`).
+    let reach = Reach::of(&settings.positionals, &settings.root, &collection.cases);
+    let session_files = session_files(
+        &collection.cases,
+        reach
+            .as_ref()
+            .map(|reach| (reach.selected.as_slice(), settings.root.as_path())),
+    );
+    let selected = selection.apply(collection.cases);
+    let kept = |diagnostic: &Diagnostic| {
+        reach
+            .as_ref()
+            .is_none_or(|reach| reach.keeps(&settings.root, diagnostic))
+    };
+    // The modules and directories skipped while collecting that the run
+    // reaches: a dotted name for one names no test, but pytest found it.
+    let skips: Vec<&str> = collection
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::Skipped && d.severity == Severity::Info && kept(d))
+        .map(|d| d.path.as_str())
+        .collect();
+    // Selectors that match nothing, as pytest's `not found:`: a missing
+    // path, or an id, dotted name or key that names no test. An existing
+    // file or directory that has no tests is not one (pytest collects it
+    // and finds nothing).
+    let unmatched: Vec<(&String, &Positional)> = selected
+        .unmatched
+        .iter()
+        .filter_map(|selector| {
+            let positional = settings
+                .positionals
+                .iter()
+                .find(|p| p.selector == *selector)?;
+            let found = (positional.exists() && !positional.id)
+                || (positional.path.is_none()
+                    && skips
+                        .iter()
+                        .any(|path| dotted_reach(selector, path) == Named::Whole));
+            (!found).then_some((selector, positional))
+        })
+        .collect();
+    let reach = reach.map(|reach| Reach {
+        unmatched: !unmatched.is_empty(),
+        ..reach
+    });
+    let mut conftests = OneConftestError::default();
+    let mut once = OneModuleErrors::default();
+    let pytest_runs = settings
+        .prepared
+        .iter()
+        .any(|(name, _)| *name == aye_adapter_pytest::NAME);
+    let mut collection_errors = false;
+    let broken = broken_conftest_dirs(&collection.diagnostics);
+    for diagnostic in &collection.diagnostics {
+        if reach
+            .as_ref()
+            .is_some_and(|reach| !reach.keeps(&settings.root, diagnostic))
+            || explained_by_a_conftest(&broken, diagnostic)
+        {
+            continue;
+        }
+        let mut diagnostic = diagnostic.clone();
+        if diagnostic.code == DiagnosticCode::RefineFailed {
+            // aye's pytest front-end is the only source of pytest's
+            // tests: without it there are none, which is no result.
+            diagnostic.severity = Severity::Error;
+        }
+        conftests.see(None, &mut diagnostic);
+        if pytest_runs {
+            once.refined(&aye_adapter_pytest::NAME, &diagnostic);
+        }
+        collection_errors |= diagnostic.severity == Severity::Error;
+        out.emit(Event::Diagnostic(diagnostic));
+    }
 
-        let counts = Counts {
+    // A missing path collection has reported already is reported once.
+    let reported: HashSet<&str> = collection
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::NotFound)
+        .map(|d| d.path.as_str())
+        .collect();
+    let mut not_found = Vec::new();
+    for (selector, positional) in unmatched {
+        let path = positional
+            .path
+            .as_deref()
+            .map(|path| root_relative(path, &settings.root))
+            .unwrap_or_default();
+        if !positional.exists() && reported.contains(path.as_str()) {
+            continue;
+        }
+        not_found.push(Diagnostic {
+            severity: Severity::Error,
+            code: DiagnosticCode::NotFound,
+            path: DiagnosticPath::as_written(path),
+            span: None,
+            message: not_found_message(selector),
+        });
+    }
+    for diagnostic in not_found {
+        out.emit(Event::Diagnostic(diagnostic));
+    }
+    // pytest refuses to run when an explicit argument names nothing.
+    let usage_error = out.errors.usage;
+    // A hook that failed while pytest collected (aye's pytest front-end
+    // runs the collection hooks in refinement) is pytest's
+    // `INTERNALERROR`: the session ends there, status 3, `--co` too.
+    let internal_error = out.errors.internal;
+    // Errors so far belong to collection; only later ones are the run's.
+    out.errors = Errors::default();
+
+    let mut cases: Vec<Case> = Vec::with_capacity(selected.cases.len());
+    for case in &selected.cases {
+        for id in selected.ids_for(case) {
+            let mut case = case.clone();
+            case.id = id;
+            cases.push(case);
+        }
+    }
+    if settings.failed_first && !last_failed.is_empty() {
+        cases.sort_by_key(|case| !last_failed.contains(&case.id));
+    }
+    for case in &cases {
+        out.emit(Event::CaseCollected(Box::new(case.clone())));
+    }
+    let collected = RunVerdict {
+        internal: internal_error,
+        usage: usage_error,
+        errors: collection_errors,
+        selected: u32::try_from(cases.len()).unwrap_or(u32::MAX),
+        counts: Counts {
             deselected: selected.deselected,
             ..Counts::default()
+        },
+        collect_only: settings.collect_only,
+        continue_on_collection_errors: settings.continue_on_collection_errors,
+        ..RunVerdict::default()
+    };
+    out.emit(Event::CollectionFinished {
+        selected: collected.selected,
+        deselected: selected.deselected,
+        refined_files: collection.refined_files,
+        duration: collect_started.elapsed(),
+    });
+    if collected.ends_after_collection() {
+        return Ok(out.finish(
+            collected.exit_code(RunStage::Collection),
+            collected.counts,
+            None,
+            &file_failed,
+        ));
+    }
+
+    // -- run ----------------------------------------------------------------
+    let rerun_args = settings.rerun_args.clone();
+    let plan = Plan {
+        cases,
+        policy: settings.policy.clone(),
+        contexts: settings
+            .prepared
+            .iter()
+            .map(|(name, r)| (name.clone(), r.context()))
+            .collect(),
+        requested_ids: requested_ids(&settings.positionals),
+        rerun_args: rerun_args.clone(),
+        selected_paths: reach
+            .map(|reach| reach.selected)
+            .unwrap_or_default()
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect(),
+        durations,
+        first: if settings.failed_first {
+            last_failed
+        } else {
+            HashSet::new()
+        },
+        session_files,
+    };
+    let summary = {
+        let Stream {
+            reporters,
+            history,
+            store,
+            stamper,
+            errors,
+            ..
+        } = &mut out;
+        let here = Here {
+            cwd: &settings.cwd,
+            root: &settings.root,
+            rerun_args: &rerun_args,
         };
-        if internal_error {
-            return out.finish(ExitCode::InternalError, counts, None, &file_failed);
-        }
-        if usage_error {
-            return out.finish(ExitCode::UsageError, counts, None, &file_failed);
-        }
-        // pytest counts each collection error as a failure: it stops the run
-        // (2), or, with `--continue-on-collection-errors`, fails it (1)
-        // whatever the tests do, `--co` included.
-        let continuing = self.args.continue_on_collection_errors;
-        if self.args.collect_only {
-            let code = if collection_errors && !continuing {
-                ExitCode::Interrupted
-            } else if collection_errors {
-                ExitCode::TestsFailed
-            } else if cases.is_empty() {
-                ExitCode::NoTests
-            } else {
-                ExitCode::Ok
-            };
-            return out.finish(code, counts, None, &file_failed);
-        }
-        if collection_errors && !continuing {
-            return out.finish(ExitCode::Interrupted, counts, None, &file_failed);
-        }
-        if cases.is_empty() {
-            let code = if collection_errors {
-                ExitCode::TestsFailed
-            } else {
-                ExitCode::NoTests
-            };
-            return out.finish(code, counts, None, &file_failed);
-        }
+        running.store(true, Ordering::SeqCst);
+        runner.run(&plan, stamper, &mut |mut record| {
+            here.rerun_from_here(&mut record);
+            once.see(&mut record);
+            conftests.see_record(&mut record);
+            Stream::deliver_to(reporters, history, store, errors, printer, &mut record);
+        })
+    };
+    let counts = Counts {
+        deselected: selected.deselected,
+        ..summary.counts
+    };
+    let verdict = collected.with_run(&summary, out.errors, counts);
+    Ok(out.finish(
+        verdict.exit_code(RunStage::Run),
+        verdict.counts,
+        summary.stopped,
+        &file_failed,
+    ))
+}
 
-        // -- run ----------------------------------------------------------------
-        let requested = requested_ids(&self.positionals);
-        let rerun_args = rerun_args(&self.args);
-        let selected_paths = reach.map(|reach| reach.selected).unwrap_or_default();
-        let plan = Plan {
-            cases,
-            policy: self.policy(),
-            contexts: self
-                .prepared
-                .iter()
-                .map(|(name, r)| {
-                    let context = with_requested(r.context(), &requested);
-                    let context = with_selected_paths(context, &selected_paths);
-                    ((*name).to_string(), with_rerun_args(context, &rerun_args))
-                })
-                .collect(),
-            durations,
-            first: if self.args.failed_first {
-                last_failed
-            } else {
-                HashSet::new()
-            },
-            session_files,
-        };
-        let summary = {
-            let Stream {
-                reporters,
-                history,
-                store,
-                stamper,
-                errors,
-                ..
-            } = &mut out;
-            let here = Here {
-                cwd: &self.cwd,
-                root: &self.root,
-                rerun_args: &rerun_args,
-            };
-            running.store(true, Ordering::SeqCst);
-            runner.run(&plan, stamper, &mut |mut record| {
-                here.rerun_from_here(&mut record);
-                once.see(&mut record);
-                conftests.see_record(&mut record);
-                Stream::deliver_to(reporters, history, store, errors, &mut record);
-            })
-        };
-        let counts = Counts {
-            deselected: selected.deselected,
-            ..summary.counts
-        };
-        let stopped = summary.stopped.map(aye_runner::StopReason::as_str);
-        let mut errors = out.errors;
-        // Collection's errors, which `--continue-on-collection-errors` let
-        // the run go past, still fail it.
-        errors.any |= collection_errors;
-        let code = run_exit_code(&summary, errors, &counts, continuing);
-        out.finish(code, counts, stopped, &file_failed)
-    }
-
-    fn policy(&self) -> Policy {
-        Policy {
-            maxfail: self.maxfail(),
-            capture: !self.args.no_capture,
-            verbosity: self.args.framework_verbosity(),
-            timeout: self.config.settings.timeout(),
-            keyword: self.args.keyword.clone(),
-            tags: self.args.tags.clone(),
-            framework_args: self.args.passthrough.clone(),
-        }
-    }
-
-    /// The last of `-x` and `--maxfail`: the arguments after `--` come last
-    /// in the framework's arguments, so theirs wins over the command line's.
-    /// Else the framework's own setting (pytest's `addopts`,
-    /// `PYTEST_ADDOPTS`); 0 means no limit.
-    fn maxfail(&self) -> Option<u32> {
-        maxfail(&self.args, &self.prepared)
-    }
-
-    /// Where the JUnit XML report goes: `--junitxml`, read as pytest reads
-    /// it (variables and `~` expanded), else the framework's own (the path
-    /// pytest's `--junitxml` in addopts, `PYTEST_ADDOPTS` or the arguments
-    /// after `--` gives, from the adapter's context). Relative to the
-    /// current directory; empty means none.
-    fn junit(&self) -> Option<PathBuf> {
-        junit_path(&self.cwd, self.args.junit_xml.as_deref(), &self.prepared)
-    }
-
-    /// `--output`, else `[tool.aye] output`, else text.
-    fn output(&self) -> Output {
-        output(&self.args, &self.config).0
-    }
-
-    /// The output format, at its verbosity (`-v` and `-q`), and where the
-    /// format came from, for `aye config`.
-    pub(crate) fn output_shown(&self) -> (String, &'static str) {
-        let (format, origin) = output(&self.args, &self.config);
-        let verbosity = self.args.verbosity();
-        let flags = match verbosity {
-            ..0 => " -q".to_string(),
-            0 => String::new(),
-            n => format!(" -{}", "v".repeat(usize::from(n.unsigned_abs()))),
-        };
-        (format!("{}{flags}", format.name()), origin)
-    }
-
-    fn reporters<'a>(&self, junit: Option<PathBuf>, file_failed: &Arc<AtomicBool>) -> Tee<'a> {
-        let mut tee = Tee::new();
-        let verbosity = self.args.verbosity();
-        match self.output() {
-            Output::Text => {
-                let color = match self.args.color {
-                    Color::Auto => ColorChoice::Auto,
-                    Color::Always => ColorChoice::Always,
-                    Color::Never => ColorChoice::Never,
-                };
-                tee.push(Stdout::new(Text::new(
-                    io::stdout(),
-                    TextOptions {
-                        verbosity,
-                        color,
-                        live: io::stdout().is_terminal(),
-                    },
-                )));
-                if aye_render::github_actions_enabled() {
-                    let workspace = std::env::var_os(EnvVars::GITHUB_WORKSPACE).map(PathBuf::from);
-                    let prefix = repository_prefix(&self.root, workspace.as_deref());
-                    tee.push(Stdout::new(
-                        GithubAnnotations::new(io::stdout()).with_path_prefix(prefix),
-                    ));
-                }
+/// The run's reporters: its output format's on stdout (and GitHub's
+/// annotations beside text, in a step of GitHub Actions), and the JUnit
+/// report, whose failure at the end `printer` says and `file_failed`
+/// remembers.
+fn reporters<'a>(
+    settings: &RunSettings,
+    junit: Option<JunitTarget>,
+    file_failed: &Arc<AtomicBool>,
+    printer: Printer,
+) -> Tee<'a> {
+    let mut tee = Tee::new();
+    let verbosity = settings.output.verbosity.level();
+    match settings.output.format.value {
+        OutputFormat::Text => {
+            tee.push(Stdout::new(Text::new(
+                io::stdout(),
+                TextOptions {
+                    verbosity,
+                    color: settings.output.color,
+                    live: io::stdout().is_terminal(),
+                },
+            )));
+            if aye_render::github_actions_enabled(&settings.env.vars) {
+                let prefix =
+                    repository_prefix(&settings.root, settings.env.github_workspace.as_deref());
+                tee.push(Stdout::new(
+                    GithubAnnotations::new(io::stdout()).with_path_prefix(prefix),
+                ));
             }
-            Output::Json => tee.push(Stdout::new(JsonLines::new(io::stdout(), verbosity))),
         }
-        if let Some(path) = junit {
-            tee.push(File {
-                inner: Junit::new(path)
-                    .with_prefix(junit_prefix(&self.prepared))
-                    .with_options(junit_options(&self.prepared)),
-                failed: Arc::clone(file_failed),
-            });
-        }
-        tee
+        OutputFormat::Json => tee.push(Stdout::new(JsonLines::new(io::stdout(), verbosity))),
     }
+    if let Some(junit) = junit {
+        tee.push(File {
+            inner: Junit::new(junit.path)
+                .with_prefix(junit.prefix)
+                .with_options(junit.options),
+            failed: Arc::clone(file_failed),
+            printer,
+        });
+    }
+    tee
 }
 
 /// Where aye runs, for the reruns it prints.
@@ -765,7 +470,7 @@ struct Here<'a> {
     cwd: &'a Path,
     root: &'a Path,
     /// aye's options that shape the run, which a rerun repeats before the
-    /// id (see `keys::RERUN_ARGS`).
+    /// id ([`aye_protocol::BatchContext::rerun_args`]).
     rerun_args: &'a [String],
 }
 
@@ -783,29 +488,24 @@ impl Here<'_> {
         if result.reproduce.is_none() && !result.outcome.is_bad() {
             return;
         }
-        let Some(local) = self.local_id(result.id.as_str()) else {
+        let Some(local) = self.local_id(&result.id) else {
             return;
         };
         match &mut result.reproduce {
             Some(reproduce) => {
-                // `aye [aye's options] <id> [-- <the framework's>]`.
-                let command = &mut reproduce.command;
-                let options = command.iter().position(|arg| arg == "--");
-                let id = command[..options.unwrap_or(command.len())]
-                    .iter()
-                    .position(|arg| arg == result.id.as_str());
-                if command.first().is_some_and(|aye| aye == "aye")
-                    && let Some(at) = id.filter(|at| *at > 0)
-                {
-                    command[at] = local;
+                if let Some(mut rerun) = RerunCommand::parse(&reproduce.command, &result.id) {
+                    rerun.target = local;
+                    reproduce.command = rerun.to_command();
                 }
             }
             None if result.outcome.is_bad() => {
-                let mut command = vec!["aye".to_string()];
-                command.extend(self.rerun_args.iter().cloned());
-                command.push(local);
+                let rerun = RerunCommand {
+                    options: self.rerun_args.to_vec(),
+                    target: local,
+                    framework_args: Vec::new(),
+                };
                 result.reproduce = Some(aye_events::Reproduce {
-                    command,
+                    command: rerun.to_command(),
                     ..aye_events::Reproduce::default()
                 });
             }
@@ -815,23 +515,19 @@ impl Here<'_> {
 
     /// `id` spelled from the current directory, when spelled from the root
     /// it would name another file from here; see [`Self::rerun_from_here`].
-    fn local_id(&self, id: &str) -> Option<String> {
+    fn local_id(&self, id: &TestId) -> Option<String> {
         if self.cwd == self.root {
             return None;
         }
-        let (path, rest) = id
-            .split_once("::")
-            .map_or((id, None), |(p, r)| (p, Some(r)));
+        let path = id.path().as_str();
         let from_cwd = normalize_absolute(&self.cwd.join(path));
         let from_root = normalize_absolute(&self.root.join(path));
         if from_cwd == from_root || !from_cwd.exists() {
             return None;
         }
+        // The names, from their `::` on, follow the file as they are.
         let mut local = relative_below_root(&from_root, self.cwd);
-        if let Some(rest) = rest {
-            local.push_str("::");
-            local.push_str(rest);
-        }
+        local.push_str(&id.as_str()[path.len()..]);
         Some(local)
     }
 }
@@ -850,10 +546,10 @@ impl Here<'_> {
 #[derive(Debug, Default)]
 struct OneModuleErrors {
     /// Each batch's adapter, from its `batch_started`.
-    adapters: HashMap<aye_events::BatchId, String>,
+    adapters: HashMap<aye_events::BatchIndex, AdapterName>,
     /// By file, how many collection errors each adapter reported for it,
     /// in the order the adapters first did.
-    reported: HashMap<String, Vec<(String, usize)>>,
+    reported: HashMap<String, Vec<(AdapterName, usize)>>,
 }
 
 impl OneModuleErrors {
@@ -863,18 +559,21 @@ impl OneModuleErrors {
     /// adapter's errors, which pytest counts apart, then count as its too,
     /// so another adapter's batch error beyond them still becomes an info).
     /// A conftest's is [`OneConftestError`]'s.
-    fn refined(&mut self, adapter: &str, diagnostic: &Diagnostic) {
+    fn refined(&mut self, adapter: &AdapterName, diagnostic: &Diagnostic) {
         if diagnostic.severity != Severity::Error
-            || diagnostic.code != codes::COLLECTION_ERROR
-            || diagnostic.path.is_empty()
-            || registry::is_conftest(&diagnostic.path)
+            || diagnostic.code != DiagnosticCode::CollectionError
+            || diagnostic.path.is_nowhere()
+            || registry::is_conftest(diagnostic.path.as_str())
         {
             return;
         }
-        let counts = self.reported.entry(diagnostic.path.clone()).or_default();
+        let counts = self
+            .reported
+            .entry(diagnostic.path.to_string())
+            .or_default();
         match counts.iter_mut().find(|(by, _)| by == adapter) {
             Some((_, count)) => *count += 1,
-            None => counts.push((adapter.to_string(), 1)),
+            None => counts.push((adapter.clone(), 1)),
         }
     }
 
@@ -888,8 +587,8 @@ impl OneModuleErrors {
             }
             Event::Diagnostic(diagnostic)
                 if diagnostic.severity == Severity::Error
-                    && diagnostic.code == codes::COLLECTION_ERROR
-                    && !diagnostic.path.is_empty() =>
+                    && diagnostic.code == DiagnosticCode::CollectionError
+                    && !diagnostic.path.is_nowhere() =>
             {
                 let Some(adapter) = batch.and_then(|batch| self.adapters.get(&batch)) else {
                     return;
@@ -897,7 +596,10 @@ impl OneModuleErrors {
                 if !registry::collects_in_one_module(adapter) {
                     return;
                 }
-                let counts = self.reported.entry(diagnostic.path.clone()).or_default();
+                let counts = self
+                    .reported
+                    .entry(diagnostic.path.to_string())
+                    .or_default();
                 let mine = if let Some((_, count)) = counts.iter_mut().find(|(by, _)| by == adapter)
                 {
                     *count += 1;
@@ -940,10 +642,10 @@ impl OneModuleErrors {
 #[derive(Debug, Default)]
 struct OneConftestError {
     /// Each batch's adapter, from its `batch_started`.
-    adapters: HashMap<aye_events::BatchId, String>,
+    adapters: HashMap<aye_events::BatchIndex, AdapterName>,
     /// By code and path, who reported the error first (an adapter, or
     /// `None` for refinement), and its message.
-    first: HashMap<(String, String), (Option<String>, String)>,
+    first: HashMap<(DiagnosticCode, String), (Option<AdapterName>, String)>,
 }
 
 impl OneConftestError {
@@ -959,7 +661,7 @@ impl OneConftestError {
             Event::Diagnostic(diagnostic) => {
                 let adapter = batch.and_then(|batch| self.adapters.get(&batch)).cloned();
                 if adapter.is_some() {
-                    self.see(adapter.as_deref(), diagnostic);
+                    self.see(adapter.as_ref(), diagnostic);
                 }
             }
             _ => {}
@@ -967,22 +669,24 @@ impl OneConftestError {
     }
 
     /// A diagnostic `adapter` reported, or refinement (`None`).
-    fn see(&mut self, adapter: Option<&str>, diagnostic: &mut Diagnostic) {
-        let kind = match diagnostic.code.as_str() {
-            codes::USAGE_ERROR => "usage error",
-            codes::COLLECTION_ERROR => "collection error",
+    fn see(&mut self, adapter: Option<&AdapterName>, diagnostic: &mut Diagnostic) {
+        let kind = match diagnostic.code {
+            DiagnosticCode::UsageError => "usage error",
+            DiagnosticCode::CollectionError => "collection error",
             _ => return,
         };
-        if diagnostic.severity != Severity::Error || !registry::is_conftest(&diagnostic.path) {
+        if diagnostic.severity != Severity::Error
+            || !registry::is_conftest(diagnostic.path.as_str())
+        {
             return;
         }
-        let key = (diagnostic.code.clone(), diagnostic.path.clone());
+        let key = (diagnostic.code.clone(), diagnostic.path.to_string());
         let Some((first, message)) = self.first.get(&key) else {
-            let first = (adapter.map(str::to_string), diagnostic.message.clone());
+            let first = (adapter.cloned(), diagnostic.message.clone());
             self.first.insert(key, first);
             return;
         };
-        if first.is_some() && first.as_deref() == adapter {
+        if first.is_some() && first.as_ref() == adapter {
             return;
         }
         let by = adapter.map_or_else(
@@ -1014,7 +718,8 @@ struct Reach {
     paths: Vec<PathBuf>,
     /// The paths the user's run starts from: each path argument, and the
     /// files of the collected cases each other argument selects, in the
-    /// order of the arguments, each once (see `keys::SELECTED_PATHS`).
+    /// order of the arguments, each once
+    /// ([`aye_protocol::BatchContext::selected_paths`]).
     selected: Vec<PathBuf>,
     /// The arguments that aren't paths, as given: dotted names and keys.
     words: Vec<String>,
@@ -1049,7 +754,7 @@ impl Reach {
                 if one.truth(case).is_false() {
                     continue;
                 }
-                let file = at_root(case.id.path());
+                let file = at_root(case.id.path().as_str());
                 if seen.insert(file.clone()) {
                     selected.push(file);
                 }
@@ -1073,9 +778,9 @@ impl Reach {
     /// the run starts from (as `pytest <those paths>` loads it first), or
     /// some argument named nothing. Everything else is the run's.
     fn keeps(&self, root: &Path, diagnostic: &Diagnostic) -> bool {
-        let at = || normalize_absolute(&root.join(&diagnostic.path));
-        match (diagnostic.severity, diagnostic.code.as_str()) {
-            (Severity::Info, codes::SKIPPED) => {
+        let at = || normalize_absolute(&root.join(diagnostic.path.as_str()));
+        match (diagnostic.severity, &diagnostic.code) {
+            (Severity::Info, DiagnosticCode::Skipped) => {
                 let at = at();
                 self.paths
                     .iter()
@@ -1083,9 +788,9 @@ impl Reach {
                     || self
                         .words
                         .iter()
-                        .any(|word| dotted_reach(word, &diagnostic.path) != Named::Nothing)
+                        .any(|word| dotted_reach(word, diagnostic.path.as_str()) != Named::Nothing)
             }
-            (Severity::Error, codes::USAGE_ERROR) if !diagnostic.path.is_empty() => {
+            (Severity::Error, DiagnosticCode::UsageError) if !diagnostic.path.is_nowhere() => {
                 if self.unmatched {
                     return true;
                 }
@@ -1109,8 +814,8 @@ impl Reach {
 fn broken_conftest_dirs(diagnostics: &[Diagnostic]) -> Vec<&str> {
     diagnostics
         .iter()
-        .filter(|d| d.severity == Severity::Error && registry::is_conftest(&d.path))
-        .map(|d| &d.path[..d.path.len() - "conftest.py".len()])
+        .filter(|d| d.severity == Severity::Error && registry::is_conftest(d.path.as_str()))
+        .map(|d| &d.path.as_str()[..d.path.as_str().len() - "conftest.py".len()])
         .collect()
 }
 
@@ -1122,8 +827,10 @@ fn broken_conftest_dirs(diagnostics: &[Diagnostic]) -> Vec<&str> {
 /// has none, is left out.
 fn explained_by_a_conftest(broken: &[&str], diagnostic: &Diagnostic) -> bool {
     diagnostic.severity == Severity::Info
-        && diagnostic.code == aye_collect::codes::NO_TESTS
-        && broken.iter().any(|dir| diagnostic.path.starts_with(dir))
+        && diagnostic.code == DiagnosticCode::NoTests
+        && broken
+            .iter()
+            .any(|dir| diagnostic.path.as_str().starts_with(dir))
 }
 
 /// What a dotted name names of a path collection reported skipped.
@@ -1174,30 +881,6 @@ fn dotted_reach(word: &str, path: &str) -> Named {
     named
 }
 
-/// Error diagnostics seen in the stream, by what they mean for the exit code.
-#[derive(Debug, Clone, Copy, Default)]
-struct Errors {
-    any: bool,
-    not_found: bool,
-    usage: bool,
-    internal: bool,
-}
-
-impl Errors {
-    fn see(&mut self, diagnostic: &Diagnostic) {
-        if diagnostic.severity != Severity::Error {
-            return;
-        }
-        self.any = true;
-        match diagnostic.code.as_str() {
-            codes::NOT_FOUND => self.not_found = true,
-            codes::UNCLAIMED | codes::USAGE_ERROR => self.usage = true,
-            codes::INTERNAL_ERROR => self.internal = true,
-            _ => {}
-        }
-    }
-}
-
 /// The reporters, history, the run store, the stamper for the binary's own
 /// records, and the errors the stream has carried so far.
 struct Stream<'a> {
@@ -1211,6 +894,7 @@ struct Stream<'a> {
     stamper: Stamper,
     errors: Errors,
     started: Instant,
+    printer: Printer,
 }
 
 impl Stream<'_> {
@@ -1221,6 +905,7 @@ impl Stream<'_> {
             &mut self.history,
             &mut self.store,
             &mut self.errors,
+            self.printer,
             &mut record,
         );
     }
@@ -1229,27 +914,24 @@ impl Stream<'_> {
     /// this run). Then every reporter gets every record: one that fails
     /// (stdout, a closed pipe) stops writing, and the others carry on.
     /// Then history folds it, and the run store keeps it.
-    #[expect(
-        clippy::print_stderr,
-        reason = "aye's own messages, outside the event stream"
-    )]
     fn deliver_to(
         reporters: &mut Tee<'_>,
         history: &mut Option<Remember<'_>>,
         store: &mut Keep,
         errors: &mut Errors,
+        printer: Printer,
         record: &mut Record,
     ) {
         if let Some(history) = history.as_ref() {
             history.tell(record);
         }
         if let Event::Diagnostic(d) = &record.event {
-            errors.see(d);
+            errors.see(d, DiagnosticOrigin::of(&record.envelope));
         }
         if let Err(err) = reporters.report(record)
             && err.kind() != io::ErrorKind::BrokenPipe
         {
-            eprintln!("aye: cannot write output: {err}");
+            printer.note(format_args!("cannot write output: {err}"));
         }
         if let Some(history) = history.as_mut() {
             history.history.record(record);
@@ -1257,46 +939,40 @@ impl Stream<'_> {
         store.record(record);
     }
 
-    #[expect(
-        clippy::print_stderr,
-        reason = "aye's own messages, outside the event stream"
-    )]
     fn finish(
         mut self,
         code: ExitCode,
         counts: Counts,
-        stopped: Option<&str>,
+        stopped: Option<StopReason>,
         file_failed: &AtomicBool,
-    ) -> ExitCode {
+    ) -> RunEnd {
         self.emit(Event::RunFinished {
             exit_code: code,
             counts,
             duration: self.started.elapsed(),
-            stopped: stopped.map(str::to_string),
+            stopped,
         });
         if let Err(err) = self.reporters.finish()
             && err.kind() != io::ErrorKind::BrokenPipe
         {
-            eprintln!("aye: cannot write output: {err}");
+            self.printer
+                .note(format_args!("cannot write output: {err}"));
         }
         if let Some(history) = &self.history {
-            history.save();
+            history.save(self.printer);
         }
         // Kept for `aye show`; never fails the run.
         let runs = self.store.dir().to_path_buf();
         if let Err(err) = self.store.finish() {
-            eprintln!(
-                "aye: warning: could not keep this run for `aye show` in {}: {err}",
+            self.printer.warning(format_args!(
+                "could not keep this run for `aye show` in {}: {err}",
                 runs.display()
-            );
+            ));
         }
-        // A report file that couldn't be written at the very end (it was
-        // writable when the run started) fails the run, as it does pytest's;
-        // `run_finished` was already out, so only the process says so.
-        if file_failed.load(Ordering::Relaxed) && matches!(code, ExitCode::Ok | ExitCode::NoTests) {
-            return ExitCode::TestsFailed;
+        RunEnd {
+            code,
+            report_failed: file_failed.load(Ordering::Relaxed),
         }
-        code
     }
 }
 
@@ -1325,7 +1001,7 @@ impl Keep {
         self.writer.dir()
     }
 
-    fn finish(self) -> io::Result<Option<String>> {
+    fn finish(self) -> io::Result<Option<StoredRunId>> {
         self.writer.finish(self.tally.extra().named())
     }
 }
@@ -1370,6 +1046,7 @@ impl<R: Reporter> Reporter for Stdout<R> {
 struct File<R> {
     inner: R,
     failed: Arc<AtomicBool>,
+    printer: Printer,
 }
 
 impl<R: Reporter> Reporter for File<R> {
@@ -1377,13 +1054,9 @@ impl<R: Reporter> Reporter for File<R> {
         self.inner.report(record)
     }
 
-    #[expect(
-        clippy::print_stderr,
-        reason = "aye's own messages, outside the event stream"
-    )]
     fn finish(&mut self) -> io::Result<()> {
         if let Err(err) = self.inner.finish() {
-            eprintln!("aye: error: {err}");
+            self.printer.error(err);
             self.failed.store(true, Ordering::Relaxed);
         }
         Ok(())
@@ -1410,41 +1083,22 @@ impl Remember<'_> {
         }
     }
 
-    #[expect(
-        clippy::print_stderr,
-        reason = "aye's own messages, outside the event stream"
-    )]
-    fn save(&self) {
+    fn save(&self, printer: Printer) {
         if self.history.changed()
             && let Err(err) = self.history.save(&self.dir)
         {
-            eprintln!(
-                "aye: warning: could not save history to {}: {err}",
+            printer.warning(format_args!(
+                "could not save history to {}: {err}",
                 self.dir.display()
-            );
+            ));
         }
     }
 }
 
-/// See [`Session::maxfail`].
-fn maxfail(args: &Args, prepared: &[Prepared]) -> Option<u32> {
-    match passed_maxfail(&args.passthrough).unwrap_or_else(|| args.maxfail()) {
-        Maxfail::After(n) => Some(n),
-        Maxfail::Unlimited => None,
-        Maxfail::Unset => prepared.iter().find_map(|(_, recognizer)| {
-            recognizer
-                .context()
-                .get("maxfail")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|n| u32::try_from(n).ok())
-                .filter(|n| *n > 0)
-        }),
-    }
-}
-
 /// The ids with parameters the command line names (`path::test[x]`),
-/// relative to the root as collection spells them, each once.
-fn requested_ids(positionals: &[Positional]) -> Vec<String> {
+/// relative to the root as collection spells them, each once
+/// ([`aye_protocol::BatchContext::requested_ids`]).
+fn requested_ids(positionals: &[Positional]) -> Vec<TestId> {
     let mut seen = HashSet::new();
     positionals
         .iter()
@@ -1456,38 +1110,8 @@ fn requested_ids(positionals: &[Positional]) -> Vec<String> {
         })
         .map(|p| p.selector.clone())
         .filter(|id| seen.insert(id.clone()))
+        .map(TestId::new)
         .collect()
-}
-
-/// The exit code of a run that ran: an interruption decides first (Ctrl-C,
-/// or a framework that stopped a batch as interrupted: `pytest.exit`, a test
-/// raising `KeyboardInterrupt`), then an internal error, then a usage error
-/// a batch reported (pytest rejecting its arguments or failing to load an
-/// initial conftest, which pytest exits 4 for), then other error
-/// diagnostics, then the counts, and a framework that failed a batch none
-/// of whose tests failed (a conftest's `session.exitstatus`, pytest-cov's
-/// `--cov-fail-under`), as pytest exits 1 then.
-fn run_exit_code(
-    summary: &aye_runner::RunSummary,
-    errors: Errors,
-    counts: &Counts,
-    continue_on_collection_errors: bool,
-) -> ExitCode {
-    if summary.interrupted {
-        ExitCode::Interrupted
-    } else if summary.internal_error || errors.internal {
-        ExitCode::InternalError
-    } else if errors.usage {
-        ExitCode::UsageError
-    } else if errors.any && !continue_on_collection_errors {
-        ExitCode::Interrupted
-    } else if counts.bad() > 0 || errors.any || summary.framework_failed {
-        ExitCode::TestsFailed
-    } else if counts.total() == 0 {
-        ExitCode::NoTests
-    } else {
-        ExitCode::Ok
-    }
 }
 
 /// By adapter, the files collection found its tests in (selected or not),
@@ -1504,307 +1128,23 @@ fn run_exit_code(
 fn session_files(
     cases: &[Case],
     within: Option<(&[PathBuf], &Path)>,
-) -> BTreeMap<String, Vec<String>> {
-    let mut files: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut seen: HashSet<(&str, &str)> = HashSet::new();
+) -> BTreeMap<AdapterName, Vec<ProjectPath>> {
+    let mut files: BTreeMap<AdapterName, Vec<ProjectPath>> = BTreeMap::new();
+    let mut seen: HashSet<(&AdapterName, &str)> = HashSet::new();
     for case in cases {
         let path = case.id.path();
         let reached = within.is_none_or(|(paths, root)| {
-            let file = normalize_absolute(&root.join(path));
+            let file = normalize_absolute(&root.join(path.as_str()));
             paths.iter().any(|start| file.starts_with(start))
         });
-        if reached && seen.insert((case.adapter.as_str(), path)) {
+        if reached && seen.insert((&case.adapter, path.as_str())) {
             files
                 .entry(case.adapter.clone())
                 .or_default()
-                .push(path.to_string());
+                .push(path.to_project_path());
         }
     }
     files
-}
-
-/// Prepare each adapter for the project, knowing the others.
-fn prepare(adapters: &[Box<dyn Adapter>], project: &Project<'_>) -> Result<Vec<Prepared>> {
-    let names: Vec<&str> = adapters.iter().map(|adapter| adapter.name()).collect();
-    let mut prepared: Vec<Prepared> = Vec::new();
-    for adapter in adapters {
-        if let Some(recognizer) = adapter
-            .prepare_among(project, &names)
-            .with_context(|| format!("invalid {} configuration", adapter.name()))?
-        {
-            prepared.push((adapter.name(), recognizer));
-        }
-    }
-    Ok(prepared)
-}
-
-/// aye's options that shape the run, as a rerun repeats them (see
-/// `keys::RERUN_ARGS`): `-c FILE`, as given (a rerun runs where aye ran).
-/// `--python` is left out (a rerun finds the interpreter as aye did), and
-/// so are the options that only shape the output or the selection, which a
-/// rerun of one id doesn't need, `--native`, which does nothing, and
-/// `--junitxml`, whose report it would overwrite.
-fn rerun_args(args: &Args) -> Vec<String> {
-    args.config_file
-        .as_ref()
-        .map(|file| vec!["-c".to_string(), file.to_string_lossy().into_owned()])
-        .unwrap_or_default()
-}
-
-/// An adapter's context with aye's options a rerun repeats, when there are
-/// some (see `keys::RERUN_ARGS`).
-fn with_rerun_args(mut context: serde_json::Value, rerun_args: &[String]) -> serde_json::Value {
-    if !rerun_args.is_empty()
-        && let Some(object) = context.as_object_mut()
-    {
-        object.insert(keys::RERUN_ARGS.to_string(), rerun_args.into());
-    }
-    context
-}
-
-/// An adapter's context with the paths the user's run starts from, when
-/// some positional argument isn't a path (see `keys::SELECTED_PATHS`).
-fn with_selected_paths(mut context: serde_json::Value, paths: &[PathBuf]) -> serde_json::Value {
-    if !paths.is_empty()
-        && let Some(object) = context.as_object_mut()
-    {
-        let paths: Vec<String> = paths
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect();
-        object.insert(keys::SELECTED_PATHS.to_string(), paths.into());
-    }
-    context
-}
-
-/// An adapter's context with the ids the command line names, when it names
-/// some (see `keys::REQUESTED_IDS`).
-fn with_requested(mut context: serde_json::Value, requested: &[String]) -> serde_json::Value {
-    if !requested.is_empty()
-        && let Some(object) = context.as_object_mut()
-    {
-        object.insert(keys::REQUESTED_IDS.to_string(), requested.into());
-    }
-    context
-}
-
-/// See [`Session::junit`].
-fn junit_path(cwd: &Path, given: Option<&Path>, prepared: &[Prepared]) -> Option<PathBuf> {
-    let path = match given {
-        Some(given) => aye_fs::expand_path(&given.to_string_lossy(), |name| std::env::var_os(name)),
-        None => context_strings(prepared, "junitxml")
-            .into_iter()
-            .next()
-            .map(|(_, path)| PathBuf::from(path))?,
-    };
-    (!path.as_os_str().is_empty()).then(|| cwd.join(path))
-}
-
-/// What goes before the JUnit report's classnames: the framework's own
-/// (pytest's `--junitprefix`), wherever the report's path came from.
-fn junit_prefix(prepared: &[Prepared]) -> String {
-    context_strings(prepared, "junit_prefix")
-        .into_iter()
-        .next()
-        .map(|(_, prefix)| prefix)
-        .unwrap_or_default()
-}
-
-/// How the JUnit report is written: the framework's own settings, from the
-/// first adapter's context that gives each (pytest's `junit_suite_name`,
-/// `junit_logging`, `junit_log_passing_tests`, `junit_duration_report` and
-/// `junit_family`, in pytest's spellings), else aye's own.
-fn junit_options(prepared: &[Prepared]) -> JunitOptions {
-    let mut options = JunitOptions::default();
-    let first = |key: &str| {
-        context_strings(prepared, key)
-            .into_iter()
-            .next()
-            .map(|(_, value)| value)
-    };
-    if let Some(name) = first("junit_suite_name") {
-        options.suite_name = name;
-    }
-    if let Some(logging) = first("junit_logging") {
-        options.logging = JunitLogging::from(logging.as_str());
-    }
-    if let Some(duration) = first("junit_duration_report") {
-        options.duration = JunitDuration::from(duration.as_str());
-    }
-    if let Some(family) = first("junit_family") {
-        options.family = JunitFamily::from(family.as_str());
-    }
-    let log_passing_tests = prepared.iter().find_map(|(_, recognizer)| {
-        match recognizer.context().get("junit_log_passing_tests")? {
-            serde_json::Value::Bool(value) => Some(*value),
-            // pytest's `bool` ini values, as `_strtobool` reads them.
-            serde_json::Value::String(value) => match value.to_ascii_lowercase().as_str() {
-                "y" | "yes" | "t" | "true" | "on" | "1" => Some(true),
-                "n" | "no" | "f" | "false" | "off" | "0" => Some(false),
-                _ => None,
-            },
-            _ => None,
-        }
-    });
-    if let Some(value) = log_passing_tests {
-        options.log_passing_tests = value;
-    }
-    options
-}
-
-/// What static selection keeps: the positional arguments' `selectors`, the
-/// `-k` and `-m` expressions [`pick`] picks, and each adapter's
-/// `--deselect` prefixes (`keys::DESELECT`). A malformed expression on the
-/// command line is a usage error, even where the arguments after `--`
-/// override it; the framework's own, should aye fail to parse it, drops no
-/// case.
-fn selection<'s>(
-    args: &Args,
-    selectors: impl IntoIterator<Item = &'s str>,
-    prepared: &[Prepared],
-) -> Result<Selection, aye_select::SelectError> {
-    if let Some(expr) = &args.keyword {
-        Selection::default().with_keyword(expr)?;
-    }
-    if let Some(expr) = &args.tags {
-        Selection::default().with_tags(expr)?;
-    }
-    let mut selection = Selection::default().with_ids(selectors);
-    let given = args.keyword.as_deref();
-    match pick(given, passed(&args.passthrough, 'k')) {
-        Pick::Given(expr) => {
-            selection = selection.clone().with_keyword(&expr).unwrap_or(selection);
-        }
-        Pick::Unknown => {
-            for (name, expr) in unread(given, prepared, "keyword") {
-                selection = selection
-                    .clone()
-                    .with_own_keyword(name, &expr)
-                    .unwrap_or(selection);
-            }
-        }
-        Pick::Own => {
-            for (name, expr) in context_strings(prepared, "keyword") {
-                selection = selection
-                    .clone()
-                    .with_own_keyword(name, &expr)
-                    .unwrap_or(selection);
-            }
-        }
-    }
-    let given = args.tags.as_deref();
-    match pick(given, passed(&args.passthrough, 'm')) {
-        Pick::Given(expr) => {
-            selection = selection.clone().with_tags(&expr).unwrap_or(selection);
-        }
-        Pick::Unknown => {
-            for (name, expr) in unread(given, prepared, "tags") {
-                selection = selection
-                    .clone()
-                    .with_own_tags(name, &expr)
-                    .unwrap_or(selection);
-            }
-        }
-        Pick::Own => {
-            for (name, expr) in context_strings(prepared, "tags") {
-                selection = selection
-                    .clone()
-                    .with_own_tags(name, &expr)
-                    .unwrap_or(selection);
-            }
-        }
-    }
-    for (name, recognizer) in prepared {
-        if let Some(prefixes) = recognizer
-            .context()
-            .get(keys::DESELECT)
-            .and_then(serde_json::Value::as_array)
-        {
-            selection = selection.with_deselect(
-                name,
-                prefixes
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::to_string),
-            );
-        }
-    }
-    Ok(selection)
-}
-
-/// The adapters' contexts' strings under `key`, by adapter, for those that
-/// give one.
-fn context_strings(prepared: &[Prepared], key: &str) -> Vec<(&'static str, String)> {
-    prepared
-        .iter()
-        .filter_map(|(name, recognizer)| {
-            recognizer
-                .context()
-                .get(key)
-                .and_then(serde_json::Value::as_str)
-                .map(|value| (*name, value.to_string()))
-        })
-        .collect()
-}
-
-/// The `-k` or `-m` expressions (the context's `key`) static selection
-/// applies, by adapter, when the arguments after `--` may hold one aye can't
-/// read ([`Pick::Unknown`]): the command line's (`given`), else the
-/// adapter's own. No adapter applies an expression at runtime (aye's
-/// pytest front-end lists every test, and nothing re-reads those
-/// arguments' `-k` or `-m` in a batch), so static selection is the last
-/// word on every case.
-fn unread(given: Option<&str>, prepared: &[Prepared], key: &str) -> Vec<(&'static str, String)> {
-    let own = context_strings(prepared, key);
-    prepared
-        .iter()
-        .map(|(name, _)| *name)
-        .filter_map(|name| {
-            let expr = given.map(str::to_string).or_else(|| {
-                own.iter()
-                    .find(|(adapter, _)| *adapter == name)
-                    .map(|(_, expr)| expr.clone())
-            })?;
-            Some((name, expr))
-        })
-        .collect()
-}
-
-/// Where a `-k` or `-m` expression for static selection comes from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Pick {
-    /// One for every case: the arguments after `--` give it (the framework
-    /// sees them last), else the command line (an empty one turns
-    /// selection off, the framework's own included, as in pytest).
-    Given(String),
-    /// The arguments after `--` may hold one aye can't read: every
-    /// adapter's cases get the command line's, else their own ([`unread`]).
-    Unknown,
-    /// Neither gives one: each adapter's own (pytest's from `addopts` or
-    /// `PYTEST_ADDOPTS`, in its context) for its own cases.
-    Own,
-}
-
-/// See [`Pick`].
-fn pick(given: Option<&str>, framework: Passed) -> Pick {
-    match framework {
-        Passed::Set(expr) => Pick::Given(expr),
-        Passed::Unknown => Pick::Unknown,
-        Passed::Unset => given.map_or(Pick::Own, |expr| Pick::Given(expr.to_string())),
-    }
-}
-
-/// The output format, and where it came from: `--output`, else
-/// `[tool.aye] output`, else text. aye-config accepts only the values in
-/// `aye_config::OUTPUTS`, each of which parses.
-fn output(args: &Args, config: &AyeConfig) -> (Output, &'static str) {
-    if let Some(output) = args.output {
-        return (output, "--output");
-    }
-    match config.settings.output.as_deref().map(str::parse) {
-        Some(Ok(output)) => (output, "[tool.aye] output"),
-        _ => (Output::Text, "default"),
-    }
 }
 
 /// Whether a report can be written to `path`: its directory is created, and
@@ -1820,68 +1160,6 @@ fn writable(path: &Path) -> io::Result<()> {
         .create(true)
         .open(path)
         .map(drop)
-}
-
-/// The path part of a positional argument: everything before `::`.
-pub(crate) fn path_part(arg: &str) -> &str {
-    arg.split_once("::").map_or(arg, |(path, _)| path)
-}
-
-/// A positional argument names a path when it exists, contains a separator,
-/// or ends in `.py`; otherwise it is a dotted name or a key.
-pub(crate) fn is_path_like(cwd: &Path, arg: &str) -> bool {
-    arg.contains('/')
-        || arg.contains(std::path::MAIN_SEPARATOR)
-        || Path::new(arg)
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("py"))
-        || cwd.join(arg).exists()
-}
-
-/// Read a positional argument: a path is taken from the current directory,
-/// as pytest does, or from the project root when only the root has it, so
-/// that the ids aye prints (which are relative to the root) work from any
-/// directory. The selector is relative to the root, keeping any `::` part;
-/// dotted names and keys pass through.
-pub(crate) fn resolve(cwd: &Path, root: &Path, arg: &str) -> Positional {
-    let (path, rest) = arg
-        .split_once("::")
-        .map_or((arg, None), |(p, r)| (p, Some(r)));
-    let from_root = || {
-        let at_root = normalize_absolute(&root.join(path));
-        (Path::new(path).is_relative() && at_root.starts_with(root) && at_root.exists())
-            .then_some(at_root)
-    };
-    let absolute = if is_path_like(cwd, path) {
-        let from_cwd = normalize_absolute(&cwd.join(path));
-        if from_cwd.exists() {
-            from_cwd
-        } else {
-            from_root().unwrap_or(from_cwd)
-        }
-    } else if let Some(at_root) = from_root() {
-        // A bare word naming a top-level file or directory.
-        at_root
-    } else {
-        return Positional {
-            selector: arg.to_string(),
-            path: None,
-            id: rest.is_some(),
-        };
-    };
-    let mut selector = root_relative(&absolute, root);
-    if selector.is_empty() {
-        selector.push('.');
-    }
-    if let Some(rest) = rest {
-        selector.push_str("::");
-        selector.push_str(rest);
-    }
-    Positional {
-        selector,
-        path: Some(absolute),
-        id: rest.is_some(),
-    }
 }
 
 /// Where the project root lies in the repository, for GitHub annotations:
@@ -1907,21 +1185,6 @@ fn repository_prefix(root: &Path, workspace: Option<&Path>) -> String {
                 .and_then(inside)
         })
         .unwrap_or_default()
-}
-
-/// Ctrl-C (or SIGTERM, or SIGHUP) stops the run cleanly; a second one
-/// kills every worker, with the processes its tests started, and exits at
-/// once. A signal within [`REPEAT_WINDOW`] of the first is that one
-/// delivered again, not a second request (see [`Presses`]).
-/// `dir` when collecting from it means the user's whole home directory or a
-/// whole filesystem, in words; `None` for any other directory.
-fn everything(dir: &Path) -> Option<String> {
-    let dir = fs::canonicalize(dir).ok()?;
-    if dir.parent().is_none() {
-        return Some(format!("the whole filesystem ({})", dir.display()));
-    }
-    let home = std::env::home_dir().and_then(|home| fs::canonicalize(home).ok())?;
-    (dir == home).then(|| format!("your whole home directory ({})", dir.display()))
 }
 
 /// pytest's `not found:`, with a word for those who expected a command.
@@ -1978,10 +1241,14 @@ impl Pace {
 /// import in a worker) may not be watching.
 const COLLECTING_GRACE: Duration = Duration::from_millis(1500);
 
-/// Ctrl-C (or SIGTERM, SIGHUP): before the run, stop collection (`stop` the
-/// collector watches), and exit anyway if that takes too long; during the
-/// run (`running`), stop it cleanly.
-#[expect(clippy::print_stderr, reason = "says why aye stopped")]
+/// Ctrl-C (or SIGTERM, or SIGHUP) stops the run cleanly; a second one
+/// kills every worker, with the processes its tests started, and exits at
+/// once. A signal within [`REPEAT_WINDOW`] of the first is that one
+/// delivered again, not a second request (see [`Presses`]).
+///
+/// Before the run, a stop signal stops collection (`stop` the collector
+/// watches), and aye exits anyway if that takes too long; during the run
+/// (`running`), it stops the run cleanly.
 #[expect(
     clippy::exit,
     reason = "a second signal, or a collection that doesn't stop in time, ends aye at once"
@@ -1990,6 +1257,7 @@ fn install_interrupt(
     stop: aye_runner::StopHandle,
     collecting: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
+    printer: Printer,
 ) {
     let mut presses = Presses::default();
     let _ = ctrlc::set_handler(move || match presses.press(Instant::now()) {
@@ -2003,7 +1271,7 @@ fn install_interrupt(
                     std::thread::sleep(COLLECTING_GRACE);
                     if !running.load(Ordering::SeqCst) {
                         stop.kill();
-                        eprintln!("\naye: interrupted");
+                        printer.interrupted();
                         std::process::exit(i32::from(u8::from(ExitCode::Interrupted)));
                     }
                 });

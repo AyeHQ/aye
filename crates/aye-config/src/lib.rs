@@ -1,13 +1,25 @@
 //! Configuration as a mechanism. Finds the project root, reads
 //! `[tool.aye]`, and provides generic loaders (toml tables, ini sections, the
 //! upward search) that engines use to read their own framework's settings. Every
-//! resolved value remembers its origin for `aye config`.
+//! resolved value remembers where it came from ([`ValueSource`]) for `aye
+//! config`, which shows a source in a table's row (`pyproject.toml
+//! [tool.aye]`) or beside a setting's name on a header line (`[tool.aye]
+//! output`).
 //!
-//! Owns: loading and origins. Does not own: the meaning of any framework's
-//! options; `python_files` means something to the pytest engine, not here.
+//! `[tool.aye]` is read as written, every key optional and each value as
+//! TOML gives it ([`AyeOptions`]), then resolved ([`AyeSettings::resolve`])
+//! into values of types that hold only what each setting accepts
+//! ([`WorkerCount`], [`OutputFormat`], [`Timeout`], [`KeepRuns`],
+//! [`AdapterList`]), each [`Sourced`] from the table. The command line
+//! shares those types where it takes the same value, each surface with its
+//! own words.
+//!
+//! Owns: loading and value sources, and the values `[tool.aye]` holds. Does
+//! not own: the meaning of any framework's options; `python_files` means
+//! something to the pytest engine, not here.
 //!
 //! Depends on: aye-fs, for the lexical path algebra the root is found
-//! with.
+//! with, and aye-events, for the adapters' names.
 
 //!
 //! Decided (implementation, October 2026):
@@ -16,35 +28,43 @@
 //!   `pyproject.toml`; failing that, one holding `.git`; failing that, the
 //!   starting directory. Test ids are relative to it. Frameworks keep their
 //!   own notion of a root (pytest's rootdir) and translate. Paths are made
-//!   absolute lexically, as `aye_fs` decides. Where two spellings of one
-//!   directory share more than the filesystem's root (both under Linux's
-//!   `/tmp`), their common ancestor stays lexical, as pytest's
-//!   `get_common_ancestor` keeps it, but when no project holds it the root
-//!   is searched for from the resolved one ([`project_root`]), so one
-//!   command finds one root on every platform.
+//!   absolute lexically, as `aye_fs` decides. Where the paths spell one
+//!   directory two ways that share more than the filesystem's root (both
+//!   under Linux's `/tmp`), their common ancestor stays lexical, as pytest's
+//!   `get_common_ancestor` keeps it, but when no project holds it the root is
+//!   searched for from the resolved one ([`project_root`]), so one command
+//!   finds one root on every platform.
 //! - **`[tool.aye]` rejects unknown keys and values**, so a typo is an error
 //!   rather than a setting that silently does nothing: `output` must be
-//!   `text` or `json`, in any case as on the command line (it is kept in
-//!   lower case; `human` and `agent`, the formats' names until October 2026,
-//!   are errors that say what to use instead), and `workers` a number or
-//!   `"auto"`. `workers = 0` is one worker, as `-n 0` is on the command line
-//!   and pytest-xdist's `-n 0` runs the tests in one process. `python` must
-//!   not be blank, `timeout` must be a finite number of seconds, 0 or more
-//!   (0 is none, as pytest-timeout reads it), and `adapters` must list at
-//!   least one name, none twice; which names exist is the binary's to check,
-//!   and each adapter checks its own table (`[tool.aye.unittest]`,
+//!   `text` or `json`, in any case as on the command line (`human` and
+//!   `agent`, the formats' names until October 2026, are errors that say
+//!   what to use instead), and `workers` a number or `"auto"`. `workers = 0`
+//!   is one worker, as `-n 0` is on the command line and pytest-xdist's `-n
+//!   0` runs the tests in one process. `python` must not be blank, `timeout`
+//!   must be a finite number of seconds, 0 or more (0 is none, as
+//!   pytest-timeout reads it), and `adapters` must list at least one name,
+//!   none twice; which names exist is the binary's to check, and each
+//!   adapter checks its own table (`[tool.aye.unittest]`,
 //!   `[tool.aye.doctest]`), even when it doesn't run. `keep-runs` (how many
 //!   runs' logs `.aye/runs` keeps for `aye show`, 10 unless set) must be a
-//!   whole number, 0 or more: 0 keeps none.
+//!   whole number, 0 or more: 0 keeps none. With several bad values the
+//!   error names one: an unknown key or a value of the wrong type first,
+//!   then the first bad one in that list.
 
 use std::collections::BTreeMap;
-use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
-
 pub mod ini;
+mod options;
+mod settings;
+mod source;
+mod values;
+
+pub use options::AyeOptions;
+pub use settings::AyeSettings;
+pub use source::{Sourced, ValueSource};
+pub use values::{AdapterList, InvalidAdapterList, KeepRuns, OutputFormat, Timeout, WorkerCount};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -57,67 +77,6 @@ pub enum ConfigError {
     Parse { path: PathBuf, message: String },
     #[error("invalid [tool.aye] in {path}: {message}")]
     Aye { path: PathBuf, message: String },
-}
-
-/// Where a resolved value came from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Origin {
-    /// Built-in default.
-    Default,
-    /// A command-line flag, e.g. `--workers`.
-    Flag(String),
-    /// An environment variable.
-    Env(String),
-    /// A file, and where in it (`[tool.aye]`, `[pytest]`).
-    File { path: PathBuf, location: String },
-}
-
-impl Origin {
-    pub fn file(path: impl Into<PathBuf>, location: impl Into<String>) -> Self {
-        Self::File {
-            path: path.into(),
-            location: location.into(),
-        }
-    }
-
-    /// The origin with its file shown relative to `root` when inside it.
-    pub fn display_relative(&self, root: &Path) -> String {
-        match self {
-            Self::File { path, location } => {
-                let shown = path.strip_prefix(root).unwrap_or(path);
-                format!("{} {location}", shown.display())
-            }
-            other => other.to_string(),
-        }
-    }
-}
-
-impl fmt::Display for Origin {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Default => f.write_str("default"),
-            Self::Flag(flag) => write!(f, "{flag}"),
-            Self::Env(var) => write!(f, "${var}"),
-            Self::File { path, location } => write!(f, "{} {location}", path.display()),
-        }
-    }
-}
-
-/// A value and its origin.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Sourced<T> {
-    pub value: T,
-    pub origin: Origin,
-}
-
-impl<T> Sourced<T> {
-    pub const fn new(value: T, origin: Origin) -> Self {
-        Self { value, origin }
-    }
-
-    pub fn default_value(value: T) -> Self {
-        Self::new(value, Origin::Default)
-    }
 }
 
 // ---------------------------------------------------------------- searching
@@ -146,11 +105,11 @@ pub fn find_root(start: &Path) -> PathBuf {
 }
 
 /// aye's project root for `paths` given in `cwd`: [`find_root`] from their
-/// common ancestor. When nothing above that ancestor marks a project, but
-/// the paths, resolved, share a directory inside it (one directory spelled
-/// two ways under a shared `/tmp`, as on Linux), the search starts from
-/// that directory instead, so the root doesn't depend on how much two
-/// spellings happen to share.
+/// [`aye_fs::common_ancestor`]. When nothing above that ancestor marks a
+/// project, but the paths, resolved, share a directory inside it (one
+/// directory spelled two ways under a shared `/tmp`, as on Linux), the
+/// search starts from that directory instead, so the root doesn't depend on
+/// how much two spellings happen to share.
 pub fn project_root(cwd: &Path, paths: &[PathBuf]) -> PathBuf {
     let ancestor = aye_fs::normpath(&aye_fs::common_ancestor(cwd, paths));
     if let Some(root) = marked(&ancestor) {
@@ -250,255 +209,6 @@ pub fn toml_strings(value: &toml::Value, split: fn(&str) -> Vec<String>) -> Opti
     }
 }
 
-// ---------------------------------------------------------------- [tool.aye]
-
-/// `[tool.aye]`.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
-pub struct AyeSettings {
-    /// Worker processes: a number, or `"auto"` for one per CPU.
-    pub workers: Option<Workers>,
-    /// The interpreter that runs the tests.
-    pub python: Option<String>,
-    /// Default output format: `text` or `json` (see [`OUTPUTS`]), in lower
-    /// case whatever the file's case; anything else fails
-    /// [`AyeConfig::load`]. How much either shows is the command line's
-    /// (`-v`, `-q`).
-    pub output: Option<String>,
-    /// Per-test timeout in seconds, finite and not negative; 0 is none
-    /// (see [`AyeSettings::timeout`]).
-    pub timeout: Option<f64>,
-    /// Which adapters run, in priority order (`["pytest", "doctest"]`): at
-    /// least one, none twice. Which names exist is the binary's business
-    /// (its registry). Unset: chosen from the project (see the registry).
-    pub adapters: Option<Vec<String>>,
-    /// How many runs' logs `.aye/runs` keeps, for `aye show`: a whole
-    /// number, 0 or more; 0 keeps none (see [`AyeSettings::keep_runs`]).
-    pub keep_runs: Option<i64>,
-    /// `[tool.aye.unittest]`: the unittest adapter's own settings, read by
-    /// that adapter.
-    pub unittest: Option<toml::Table>,
-    /// `[tool.aye.doctest]`: the doctest adapter's own settings, read by
-    /// that adapter.
-    pub doctest: Option<toml::Table>,
-}
-
-impl AyeSettings {
-    /// Check the values serde's types let through, and put `output` in
-    /// lower case.
-    fn check(&mut self) -> Result<(), String> {
-        if let Some(output) = &mut self.output {
-            let Some(known) = OUTPUTS.iter().find(|o| o.eq_ignore_ascii_case(output)) else {
-                let instead = RENAMED_OUTPUTS
-                    .iter()
-                    .find(|(old, _)| old.eq_ignore_ascii_case(output))
-                    .map_or_else(String::new, |(old, new)| format!("; {old:?} is now {new}"));
-                return Err(format!(
-                    "output = {output:?}: expected text or json{instead}"
-                ));
-            };
-            *output = (*known).to_string();
-        }
-        if let Some(python) = &self.python
-            && python.trim().is_empty()
-        {
-            return Err(format!(
-                "python = {python:?}: expected the path or name of an interpreter"
-            ));
-        }
-        if let Some(timeout) = self.timeout
-            && !(timeout.is_finite() && timeout >= 0.0)
-        {
-            return Err(format!(
-                "timeout = {timeout}: expected a number of seconds, 0 or more"
-            ));
-        }
-        if let Some(keep) = self.keep_runs
-            && keep < 0
-        {
-            return Err(format!(
-                "keep-runs = {keep}: expected a number of runs, 0 or more"
-            ));
-        }
-        if let Some(adapters) = &self.adapters {
-            if adapters.is_empty() {
-                return Err("adapters = []: list at least one adapter".to_string());
-            }
-            for (at, name) in adapters.iter().enumerate() {
-                if name.trim().is_empty() {
-                    return Err(format!("adapters: {name:?} is not an adapter's name"));
-                }
-                if adapters[..at].contains(name) {
-                    return Err(format!("adapters: {name:?} is listed twice"));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// The per-test timeout in seconds, if any: `timeout = 0` is none, as
-    /// pytest-timeout reads it.
-    pub fn timeout(&self) -> Option<f64> {
-        self.timeout.filter(|t| *t > 0.0)
-    }
-
-    /// How many runs' logs to keep: `keep-runs`, else [`KEEP_RUNS`]. 0
-    /// keeps none.
-    pub fn keep_runs(&self) -> usize {
-        self.keep_runs
-            .map_or(KEEP_RUNS, |keep| usize::try_from(keep).unwrap_or(0))
-    }
-
-    /// An adapter's own table, `[tool.aye.<name>]`, when it is set.
-    pub fn adapter_table(&self, name: &str) -> Option<&toml::Table> {
-        match name {
-            "unittest" => self.unittest.as_ref(),
-            "doctest" => self.doctest.as_ref(),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Workers {
-    /// A number of workers; 0 is one, as `-n 0` is.
-    Count(u32),
-    Keyword(WorkersKeyword),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkersKeyword {
-    Auto,
-}
-
-/// What `workers` accepts, for its error message.
-const WORKERS_EXPECTED: &str = "a number of workers or \"auto\"";
-
-impl<'de> Deserialize<'de> for Workers {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct Visitor;
-
-        impl serde::de::Visitor<'_> for Visitor {
-            type Value = Workers;
-
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(WORKERS_EXPECTED)
-            }
-
-            fn visit_u64<E: serde::de::Error>(self, n: u64) -> Result<Workers, E> {
-                u32::try_from(n)
-                    .map(Workers::Count)
-                    .map_err(|_| E::custom(format!("workers = {n}: too many")))
-            }
-
-            fn visit_i64<E: serde::de::Error>(self, n: i64) -> Result<Workers, E> {
-                u64::try_from(n).map_or_else(
-                    |_| {
-                        Err(E::custom(format!(
-                            "workers = {n}: expected {WORKERS_EXPECTED}"
-                        )))
-                    },
-                    |n| self.visit_u64(n),
-                )
-            }
-
-            fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<Workers, E> {
-                if s == "auto" {
-                    Ok(Workers::Keyword(WorkersKeyword::Auto))
-                } else {
-                    Err(E::custom(format!(
-                        "workers = {s:?}: expected {WORKERS_EXPECTED}"
-                    )))
-                }
-            }
-        }
-
-        deserializer.deserialize_any(Visitor)
-    }
-}
-
-/// How many runs' logs `.aye/runs` keeps when `keep-runs` isn't set.
-pub const KEEP_RUNS: usize = 10;
-
-/// The values `output` accepts, as the command line's `--output` does
-/// (case aside).
-pub const OUTPUTS: [&str; 2] = ["text", "json"];
-
-/// The names the output formats had until October 2026 (never published),
-/// with what replaces each, for the error that rejects them.
-const RENAMED_OUTPUTS: [(&str, &str); 2] = [
-    ("human", "\"text\""),
-    (
-        "agent",
-        "\"json\" at -v (output = \"json\", and run aye -v)",
-    ),
-];
-
-/// `[tool.aye]` with its origin.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AyeConfig {
-    pub settings: AyeSettings,
-    /// Where the table was read from; `Default` when there is none.
-    pub origin: Origin,
-}
-
-impl AyeConfig {
-    /// Read `[tool.aye]` from `root/pyproject.toml`.
-    pub fn load(root: &Path) -> Result<Self, ConfigError> {
-        let path = root.join("pyproject.toml");
-        if !path.is_file() {
-            return Ok(Self {
-                settings: AyeSettings::default(),
-                origin: Origin::Default,
-            });
-        }
-        let Some(table) = toml_table(&path, &["tool", "aye"])? else {
-            return Ok(Self {
-                settings: AyeSettings::default(),
-                origin: Origin::Default,
-            });
-        };
-        let mut settings: AyeSettings =
-            toml::Value::Table(table)
-                .try_into()
-                .map_err(|e: toml::de::Error| ConfigError::Aye {
-                    path: path.clone(),
-                    message: e.message().to_string(),
-                })?;
-        if let Err(message) = settings.check() {
-            return Err(ConfigError::Aye { path, message });
-        }
-        Ok(Self {
-            settings,
-            origin: Origin::file(path, "[tool.aye]"),
-        })
-    }
-
-    /// Every setting that is set, as `(name, value, origin)`, for `aye config`.
-    pub fn entries(&self) -> Vec<(String, String, Origin)> {
-        let s = &self.settings;
-        let mut out = Vec::new();
-        let mut push = |name: &str, value: Option<String>| {
-            if let Some(value) = value {
-                out.push((name.to_string(), value, self.origin.clone()));
-            }
-        };
-        push(
-            "workers",
-            s.workers.map(|w| match w {
-                Workers::Count(n) => n.to_string(),
-                Workers::Keyword(WorkersKeyword::Auto) => "auto".to_string(),
-            }),
-        );
-        push("python", s.python.clone());
-        push("output", s.output.clone());
-        push("timeout", s.timeout.map(|t| t.to_string()));
-        push("adapters", s.adapters.as_ref().map(|a| a.join(", ")));
-        push("keep-runs", s.keep_runs.map(|keep| keep.to_string()));
-        out
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,13 +272,12 @@ mod tests {
         let alias = alias_dir.path().join("alias");
         std::os::unix::fs::symlink(real.join("proj"), &alias).unwrap();
         let cwd = real.join("proj");
+        // Whether the two spellings share only the filesystem's root (macOS)
+        // or more (/tmp on Linux), the root is the project's.
         let paths = [
             alias.join("tests/test_a.py"),
             PathBuf::from("tests/test_b.py"),
         ];
-        // Whether the common ancestor is the resolved one (macOS's
-        // /private/var against /var) or a lexical one above both (Linux's
-        // /tmp), the root is the project's.
         assert_eq!(project_root(&cwd, &paths), real.join("proj"));
         // A symlinked directory inside the project keeps its own name.
         std::os::unix::fs::symlink(real.join("proj/tests"), real.join("proj/linked")).unwrap();
@@ -615,204 +324,6 @@ mod tests {
         assert_eq!(
             find_upward(&root.join("a/b"), &["pytest.ini", "tox.ini", "setup.cfg"]),
             Some(root.join("a/tox.ini"))
-        );
-    }
-
-    #[test]
-    fn tool_aye_with_origin_and_strict_keys() {
-        let dir = tempfile::tempdir().unwrap();
-        write(
-            dir.path(),
-            "pyproject.toml",
-            "[tool.aye]\nworkers = \"auto\"\ntimeout = 5.0\n",
-        );
-        let config = AyeConfig::load(dir.path()).unwrap();
-        assert_eq!(
-            config.settings.workers,
-            Some(Workers::Keyword(WorkersKeyword::Auto))
-        );
-        let entries = config.entries();
-        assert_eq!(entries[0].0, "workers");
-        assert_eq!(
-            entries[0].2.display_relative(dir.path()),
-            "pyproject.toml [tool.aye]"
-        );
-
-        write(dir.path(), "pyproject.toml", "[tool.aye]\nwrokers = 4\n");
-        let err = AyeConfig::load(dir.path()).unwrap_err();
-        assert!(err.to_string().contains("wrokers"), "{err}");
-    }
-
-    /// Finding 82: a bad `output` was ignored, a bad `workers` named serde's
-    /// untagged enum.
-    #[test]
-    fn tool_aye_values_are_checked() {
-        let dir = tempfile::tempdir().unwrap();
-        let load = |body: &str| {
-            write(
-                dir.path(),
-                "pyproject.toml",
-                &format!("[tool.aye]\n{body}\n"),
-            );
-            AyeConfig::load(dir.path())
-        };
-        for output in ["text", "json"] {
-            let config = load(&format!("output = {output:?}")).unwrap();
-            assert_eq!(config.settings.output.as_deref(), Some(output));
-        }
-        // Any case, as `--output` takes it, kept in lower case.
-        for (output, kept) in [("JSON", "json"), ("Text", "text"), ("tEXT", "text")] {
-            let config = load(&format!("output = {output:?}")).unwrap();
-            assert_eq!(config.settings.output.as_deref(), Some(kept));
-            let entries = config.entries();
-            assert_eq!(
-                entries[0],
-                (
-                    "output".to_string(),
-                    kept.to_string(),
-                    config.origin.clone()
-                )
-            );
-        }
-        let err = load("output = \"xml\"").unwrap_err().to_string();
-        assert!(
-            err.ends_with("output = \"xml\": expected text or json"),
-            "{err}"
-        );
-        assert!(err.contains("pyproject.toml"), "{err}");
-        // The formats' old names say what to use instead, in any case.
-        for (output, says) in [
-            (
-                "human",
-                "output = \"human\": expected text or json; \"human\" is now \"text\"",
-            ),
-            (
-                "Human",
-                "output = \"Human\": expected text or json; \"human\" is now \"text\"",
-            ),
-            (
-                "agent",
-                "output = \"agent\": expected text or json; \"agent\" is now \"json\" at -v \
-                 (output = \"json\", and run aye -v)",
-            ),
-            (
-                "AGENT",
-                "output = \"AGENT\": expected text or json; \"agent\" is now \"json\" at -v \
-                 (output = \"json\", and run aye -v)",
-            ),
-        ] {
-            let err = load(&format!("output = {output:?}"))
-                .unwrap_err()
-                .to_string();
-            assert!(err.ends_with(says), "{err}");
-        }
-
-        assert_eq!(
-            load("workers = 4").unwrap().settings.workers,
-            Some(Workers::Count(4))
-        );
-        // 0 loads as given; it means one worker, as `-n 0` does.
-        assert_eq!(
-            load("workers = 0").unwrap().settings.workers,
-            Some(Workers::Count(0))
-        );
-        assert_eq!(
-            load("workers = \"auto\"").unwrap().settings.workers,
-            Some(Workers::Keyword(WorkersKeyword::Auto))
-        );
-        for (bad, shown) in [
-            ("\"lots\"", "workers = \"lots\""),
-            ("-1", "workers = -1"),
-            ("2.5", "invalid type"),
-            ("99999999999", "workers = 99999999999: too many"),
-        ] {
-            let err = load(&format!("workers = {bad}")).unwrap_err().to_string();
-            assert!(err.contains(shown), "{bad}: {err}");
-            assert!(!err.contains("untagged"), "{bad}: {err}");
-            if bad != "99999999999" {
-                assert!(
-                    err.contains("a number of workers or \"auto\""),
-                    "{bad}: {err}"
-                );
-            }
-        }
-    }
-
-    /// Finding C34: `timeout`, `python` and `adapters` took any value.
-    #[test]
-    fn every_tool_aye_value_is_checked() {
-        let dir = tempfile::tempdir().unwrap();
-        let load = |body: &str| {
-            write(
-                dir.path(),
-                "pyproject.toml",
-                &format!("[tool.aye]\n{body}\n"),
-            );
-            AyeConfig::load(dir.path())
-        };
-        for (bad, shown) in [
-            (
-                "timeout = -5",
-                "timeout = -5: expected a number of seconds, 0 or more",
-            ),
-            ("timeout = nan", "timeout = NaN"),
-            ("timeout = inf", "timeout = inf"),
-            ("timeout = \"5\"", "invalid type"),
-            ("python = \"\"", "python = \"\": expected the path or name"),
-            ("python = \"  \"", "python = \"  \""),
-            ("python = 3", "invalid type"),
-            ("adapters = []", "adapters = []: list at least one adapter"),
-            (
-                "adapters = [\"pytest\", \"pytest\"]",
-                "\"pytest\" is listed twice",
-            ),
-            ("adapters = [\"\"]", "\"\" is not an adapter's name"),
-            ("adapters = \"pytest\"", "invalid type"),
-            ("unittest = 1", "invalid type"),
-            ("doctest = \"x\"", "invalid type"),
-            (
-                "keep-runs = -1",
-                "keep-runs = -1: expected a number of runs, 0 or more",
-            ),
-            ("keep-runs = 2.5", "invalid type"),
-            ("keep-runs = \"10\"", "invalid type"),
-            ("keep_runs = 3", "keep_runs"),
-        ] {
-            let err = load(bad).unwrap_err().to_string();
-            assert!(err.contains(shown), "{bad}: {err}");
-            assert!(err.starts_with("invalid [tool.aye] in "), "{bad}: {err}");
-        }
-        let config = load("timeout = 0\npython = \"python3\"\nadapters = [\"unittest\"]").unwrap();
-        assert_eq!(config.settings.timeout, Some(0.0));
-        assert_eq!(config.settings.timeout(), None);
-        assert_eq!(load("timeout = 5").unwrap().settings.timeout(), Some(5.0));
-        assert_eq!(load("timeout = 2.5").unwrap().settings.timeout(), Some(2.5));
-        assert_eq!(load("").unwrap().settings.keep_runs(), KEEP_RUNS);
-        assert_eq!(load("keep-runs = 0").unwrap().settings.keep_runs(), 0);
-        let config = load("keep-runs = 3").unwrap();
-        assert_eq!(config.settings.keep_runs(), 3);
-        assert_eq!(
-            config.entries()[0],
-            (
-                "keep-runs".to_string(),
-                "3".to_string(),
-                config.origin.clone()
-            )
-        );
-        let config = load("[tool.aye.unittest]\npattern = \"*_test.py\"").unwrap();
-        assert!(config.settings.adapter_table("unittest").is_some());
-        assert!(config.settings.adapter_table("doctest").is_none());
-        assert!(config.settings.adapter_table("pytest").is_none());
-    }
-
-    #[test]
-    fn missing_tool_aye_is_the_default() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = AyeConfig::load(dir.path()).unwrap();
-        assert_eq!(config.origin, Origin::Default);
-        assert_eq!(
-            config.entries(),
-            [] as [(std::string::String, std::string::String, Origin); 0]
         );
     }
 }

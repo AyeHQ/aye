@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use aye_events::{
-    Assertion, Diagnostic, Difference, Event, Failure, Frame, LifetimeId, Outcome, Phase, Previous,
-    Record, Reproduce, Resource, Side, TestId,
+    Assertion, ComparisonOp, Diagnostic, Difference, Event, Failure, Frame, FramePath, LifetimeId,
+    Local, Outcome, Phase, Previous, Record, Reproduce, Resource, Side, TestId,
 };
 
 /// Characters of a value (an operand, a source, a resource) in [`why`].
@@ -80,7 +80,7 @@ fn why_line(failure: &Failure, test: bool) -> String {
                 _ if !compare.summary.is_empty() => return several(compare),
                 _ => {}
             },
-            None if assertion.op == "==" && assertion.expected.is_some() => {
+            None if assertion.op == ComparisonOp::Eq && assertion.expected.is_some() => {
                 let (expected, actual) = whole(assertion);
                 return format!(
                     "expected {}, actual {}",
@@ -204,7 +204,7 @@ pub(crate) fn own_message<'a>(failure: &'a Failure, assertion: &Assertion) -> Op
     {
         return None;
     }
-    if assertion.op == "==" && message.contains(" != ") {
+    if assertion.op == ComparisonOp::Eq && message.contains(" != ") {
         return message
             .split_once(" : ")
             .map(|(_, own)| own.trim())
@@ -307,8 +307,8 @@ pub(crate) fn sources(assertion: &Assertion) -> (Cow<'_, str>, Cow<'_, str>) {
 /// `failed the previous 3 runs too (since r78)`, `failed 2 of the last 10
 /// runs`, `didn't fail in the previous 4 runs`. None without any.
 pub(crate) fn history(previous: &Previous) -> Option<String> {
-    let letters: Vec<char> = previous.outcomes.chars().collect();
-    let total = letters.len();
+    let outcomes = &previous.outcomes;
+    let total = outcomes.len();
     let runs = |n: usize| {
         if n == 1 {
             "run".to_owned()
@@ -316,42 +316,24 @@ pub(crate) fn history(previous: &Previous) -> Option<String> {
             format!("{n} runs")
         }
     };
-    let bad = |letter: &char| matches!(letter, 'f' | 'e');
     if total == 0 {
         return None;
     }
-    if letters.iter().all(|letter| *letter == 'p') {
+    if outcomes.iter().all(|outcome| outcome == Outcome::Passed) {
         return Some(format!("passed the previous {}", runs(total)));
     }
-    if letters.last().is_some_and(bad) {
-        let streak = letters
-            .iter()
-            .rev()
-            .take_while(|letter| bad(letter))
-            .count();
+    if outcomes.iter().next_back().is_some_and(Outcome::is_bad) {
+        let streak = outcomes.iter().rev().take_while(|o| o.is_bad()).count();
         let since = previous
             .since
-            .map(|since| format!(" (since r{since})"))
+            .map(|since| format!(" (since {since})"))
             .unwrap_or_default();
         return Some(format!("failed the previous {} too{since}", runs(streak)));
     }
-    match letters.iter().filter(|letter| bad(letter)).count() {
+    match outcomes.iter().filter(|outcome| outcome.is_bad()).count() {
         0 => Some(format!("didn't fail in the previous {}", runs(total))),
         failed => Some(format!("failed {failed} of the last {}", runs(total))),
     }
-}
-
-/// How many of the earlier outcomes passed and how many failed (or
-/// errored).
-pub(crate) fn history_counts(previous: &Previous) -> (u32, u32) {
-    previous
-        .outcomes
-        .chars()
-        .fold((0, 0), |(passed, failed), letter| match letter {
-            'p' => (passed + 1, failed),
-            'f' | 'e' => (passed, failed + 1),
-            _ => (passed, failed),
-        })
 }
 
 /// The setup chain: `price_list (session) → cart (function)`.
@@ -380,11 +362,11 @@ pub(crate) enum FrameItem<'a> {
 pub(crate) fn frame_items(frames: &[Frame]) -> Vec<FrameItem<'_>> {
     let mut items: Vec<FrameItem<'_>> = Vec::new();
     for frame in frames {
-        if is_project_path(&frame.path) {
+        if frame.path.is_project() {
             items.push(FrameItem::Project(frame));
             continue;
         }
-        let package = package_of(&frame.path);
+        let package = package_of(frame.path.as_str());
         match items.last_mut() {
             Some(FrameItem::Others {
                 count,
@@ -429,11 +411,11 @@ pub(crate) fn pointed(failure: &Failure) -> Option<&Frame> {
         .frames
         .iter()
         .rev()
-        .find(|frame| frame.path == path && frame.line == line)
+        .find(|frame| frame.path == *path && frame.line == line)
 }
 
 /// The local variables a failure's innermost frame had.
-pub(crate) fn locals(failure: &Failure) -> &[(String, String)] {
+pub(crate) fn locals(failure: &Failure) -> &[Local] {
     failure
         .frames
         .iter()
@@ -461,22 +443,6 @@ pub(crate) fn phase_words(failure: Option<&Failure>) -> Option<&'static str> {
         Some(Phase::Teardown) => "teardown",
         Some(Phase::Test) | None => "the test",
     })
-}
-
-/// The file of a lifetime's id (`class:tests/t.py::TestX` →
-/// `tests/t.py`), or of a test's.
-pub(crate) fn file_of(id: &str) -> &str {
-    let id = match id.split_once(':') {
-        Some((kind, rest))
-            if !kind.is_empty()
-                && !rest.starts_with(':')
-                && kind.chars().all(|c| c.is_ascii_lowercase()) =>
-        {
-            rest
-        }
-        _ => id,
-    };
-    id.split_once("::").map_or(id, |(path, _)| path)
 }
 
 /// The Python version a `worker_started` names: its `version`'s first
@@ -620,7 +586,7 @@ pub(crate) fn is_bare(failure: &Failure) -> bool {
 /// message. The unittest and doctest adapters fail a test with the very
 /// failures its subtests or examples reported.
 pub(crate) fn same_failure(a: &Failure, b: &Failure) -> bool {
-    a == b || (!a.signature.is_empty() && a.signature == b.signature && a.message == b.message)
+    a == b || (a.signature.is_some() && a.signature == b.signature && a.message == b.message)
 }
 
 /// Whether a test's own failure only repeats what its bad sub-outcomes
@@ -804,7 +770,7 @@ impl ModuleSkips {
         }
         let diagnostic = crate::tally::module_skip(record).filter(|_| !self.collect_only)?;
         self.paths
-            .insert(diagnostic.path.clone())
+            .insert(diagnostic.path.to_string())
             .then_some(diagnostic)
     }
 
@@ -884,44 +850,23 @@ impl LifetimeErrors {
     }
 }
 
-/// Paths inside the project are relative; the standard library,
-/// site-packages and generated code are not, nor are installed packages
-/// in an environment inside the project (a `site-packages` or
-/// `dist-packages` part).
-pub(crate) fn is_project_path(path: &str) -> bool {
-    !(path.is_empty()
-        || path.starts_with(['/', '\\', '<'])
-        || path == ".."
-        || path.starts_with("../")
-        || path.starts_with("..\\")
-        || path.as_bytes().get(1) == Some(&b':')
-        || path
-            .split(['/', '\\'])
-            .any(|part| matches!(part, "site-packages" | "dist-packages")))
-}
-
 /// Where to look: where the failure was raised when that is in the project,
 /// else the innermost project frame, else wherever it was raised.
-pub(crate) fn origin(failure: &Failure) -> Option<(&str, u32)> {
+pub(crate) fn origin(failure: &Failure) -> Option<(&FramePath, u32)> {
     let raised = failure
         .location
         .as_ref()
-        .map(|location| (location.path.as_str(), location.line))
-        .or_else(|| {
-            failure
-                .frames
-                .last()
-                .map(|frame| (frame.path.as_str(), frame.line))
-        });
-    if let Some(raised) = raised.filter(|(path, _)| is_project_path(path)) {
+        .map(|location| (&location.path, location.line))
+        .or_else(|| failure.frames.last().map(|frame| (&frame.path, frame.line)));
+    if let Some(raised) = raised.filter(|(path, _)| path.is_project()) {
         return Some(raised);
     }
     failure
         .frames
         .iter()
         .rev()
-        .find(|frame| is_project_path(&frame.path))
-        .map(|frame| (frame.path.as_str(), frame.line))
+        .find(|frame| frame.path.is_project())
+        .map(|frame| (&frame.path, frame.line))
         .or(raised)
 }
 
@@ -999,6 +944,8 @@ fn join<S: AsRef<str>>(words: &[S]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use aye_events::{RunNumber, Scope};
+
     use super::*;
 
     #[test]
@@ -1031,20 +978,6 @@ mod tests {
     }
 
     #[test]
-    fn project_paths_are_relative() {
-        assert!(is_project_path("tests/test_x.py"));
-        assert!(is_project_path("..hidden/x.py"));
-        assert!(!is_project_path("/usr/lib/python3.13/json/__init__.py"));
-        assert!(!is_project_path("../elsewhere/x.py"));
-        assert!(!is_project_path("C:\\Python\\lib\\x.py"));
-        assert!(!is_project_path("<string>"));
-        assert!(!is_project_path(
-            ".venv/lib/python3.13/site-packages/requests/api.py"
-        ));
-        assert!(!is_project_path("env\\Lib\\dist-packages\\x.py"));
-    }
-
-    #[test]
     fn frames_outside_the_project_are_grouped_by_package() {
         let frame = |path: &str| Frame {
             path: path.into(),
@@ -1064,7 +997,7 @@ mod tests {
         let items: Vec<String> = frame_items(&frames)
             .into_iter()
             .map(|item| match item {
-                FrameItem::Project(frame) => frame.path.clone(),
+                FrameItem::Project(frame) => frame.path.to_string(),
                 FrameItem::Others { count, package } => others(count, &package),
             })
             .collect();
@@ -1278,7 +1211,7 @@ mod tests {
             // Started, never finished (a crash): nothing.
             Record::new(Event::LifetimeStarted {
                 lifetime: "t.py::E".into(),
-                kind: "class".into(),
+                kind: Scope::Class,
             }),
             Record::new(Event::LifetimeFinished {
                 lifetime: "t.py::F".into(),
@@ -1558,11 +1491,11 @@ mod tests {
             setup_chain(&[
                 Resource {
                     name: "_xunit_setup_class_fixture_TestA".into(),
-                    scope: "class".into(),
+                    scope: Scope::Class,
                 },
                 Resource {
                     name: "cart".into(),
-                    scope: "function".into(),
+                    scope: Scope::Function,
                 },
             ]),
             "setup_class (class) → cart (function)"
@@ -1591,10 +1524,10 @@ mod tests {
 
     #[test]
     fn history_in_words() {
-        let words = |outcomes: &str, since| {
+        let words = |outcomes: &str, since: Option<u64>| {
             history(&Previous {
                 outcomes: outcomes.into(),
-                since,
+                since: since.and_then(RunNumber::new),
             })
         };
         assert_eq!(words("", None), None);
@@ -1612,13 +1545,6 @@ mod tests {
         assert_eq!(
             words("psxp", None).unwrap(),
             "didn't fail in the previous 4 runs"
-        );
-        assert_eq!(
-            history_counts(&Previous {
-                outcomes: "pfpes".into(),
-                since: None,
-            }),
-            (2, 2)
         );
     }
 }
