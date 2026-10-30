@@ -13,6 +13,7 @@ use aye_pytest::doctest;
 use aye_python_stdlib::os_path;
 
 use crate::options::aye_doctest;
+use crate::parser::OptionFlag;
 
 /// The doctest adapter's resolved configuration.
 #[derive(Debug, Clone)]
@@ -29,8 +30,8 @@ pub struct DoctestConfig {
     pub modules: Sourced<bool>,
     /// Text files whose name (or path) matches one of these are doctests.
     pub globs: Sourced<Vec<String>>,
-    /// Option flag names, applied to every example.
-    pub optionflags: Sourced<Vec<String>>,
+    /// Option flags, applied to every example.
+    pub optionflags: Sourced<Vec<OptionFlag>>,
     /// The encoding of text files.
     pub encoding: Sourced<String>,
     pub testpaths: Vec<String>,
@@ -156,22 +157,33 @@ impl DoctestConfig {
         });
         let active = modules.value || !globs.value.is_empty() || explicit_text;
 
-        let mut optionflags = match doctest_optionflags {
+        let pytest_flags = match doctest_optionflags {
             Some(value) => value,
             None => Sourced::default_value(vec!["ELLIPSIS".to_string()]),
         };
         if active
-            && let Some(bad) = optionflags
+            && let Some(bad) = pytest_flags
                 .value
                 .iter()
                 .find(|f| !doctest::OPTIONFLAGS.contains(&f.as_str()))
         {
             return Err(AdapterError::Config(format!(
                 "doctest_optionflags: unknown flag {bad:?} in {} (pytest accepts {})",
-                optionflags.source,
+                pytest_flags.source,
                 doctest::OPTIONFLAGS.join(", ")
             )));
         }
+        // Each name pytest accepts is a flag. A configuration that collects
+        // nothing isn't checked, and what it names that is no flag is left
+        // out: no recognizer is made of it.
+        let mut optionflags = Sourced::new(
+            pytest_flags
+                .value
+                .iter()
+                .filter_map(|name| OptionFlag::from_name(name))
+                .collect::<Vec<_>>(),
+            pytest_flags.source,
+        );
         if let Some(extra) = aye_settings.optionflags {
             for flag in extra {
                 if !optionflags.value.contains(&flag) {
@@ -279,11 +291,8 @@ impl DoctestConfig {
             &self.modules.source,
         );
         push("glob", self.globs.value.join(" "), &self.globs.source);
-        push(
-            "optionflags",
-            self.optionflags.value.join(" "),
-            &self.optionflags.source,
-        );
+        let flags: Vec<&str> = self.optionflags.value.iter().map(|f| f.name()).collect();
+        push("optionflags", flags.join(" "), &self.optionflags.source);
         push(
             "encoding",
             self.encoding.value.clone(),

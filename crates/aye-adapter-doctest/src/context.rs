@@ -14,6 +14,7 @@ use aye_pytest::session::deselect_ids;
 use serde::Serialize;
 
 use crate::DoctestRecognizer;
+use crate::parser::OptionFlag;
 
 /// The doctest adapter's context. Its keys are written in order, whatever
 /// the order of the fields ([`aye_protocol::AdapterContext`]).
@@ -23,8 +24,8 @@ pub(crate) struct DoctestContext {
     rootdir: String,
     /// pytest's inifile, absolute; `null` without one.
     inifile: Option<String>,
-    /// The option flag names applied to every example.
-    optionflags: Vec<String>,
+    /// The option flags applied to every example, by name.
+    optionflags: Vec<OptionFlag>,
     /// The encoding of text files.
     encoding: String,
     /// How pytest would import modules: `prepend`, `append` or

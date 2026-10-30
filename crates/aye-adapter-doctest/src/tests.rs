@@ -248,6 +248,46 @@ fn what_doctest_rejects_is_an_error() {
     assert_eq!(parsed.unknown_options, ["MINE"]);
 }
 
+/// The flags go by the names doctest and pytest give them, in the order
+/// aye 0.0.1 listed them (`[tool.aye.doctest] optionflags` names them so
+/// when it refuses one), and are written as those names; every flag pytest
+/// accepts is one.
+#[test]
+fn option_flags_go_by_doctests_names() {
+    assert_eq!(
+        OptionFlag::ALL.map(OptionFlag::name),
+        [
+            "DONT_ACCEPT_TRUE_FOR_1",
+            "DONT_ACCEPT_BLANKLINE",
+            "NORMALIZE_WHITESPACE",
+            "ELLIPSIS",
+            "SKIP",
+            "IGNORE_EXCEPTION_DETAIL",
+            "COMPARISON_FLAGS",
+            "REPORT_UDIFF",
+            "REPORT_CDIFF",
+            "REPORT_NDIFF",
+            "REPORT_ONLY_FIRST_FAILURE",
+            "REPORTING_FLAGS",
+            "FAIL_FAST",
+            "ALLOW_UNICODE",
+            "ALLOW_BYTES",
+            "NUMBER",
+        ]
+    );
+    for flag in OptionFlag::ALL {
+        assert_eq!(OptionFlag::from_name(flag.name()), Some(flag));
+    }
+    for name in ["", "ellipsis", "MINE", " ELLIPSIS", "+ELLIPSIS"] {
+        assert_eq!(OptionFlag::from_name(name), None, "{name:?}");
+    }
+    for name in aye_pytest::doctest::OPTIONFLAGS {
+        assert!(OptionFlag::from_name(name).is_some(), "{name}");
+    }
+    let written = serde_json::to_string(&[OptionFlag::Number, OptionFlag::Ellipsis]).unwrap();
+    assert_eq!(written, r#"["NUMBER","ELLIPSIS"]"#);
+}
+
 #[test]
 fn docstrings_are_read_as_written_and_as_python_3_13_cleans_them() {
     assert_eq!(expand_tabs("a\tb\n\tc"), "a       b\n        c");

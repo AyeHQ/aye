@@ -331,6 +331,7 @@ use aye_pytest::names;
 use aye_python_stdlib::fnmatch::SetTranslation;
 
 pub use aye_pytest::env::DoctestEnv;
+pub use parser::OptionFlag;
 pub use recognizer::DoctestRecognizer;
 pub use settings::DoctestConfig;
 

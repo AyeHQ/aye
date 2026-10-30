@@ -1,5 +1,6 @@
 //! What `doctest.DocTestParser` makes of a text, without Python: how many
-//! examples it holds and whether parsing it raises.
+//! examples it holds and whether parsing it raises; and the option flags
+//! its directives, and the configuration, name ([`OptionFlag`]).
 //!
 //! The parser is regular-expression based (`_EXAMPLE_RE`, `_INDENT_RE`,
 //! `_OPTION_DIRECTIVE_RE`, `_IS_BLANK_OR_COMMENT`); each expression is
@@ -7,31 +8,94 @@
 //! Python's notion of whitespace. The reference is `Lib/doctest.py` of
 //! `CPython` 3.10 to 3.14, which agree on everything read here.
 
-/// The option names `doctest` knows (`OPTIONFLAGS_BY_NAME`), plus the three
-/// pytest registers before it parses anything.
-pub(crate) const KNOWN_OPTIONS: [&str; 16] = [
-    "DONT_ACCEPT_TRUE_FOR_1",
-    "DONT_ACCEPT_BLANKLINE",
-    "NORMALIZE_WHITESPACE",
-    "ELLIPSIS",
-    "SKIP",
-    "IGNORE_EXCEPTION_DETAIL",
-    "COMPARISON_FLAGS",
-    "REPORT_UDIFF",
-    "REPORT_CDIFF",
-    "REPORT_NDIFF",
-    "REPORT_ONLY_FIRST_FAILURE",
-    "REPORTING_FLAGS",
-    "FAIL_FAST",
-    // pytest's, registered by its doctest plugin.
-    "ALLOW_UNICODE",
-    "ALLOW_BYTES",
-    "NUMBER",
-];
+use serde::{Serialize, Serializer};
 
-/// Whether `name` is an option flag doctest (or pytest) defines.
-pub(crate) fn known_option(name: &str) -> bool {
-    KNOWN_OPTIONS.contains(&name)
+/// An option flag `doctest` knows by name (`OPTIONFLAGS_BY_NAME`, its
+/// combinations `COMPARISON_FLAGS` and `REPORTING_FLAGS` among them), or
+/// one of the three pytest registers before it parses anything. Written,
+/// in directives, the configuration and the context, as its
+/// [`name`](Self::name).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptionFlag {
+    DontAcceptTrueFor1,
+    DontAcceptBlankline,
+    NormalizeWhitespace,
+    Ellipsis,
+    Skip,
+    IgnoreExceptionDetail,
+    ComparisonFlags,
+    ReportUdiff,
+    ReportCdiff,
+    ReportNdiff,
+    ReportOnlyFirstFailure,
+    ReportingFlags,
+    FailFast,
+    // pytest's, registered by its doctest plugin.
+    AllowUnicode,
+    AllowBytes,
+    Number,
+}
+
+impl OptionFlag {
+    /// Every flag, doctest's in its order, then pytest's.
+    pub const ALL: [Self; 16] = [
+        Self::DontAcceptTrueFor1,
+        Self::DontAcceptBlankline,
+        Self::NormalizeWhitespace,
+        Self::Ellipsis,
+        Self::Skip,
+        Self::IgnoreExceptionDetail,
+        Self::ComparisonFlags,
+        Self::ReportUdiff,
+        Self::ReportCdiff,
+        Self::ReportNdiff,
+        Self::ReportOnlyFirstFailure,
+        Self::ReportingFlags,
+        Self::FailFast,
+        Self::AllowUnicode,
+        Self::AllowBytes,
+        Self::Number,
+    ];
+
+    /// The flag's name, as doctest and pytest spell it.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::DontAcceptTrueFor1 => "DONT_ACCEPT_TRUE_FOR_1",
+            Self::DontAcceptBlankline => "DONT_ACCEPT_BLANKLINE",
+            Self::NormalizeWhitespace => "NORMALIZE_WHITESPACE",
+            Self::Ellipsis => "ELLIPSIS",
+            Self::Skip => "SKIP",
+            Self::IgnoreExceptionDetail => "IGNORE_EXCEPTION_DETAIL",
+            Self::ComparisonFlags => "COMPARISON_FLAGS",
+            Self::ReportUdiff => "REPORT_UDIFF",
+            Self::ReportCdiff => "REPORT_CDIFF",
+            Self::ReportNdiff => "REPORT_NDIFF",
+            Self::ReportOnlyFirstFailure => "REPORT_ONLY_FIRST_FAILURE",
+            Self::ReportingFlags => "REPORTING_FLAGS",
+            Self::FailFast => "FAIL_FAST",
+            Self::AllowUnicode => "ALLOW_UNICODE",
+            Self::AllowBytes => "ALLOW_BYTES",
+            Self::Number => "NUMBER",
+        }
+    }
+
+    /// The flag named `name`, if doctest (or pytest) defines one.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|flag| flag.name() == name)
+    }
+}
+
+/// A flag is its name.
+impl PartialEq<&str> for OptionFlag {
+    fn eq(&self, other: &&str) -> bool {
+        self.name() == *other
+    }
+}
+
+impl Serialize for OptionFlag {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
+    }
 }
 
 /// What parsing found.
@@ -312,7 +376,7 @@ fn check_example(
                 parsed.error = Some(format!("invalid option {option:?}"));
                 return;
             }
-            if !known_option(name) {
+            if OptionFlag::from_name(name).is_none() {
                 parsed.unknown_options.push(name.to_string());
             }
             options += 1;

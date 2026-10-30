@@ -4,7 +4,7 @@ use std::path::Path;
 
 use aye_adapter::AdapterError;
 
-use crate::parser::known_option;
+use crate::parser::OptionFlag;
 
 /// The keys `[tool.aye.doctest]` accepts.
 const AYE_KEYS: [&str; 4] = ["modules", "glob", "optionflags", "encoding"];
@@ -14,7 +14,7 @@ const AYE_KEYS: [&str; 4] = ["modules", "glob", "optionflags", "encoding"];
 pub(crate) struct AyeDoctest {
     pub(crate) modules: Option<bool>,
     pub(crate) glob: Option<Vec<String>>,
-    pub(crate) optionflags: Option<Vec<String>>,
+    pub(crate) optionflags: Option<Vec<OptionFlag>>,
     pub(crate) encoding: Option<String>,
 }
 
@@ -57,13 +57,17 @@ pub(crate) fn aye_doctest(
             }
             "glob" => out.glob = Some(strings(key, value)?),
             "optionflags" => {
-                let flags = strings(key, value)?;
-                if let Some(bad) = flags.iter().find(|f| !known_option(f)) {
-                    return Err(error(format!(
-                        "optionflags: unknown flag {bad:?} (expected one of {})",
-                        crate::parser::KNOWN_OPTIONS.join(", ")
-                    )));
-                }
+                let flags = strings(key, value)?
+                    .iter()
+                    .map(|name| {
+                        OptionFlag::from_name(name).ok_or_else(|| {
+                            error(format!(
+                                "optionflags: unknown flag {name:?} (expected one of {})",
+                                OptionFlag::ALL.map(OptionFlag::name).join(", ")
+                            ))
+                        })
+                    })
+                    .collect::<Result<_, _>>()?;
                 out.optionflags = Some(flags);
             }
             "encoding" => {
