@@ -2412,3 +2412,118 @@ fn mros_are_linearized_as_python_does() {
     assert_eq!(bad.cases[0].id.as_str(), "test_x.py::TestZ::test_z");
     assert_eq!(bad.cases[0].certainty, Certainty::Partial);
 }
+
+/// A file, why it is refined and its cases, with their certainty.
+type Refined = (
+    &'static str,
+    Option<&'static str>,
+    &'static [(&'static str, Certainty)],
+);
+
+/// Files refined for each reason the recognizer adds to the collectors'
+/// own: the reasons as aye 0.0.1 joined them, in that order (the
+/// `collect_ignore` one first, the others after the collectors'), and the
+/// cases they leave `Partial`. Recorded before the reasons were typed.
+#[test]
+fn refine_reasons_are_joined_as_they_always_were() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(
+        root,
+        "tests/conftest.py",
+        "import sys\nfrom _pytest.python import Function\n\ncollect_ignore = []\n\
+         if sys.platform == 'win32':\n    collect_ignore += ['a/test_a.py', 'a/test_none.py']\n\n\
+         def pytest_configure(config):\n    config.addinivalue_line('python_functions', 'check')\n\n\
+         def pytest_collection_modifyitems(session, config, items):\n    \
+         items.append(Function.from_parent(items[0].parent, name='extra'))\n",
+    );
+    write(root, "tests/a/helpers.py", "");
+    write(root, "tests/b/helpers.py", "");
+    write(
+        root,
+        "tests/a/test_a.py",
+        "\"\"\"\n>>> 1\n1\n\"\"\"\nimport helpers\nfrom elsewhere import *\n\n\
+         def test_a():\n    pass\n\nclass TestK:\n    def test_k(self):\n        pass\n",
+    );
+    write(root, "tests/a/test_none.py", "import helpers\n");
+    write(root, "tests/b/test_b.py", "def test_b():\n    pass\n");
+    let recognizer = recognizer_with(
+        root,
+        &[],
+        &["--doctest-modules", "-p", "unseen_plugin"],
+        None,
+    )
+    .with_pytest_doctests();
+    let said = |rel: &str| {
+        let recognition = recognize_with(&recognizer, root, rel);
+        let certainties: Vec<(String, Certainty)> = certainties(&recognition)
+            .into_iter()
+            .map(|(id, certainty)| (id.to_string(), certainty))
+            .collect();
+        (
+            recognition.refine.map(|reason| reason.to_string()),
+            certainties,
+        )
+    };
+    let pinned: [Refined; 3] = [
+        (
+            "tests/a/test_a.py",
+            Some(
+                "collect_ignore may exclude this file at runtime; \
+                 `from elsewhere import *` may bring in tests; \
+                 a conftest.py in scope changes python_functions at runtime, which collection reads; \
+                 it imports helpers, a module of more than one directory pytest puts on sys.path: \
+                 which one it gets depends on what pytest imported before; \
+                 a conftest.py implements pytest_collection_modifyitems and makes items: it may add tests; \
+                 pytest's doctest plugin collects its doctests (the doctest adapter isn't among the run's adapters)",
+            ),
+            &[
+                ("tests/a/test_a.py::test_a", Certainty::Partial),
+                ("tests/a/test_a.py::TestK::test_k", Certainty::Partial),
+            ],
+        ),
+        (
+            "tests/a/test_none.py",
+            Some(
+                "collect_ignore may exclude this file at runtime; \
+                 no test is visible statically; pytest imports the module to tell; \
+                 a conftest.py in scope changes python_functions at runtime, which collection reads; \
+                 it imports helpers, a module of more than one directory pytest puts on sys.path: \
+                 which one it gets depends on what pytest imported before; \
+                 a conftest.py implements pytest_collection_modifyitems and makes items: it may add tests",
+            ),
+            &[],
+        ),
+        (
+            "tests/b/test_b.py",
+            Some(
+                "a conftest.py in scope changes python_functions at runtime, which collection reads; \
+                 a conftest.py implements pytest_collection_modifyitems and makes items: it may add tests",
+            ),
+            &[("tests/b/test_b.py::test_b", Certainty::Partial)],
+        ),
+    ];
+    for (rel, reason, cases) in pinned {
+        let cases: Vec<(String, Certainty)> = cases
+            .iter()
+            .map(|(id, certainty)| ((*id).to_string(), *certainty))
+            .collect();
+        assert_eq!(said(rel), (reason.map(str::to_string), cases), "{rel}");
+    }
+    // A plugin aye can't read leaves the ids, with no reason to refine.
+    let plain = tempfile::tempdir().unwrap();
+    let plain = plain.path();
+    write(plain, "test_c.py", "def test_c():\n    pass\n");
+    for (args, certainty) in [
+        (&["-p", "unseen_plugin"][..], Certainty::Partial),
+        (&[], Certainty::Exact),
+    ] {
+        let recognizer = recognizer_with(plain, &[], args, None);
+        let recognition = recognize_with(&recognizer, plain, "test_c.py");
+        assert_eq!(recognition.refine, None);
+        assert_eq!(
+            certainties(&recognition),
+            [("test_c.py::test_c", certainty)]
+        );
+    }
+}
