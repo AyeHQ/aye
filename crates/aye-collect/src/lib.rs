@@ -171,13 +171,14 @@
 //!   fails the run.
 //! - At most 64 recognizers.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_adapter::{Project, Recognizer};
-use aye_events::{AdapterName, Case, Diagnostic, Severity};
+use aye_events::{AdapterName, Case, Diagnostic, ProjectPath, Severity};
+use aye_fs::normalize_absolute;
 use aye_protocol::Refiner;
 use aye_provision::{EnvironmentFingerprint, InstalledModules};
 
@@ -240,6 +241,39 @@ impl Collection {
         self.diagnostics
             .iter()
             .any(|d| d.severity == Severity::Error)
+    }
+
+    /// By adapter, the files collection found its tests in (selected or
+    /// not), in collection order: the session every worker of an adapter
+    /// whose executor lists the session lists before its first batch
+    /// (`aye_runner::Plan::session_files`). Read from the cases, so a
+    /// claimed file with none (one that failed to import) is left out.
+    /// With dotted names or keys among the arguments, collection walked
+    /// the whole project to resolve them, but the user's run is `pytest
+    /// <the paths it starts from>` (`within`: those paths, absolute, with
+    /// the root): only the files in those paths are its session, and
+    /// listing the others would load conftests that run never loads (a
+    /// `test*` directory's, whose hooks reach every test).
+    pub fn session_files(
+        &self,
+        within: Option<(&[PathBuf], &Path)>,
+    ) -> BTreeMap<AdapterName, Vec<ProjectPath>> {
+        let mut files: BTreeMap<AdapterName, Vec<ProjectPath>> = BTreeMap::new();
+        let mut seen: HashSet<(&AdapterName, &str)> = HashSet::new();
+        for case in &self.cases {
+            let path = case.id.path();
+            let reached = within.is_none_or(|(paths, root)| {
+                let file = normalize_absolute(&root.join(path.as_str()));
+                paths.iter().any(|start| file.starts_with(start))
+            });
+            if reached && seen.insert((&case.adapter, path.as_str())) {
+                files
+                    .entry(case.adapter.clone())
+                    .or_default()
+                    .push(path.to_project_path());
+            }
+        }
+        files
     }
 }
 

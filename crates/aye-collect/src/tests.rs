@@ -2669,3 +2669,51 @@ fn a_stop_while_refining_ends_collection_as_interrupted() {
     assert!(collection.interrupted);
     assert_eq!(collection.cases, [] as [aye_events::Case; 0]);
 }
+
+/// The cases of a collection that found `cases`, by id and adapter.
+fn collection_of(cases: &[(&str, &'static str)]) -> Collection {
+    Collection {
+        cases: cases
+            .iter()
+            .map(|(id, adapter)| Case::new(*id, *adapter))
+            .collect(),
+        ..Collection::default()
+    }
+}
+
+#[test]
+fn the_session_is_every_file_with_a_case_by_adapter_in_collection_order() {
+    let collection = collection_of(&[
+        ("b.py::test_x", "pytest"),
+        ("b.py::test_y", "pytest"),
+        ("b.py::Doc", "doctest"),
+        ("a.py::test_x", "pytest"),
+        ("b.py::test_z", "pytest"),
+        ("c.txt::c.txt", "doctest"),
+    ]);
+    let files = collection.session_files(None);
+    assert_eq!(files.len(), 2);
+    assert_eq!(files["pytest"], ["b.py", "a.py"]);
+    assert_eq!(files["doctest"], ["b.py", "c.txt"]);
+    assert!(Collection::default().session_files(None).is_empty());
+}
+
+/// With dotted names or keys, collection walks the whole project, but the
+/// session is what `pytest <the paths the run starts from>` collects: a
+/// file elsewhere (whose directory's conftest that run never loads) isn't
+/// listed.
+#[test]
+fn with_dotted_names_the_session_is_what_the_run_starts_from() {
+    let root = Path::new("/repo");
+    let collection = collection_of(&[
+        ("testing/test_g.py::test_g", "pytest"),
+        ("tests/test_a.py::test_a", "pytest"),
+        ("tests/sub/test_s.py::test_s", "pytest"),
+        ("tests2/test_t.py::test_t", "pytest"),
+        ("lib.py::lib.f", "doctest"),
+    ]);
+    let starts = [root.join("tests"), root.join("lib.py")];
+    let files = collection.session_files(Some((&starts, root)));
+    assert_eq!(files["pytest"], ["tests/test_a.py", "tests/sub/test_s.py"]);
+    assert_eq!(files["doctest"], ["lib.py"]);
+}

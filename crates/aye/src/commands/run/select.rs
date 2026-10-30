@@ -34,7 +34,6 @@ use aye_select::Selection;
 
 use super::collect::Collected;
 use super::exit::RunVerdict;
-use super::plan::session_files;
 use super::reach::{Named, Reach, broken_conftest_dirs, dotted_reach, explained_by_a_conftest};
 use crate::framework_args::Passed;
 use crate::positional::{Positional, Positionals};
@@ -82,8 +81,7 @@ pub(super) fn select(
     // over the whole project: what the run reaches decides which of
     // collection's diagnostics are the run's (see `Reach`).
     let reach = Reach::of(&settings.positionals, &settings.root, &collection.cases);
-    let session_files = session_files(
-        &collection.cases,
+    let session_files = collection.session_files(
         reach
             .as_ref()
             .map(|reach| (reach.selected.as_slice(), settings.root.as_path())),
