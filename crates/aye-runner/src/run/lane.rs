@@ -1,6 +1,7 @@
-//! A lane: a worker slot that pulls batches until none are left, and how
-//! it gets its worker ready (started, pre-listed or kept from
-//! refinement, with the session listed and compared).
+//! A lane: a worker slot that pulls batches until none are left
+//! ([`Lane`], each of its workers a [`LaneWorker`]), and how it gets its
+//! worker ready (started, pre-listed or kept from refinement, with the
+//! session listed and compared).
 
 use std::collections::HashSet;
 use std::sync::mpsc::Sender;
@@ -11,7 +12,7 @@ use aye_protocol::RefineRequest;
 use crate::env::lane_env;
 use crate::listing::{Digests, Prelisting, Warm, shut_down, started};
 use crate::refine::{Unrefined, refine_on, refined_by};
-use crate::schedule::Queue;
+use crate::schedule::{Assigned, Queue};
 use crate::sync::lock;
 use crate::worker::Worker;
 
@@ -25,6 +26,62 @@ impl Drop for LaneDone<'_> {
     fn drop(&mut self) {
         self.0.lane_done(self.1);
     }
+}
+
+/// A lane of a run, as it pulls batches ([`Shared::lane`]).
+struct Lane<'s, 'a> {
+    shared: &'s Shared<'a>,
+    index: WorkerIndex,
+    send: &'s dyn Fn(Message),
+    /// The adapter of the lane's last batch, whose batches it asks for
+    /// first with several lanes: its worker's, or that of the worker that
+    /// crashed.
+    adapter: Option<AdapterName>,
+    /// Its worker, of that adapter: none before the lane's first batch, or
+    /// once it crashed.
+    worker: Option<LaneWorker>,
+    /// With one lane, the worker that listed the session, waiting while
+    /// another adapter's runs.
+    parked: Option<LaneWorker>,
+    /// The files whose tests the lane's worker lists otherwise than the
+    /// first lane's: their ids run on the first lane.
+    pinned: HashSet<ProjectPath>,
+}
+
+/// A lane's worker: it serves one adapter.
+struct LaneWorker {
+    worker: Worker,
+    adapter: AdapterName,
+    session: SessionState,
+    announced: Announced,
+}
+
+/// Where a lane worker's session is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionState {
+    /// Its batches run in it, or each in its own for an executor that
+    /// doesn't list the session.
+    Open,
+    /// Its last batch ended it ([`Assigned::ends_session`], for an executor
+    /// that lists the session): the worker runs no other.
+    Ended,
+}
+
+/// Whether a lane worker's `worker_started` was sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Announced {
+    Yes,
+    /// Not yet: with one lane, a worker that listed the session before its
+    /// first batch is announced when it first runs one, so that each
+    /// worker's events come between its start and its end.
+    Deferred,
+}
+
+/// A worker ready for its adapter's batches, with the digests of the
+/// session files it listed, when its executor lists the session.
+struct Listed {
+    worker: Worker,
+    digests: Option<Digests>,
 }
 
 impl Shared<'_> {
@@ -51,176 +108,24 @@ impl Shared<'_> {
     /// ([`Shared::early_start`]). A lane other than the first leaves the
     /// tests of the files it lists otherwise to the first lane
     /// ([`Queue::pin`]).
-    pub(super) fn lane(&self, lane: WorkerIndex, tx: &Sender<Message>) {
+    pub(super) fn lane(&self, index: WorkerIndex, tx: &Sender<Message>) {
         let send = |message| {
             let _ = tx.send(message);
         };
-        let _done = LaneDone(&self.queue, lane);
-        let mut worker: Option<Worker> = None;
-        // The adapter of the lane's last batch: its worker's.
-        let mut adapter: Option<AdapterName> = None;
-        // The worker's session ended with its last batch: it runs no other.
-        let mut ended = false;
-        // With one lane: whether the worker was announced, and the worker
-        // that listed the session, waiting while another adapter's runs.
-        let one = self.lanes <= 1;
-        let mut announced = true;
-        let mut parked: Option<(Worker, AdapterName, bool)> = None;
-        // The files whose tests this lane's worker lists otherwise than the
-        // first lane's: their ids run on the first lane.
-        let mut pinned: HashSet<ProjectPath> = HashSet::new();
-        match self.early_start(lane) {
-            Ok(None) => {}
-            Ok(Some((started, of, digests))) => {
-                if one {
-                    announced = false;
-                } else {
-                    send(Message::WorkerStarted {
-                        worker: lane,
-                        pid: started.pid(),
-                        python: started.python().to_string(),
-                        version: started.version().to_string(),
-                    });
-                }
-                pinned = self.compare(lane, &of, digests.as_ref(), &send);
-                self.queue.may_pin(lane, !pinned.is_empty());
-                worker = Some(started);
-                adapter = Some(of);
-            }
-            Err(error) => {
-                if !self.stopping() {
-                    send(Message::WorkerFailed {
-                        worker: lane,
-                        error,
-                    });
-                }
-                return;
-            }
+        let _done = LaneDone(&self.queue, index);
+        let Some(mut lane) = Lane::open(self, index, &send) else {
+            return;
+        };
+        if lane.run() {
+            lane.close();
         }
-        while !self.maxfail.exhausted()
-            && let Some(batch) = self
-                .queue
-                .take(lane, if one { None } else { adapter.as_ref() })
-        {
-            if adapter.as_ref() != Some(&batch.spec.adapter) || ended {
-                let park = one
-                    && !ended
-                    && parked.is_none()
-                    && worker.is_some()
-                    && adapter.as_ref().is_some_and(|of| self.lists_session(of));
-                if park {
-                    let of = adapter.take().expect("the worker's adapter");
-                    parked = Some((worker.take().expect("checked above"), of, announced));
-                } else {
-                    if let Some(of) = &adapter
-                        && !ended
-                    {
-                        announce(lane, worker.as_ref(), &mut announced, &send);
-                        self.end_session(lane, &mut worker, of, &send);
-                    }
-                    if let Some(other) = worker.take() {
-                        announce(lane, Some(&other), &mut announced, &send);
-                        let exit = other.shutdown();
-                        send(Message::WorkerFinished {
-                            worker: lane,
-                            exit_status: exit.code(),
-                            error: None,
-                        });
-                    }
-                }
-                adapter = Some(batch.spec.adapter.clone());
-                ended = false;
-                if parked
-                    .as_ref()
-                    .is_some_and(|(_, of, _)| *of == batch.spec.adapter)
-                {
-                    let (waiting, _, was) = parked.take().expect("checked above");
-                    worker = Some(waiting);
-                    announced = was;
-                }
-            }
-            if worker.is_none() {
-                match self.start(lane, &batch.spec.adapter) {
-                    Ok((started, digests)) => {
-                        send(Message::WorkerStarted {
-                            worker: lane,
-                            pid: started.pid(),
-                            python: started.python().to_string(),
-                            version: started.version().to_string(),
-                        });
-                        announced = true;
-                        pinned = self.compare(lane, &batch.spec.adapter, digests.as_ref(), &send);
-                        self.queue.may_pin(lane, !pinned.is_empty());
-                        worker = Some(started);
-                        ended = false;
-                    }
-                    Err(error) => {
-                        let halted = self.stopping();
-                        self.queue.put_back(batch);
-                        if !halted {
-                            send(Message::WorkerFailed {
-                                worker: lane,
-                                error,
-                            });
-                        }
-                        return;
-                    }
-                }
-            }
-            let batch = if pinned.is_empty() {
-                batch
-            } else {
-                match self
-                    .queue
-                    .pin(batch, |id| pinned.contains(id.path().as_str()))
-                {
-                    Some(kept) => kept,
-                    None => continue,
-                }
-            };
-            let running = worker.as_mut().expect("started above");
-            if !self.busy(lane, running.killer()) {
-                self.idle(lane);
-                self.queue.put_back(batch);
-                break;
-            }
-            ended |= batch.ends_session && self.lists_session(&batch.spec.adapter);
-            announce(lane, worker.as_ref(), &mut announced, &send);
-            self.execute(lane, &mut worker, &batch, &send);
-            self.queue.finished(&batch);
-        }
-        // The lane's worker, then the one waiting: each ends its session,
-        // announced first if it never was.
-        let waiting = parked.map(|(waiting, of, was)| (waiting, Some(of), false, was));
-        let current = worker.map(|current| (current, adapter, ended, announced));
-        for (worker, of, ended, mut announced) in current.into_iter().chain(waiting) {
-            let mut worker = Some(worker);
-            announce(lane, worker.as_ref(), &mut announced, &send);
-            if let Some(of) = of.filter(|_| !ended) {
-                self.end_session(lane, &mut worker, &of, &send);
-            }
-            if let Some(worker) = worker {
-                let exit = worker.shutdown();
-                send(Message::WorkerFinished {
-                    worker: lane,
-                    exit_status: exit.code(),
-                    error: None,
-                });
-            }
-        }
-        let unused = lock(&self.prelisted).remove(&lane);
-        shut_down(unused.into_iter().collect(), self.stop.is_stopped());
     }
 
     /// A worker for `adapter`'s batches, holding only its executor, that
     /// has listed the session if its executor lists the session: with its
     /// listing's digests then. The one started for the lane during
     /// refinement, if it is of that adapter ([`Shared::prelisted`]).
-    fn start(
-        &self,
-        lane: WorkerIndex,
-        adapter: &AdapterName,
-    ) -> Result<(Worker, Option<Digests>), String> {
+    fn start(&self, lane: WorkerIndex, adapter: &AdapterName) -> Result<Listed, String> {
         let prelisted = {
             let mut prelisted = lock(&self.prelisted);
             match prelisted.remove(&lane) {
@@ -252,11 +157,7 @@ impl Shared<'_> {
 
     /// The worker started for `lane` during refinement, once it has
     /// answered its listings and listed the rest of the session.
-    fn take_prelisted(
-        &self,
-        lane: WorkerIndex,
-        prelisted: Prelisting,
-    ) -> Result<(Worker, Option<Digests>), String> {
+    fn take_prelisted(&self, lane: WorkerIndex, prelisted: Prelisting) -> Result<Listed, String> {
         let Prelisting {
             adapter,
             worker,
@@ -300,15 +201,12 @@ impl Shared<'_> {
     /// the adapter whose session they compare, so that a lane takes its
     /// first batch once it is ready for it, and the first lane's listing is
     /// what the others compare theirs with.
-    fn early_start(
-        &self,
-        lane: WorkerIndex,
-    ) -> Result<Option<(Worker, AdapterName, Option<Digests>)>, String> {
+    fn early_start(&self, lane: WorkerIndex) -> Result<Option<(AdapterName, Listed)>, String> {
         if !lane.is_first() {
             return match &self.reference {
                 Some(adapter) if lane.as_u32() < self.early => self
                     .start(lane, adapter)
-                    .map(|(worker, digests)| Some((worker, adapter.clone(), digests))),
+                    .map(|listed| Some((adapter.clone(), listed))),
                 _ => Ok(None),
             };
         }
@@ -328,16 +226,16 @@ impl Shared<'_> {
                     Err("interrupted".into())
                 };
                 self.idle(WorkerIndex::FIRST);
-                listed.map(|(worker, digests)| (worker, adapter, digests))
+                listed.map(|listed| (adapter, listed))
             }
             (None, Some(adapter)) => self
                 .start(WorkerIndex::FIRST, adapter)
-                .map(|(worker, digests)| (worker, adapter.clone(), digests)),
+                .map(|listed| (adapter.clone(), listed)),
             (None, None) => return Ok(None),
         };
         if let Some(reference) = &self.reference {
             let digests = match &started {
-                Ok((_, adapter, digests)) if adapter == reference => digests.clone(),
+                Ok((adapter, listed)) if adapter == reference => listed.digests.clone(),
                 _ => None,
             };
             self.listings.publish(reference, digests);
@@ -354,10 +252,13 @@ impl Shared<'_> {
         mut worker: Worker,
         adapter: &AdapterName,
         mut listed: Digests,
-    ) -> Result<(Worker, Option<Digests>), String> {
+    ) -> Result<Listed, String> {
         let lists = self.lists_session(adapter);
         let Some(session) = self.sessions.get(adapter).filter(|_| lists) else {
-            return Ok((worker, None));
+            return Ok(Listed {
+                worker,
+                digests: None,
+            });
         };
         let files: Vec<ProjectPath> = session
             .iter()
@@ -365,7 +266,10 @@ impl Shared<'_> {
             .cloned()
             .collect();
         if files.is_empty() {
-            return Ok((worker, Some(listed)));
+            return Ok(Listed {
+                worker,
+                digests: Some(listed),
+            });
         }
         let request = RefineRequest {
             adapter: adapter.clone(),
@@ -379,7 +283,7 @@ impl Shared<'_> {
                     listed.extend(digests);
                     listed
                 });
-                Ok((worker, digests))
+                Ok(Listed { worker, digests })
             }
             Err(Unrefined::Failed(message)) => {
                 worker.shutdown();
@@ -436,24 +340,234 @@ impl Shared<'_> {
     }
 }
 
-/// Send lane `lane`'s `worker_started` for `worker`, unless `announced`
-/// says it was (with one lane, a worker that listed the session is
-/// announced when it is first used).
-fn announce(
-    lane: WorkerIndex,
-    worker: Option<&Worker>,
-    announced: &mut bool,
-    send: &dyn Fn(Message),
-) {
-    if let Some(worker) = worker
-        && !*announced
-    {
-        *announced = true;
-        send(Message::WorkerStarted {
-            worker: lane,
-            pid: worker.pid(),
-            python: worker.python().to_string(),
-            version: worker.version().to_string(),
-        });
+impl<'s, 'a> Lane<'s, 'a> {
+    /// Lane `index`, with the worker it starts with, if any
+    /// ([`Shared::early_start`]); `None` if that worker failed to start,
+    /// which ends the lane.
+    fn open(shared: &'s Shared<'a>, index: WorkerIndex, send: &'s dyn Fn(Message)) -> Option<Self> {
+        let mut lane = Self {
+            shared,
+            index,
+            send,
+            adapter: None,
+            worker: None,
+            parked: None,
+            pinned: HashSet::new(),
+        };
+        match shared.early_start(index) {
+            Ok(None) => {}
+            Ok(Some((adapter, listed))) => {
+                let mut worker = LaneWorker::new(listed.worker, adapter.clone());
+                if !lane.alone() {
+                    worker.announce(index, send);
+                }
+                lane.compare(&adapter, listed.digests.as_ref());
+                lane.worker = Some(worker);
+                lane.adapter = Some(adapter);
+            }
+            Err(error) => {
+                if !shared.stopping() {
+                    send(Message::WorkerFailed {
+                        worker: index,
+                        error,
+                    });
+                }
+                return None;
+            }
+        }
+        Some(lane)
+    }
+
+    /// Whether the run has this lane only.
+    fn alone(&self) -> bool {
+        self.shared.lanes <= 1
+    }
+
+    /// The adapter whose batches the lane asks for first: with several
+    /// lanes, its last batch's; with one, none (batches run in plan order).
+    fn prefers(&self) -> Option<&AdapterName> {
+        if self.alone() {
+            None
+        } else {
+            self.adapter.as_ref()
+        }
+    }
+
+    /// Pull batches until none are left for the lane or the bad outcomes
+    /// passed on reach `maxfail`; false if a worker failed to start, which
+    /// ends the lane there.
+    fn run(&mut self) -> bool {
+        let shared = self.shared;
+        while !shared.maxfail.exhausted()
+            && let Some(batch) = shared.queue.take(self.index, self.prefers())
+        {
+            let ended = self
+                .worker
+                .as_ref()
+                .is_some_and(|worker| worker.session == SessionState::Ended);
+            if self.adapter.as_ref() != Some(&batch.spec.adapter) || ended {
+                self.leave_for(&batch.spec.adapter);
+            }
+            if self.worker.is_none() {
+                match shared.start(self.index, &batch.spec.adapter) {
+                    Ok(listed) => {
+                        let mut worker = LaneWorker::new(listed.worker, batch.spec.adapter.clone());
+                        worker.announce(self.index, self.send);
+                        self.compare(&batch.spec.adapter, listed.digests.as_ref());
+                        self.worker = Some(worker);
+                    }
+                    Err(error) => {
+                        let halted = shared.stopping();
+                        shared.queue.put_back(batch);
+                        if !halted {
+                            (self.send)(Message::WorkerFailed {
+                                worker: self.index,
+                                error,
+                            });
+                        }
+                        return false;
+                    }
+                }
+            }
+            let batch = if self.pinned.is_empty() {
+                batch
+            } else {
+                match shared
+                    .queue
+                    .pin(batch, |id| self.pinned.contains(id.path().as_str()))
+                {
+                    Some(kept) => kept,
+                    None => continue,
+                }
+            };
+            let current = self.worker.as_mut().expect("started above");
+            if !shared.busy(self.index, current.worker.killer()) {
+                shared.idle(self.index);
+                shared.queue.put_back(batch);
+                break;
+            }
+            if batch.ends_session && shared.lists_session(&batch.spec.adapter) {
+                current.session = SessionState::Ended;
+            }
+            current.announce(self.index, self.send);
+            self.execute(&batch);
+            shared.queue.finished(&batch);
+        }
+        true
+    }
+
+    /// Leave the lane's worker for a batch of `adapter`, another adapter's
+    /// or one its session can't take: with one lane, a worker whose
+    /// executor lists the session waits, unless one already does; any
+    /// other ends its session and shuts down ([`Lane::retire`]). The worker
+    /// waiting for `adapter`, if any, is the lane's again.
+    fn leave_for(&mut self, adapter: &AdapterName) {
+        if let Some(current) = self.worker.take() {
+            let park = self.alone()
+                && current.session == SessionState::Open
+                && self.parked.is_none()
+                && self.shared.lists_session(&current.adapter);
+            if park {
+                self.parked = Some(current);
+            } else {
+                self.retire(current);
+            }
+        }
+        self.adapter = Some(adapter.clone());
+        if self
+            .parked
+            .as_ref()
+            .is_some_and(|waiting| waiting.adapter == *adapter)
+        {
+            self.worker = self.parked.take();
+        }
+    }
+
+    /// The files whose tests the lane's new worker of `adapter` lists
+    /// (`digests`) otherwise than the first lane's ([`Shared::compare`]),
+    /// and whether the lane may pin their batches to the first lane from
+    /// now on ([`Queue::may_pin`]).
+    fn compare(&mut self, adapter: &AdapterName, digests: Option<&Digests>) {
+        self.pinned = self.shared.compare(self.index, adapter, digests, self.send);
+        self.shared
+            .queue
+            .may_pin(self.index, !self.pinned.is_empty());
+    }
+
+    /// Run `batch` on the lane's worker, which is gone if it dies meanwhile.
+    fn execute(&mut self, batch: &Assigned) {
+        let mut current = self.worker.take().expect("a worker runs the batch");
+        if let Some(worker) = self
+            .shared
+            .execute(self.index, current.worker, batch, self.send)
+        {
+            current.worker = worker;
+            self.worker = Some(current);
+        }
+    }
+
+    /// The lane is done: its worker, then the one waiting, each end their
+    /// session; then the worker started for the lane during refinement, if
+    /// it never took it, shuts down.
+    fn close(mut self) {
+        let current = self.worker.take();
+        let waiting = self.parked.take();
+        for worker in current.into_iter().chain(waiting) {
+            self.retire(worker);
+        }
+        let unused = lock(&self.shared.prelisted).remove(&self.index);
+        shut_down(unused.into_iter().collect(), self.shared.stop.is_stopped());
+    }
+
+    /// Let `worker` go: announced first if it never was, its session ended
+    /// if it is open ([`Shared::end_session`]), then shut down, unless it
+    /// died meanwhile.
+    fn retire(&self, mut worker: LaneWorker) {
+        worker.announce(self.index, self.send);
+        let LaneWorker {
+            worker,
+            adapter,
+            session,
+            ..
+        } = worker;
+        let alive = match session {
+            SessionState::Open => self
+                .shared
+                .end_session(self.index, worker, &adapter, self.send),
+            SessionState::Ended => Some(worker),
+        };
+        if let Some(worker) = alive {
+            let exit = worker.shutdown();
+            (self.send)(Message::WorkerFinished {
+                worker: self.index,
+                exit_status: exit.code(),
+                error: None,
+            });
+        }
+    }
+}
+
+impl LaneWorker {
+    /// A worker of `adapter`'s, its session open, not yet announced.
+    fn new(worker: Worker, adapter: AdapterName) -> Self {
+        Self {
+            worker,
+            adapter,
+            session: SessionState::Open,
+            announced: Announced::Deferred,
+        }
+    }
+
+    /// Send lane `lane`'s `worker_started` for the worker, unless it was.
+    fn announce(&mut self, lane: WorkerIndex, send: &dyn Fn(Message)) {
+        if self.announced == Announced::Deferred {
+            self.announced = Announced::Yes;
+            send(Message::WorkerStarted {
+                worker: lane,
+                pid: self.worker.pid(),
+                python: self.worker.python().to_string(),
+                version: self.worker.version().to_string(),
+            });
+        }
     }
 }

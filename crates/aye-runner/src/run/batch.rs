@@ -26,16 +26,15 @@ enum End {
 
 impl Shared<'_> {
     /// Run `batch` on the lane's `worker` (busy already) and report it: its
-    /// start, its records, its end. A worker that dies meanwhile is gone
-    /// from `worker` ([`Shared::crashed`]).
+    /// start, its records, its end. The worker, unless it died meanwhile
+    /// ([`Shared::crashed`]).
     pub(super) fn execute(
         &self,
         lane: WorkerIndex,
-        worker: &mut Option<Worker>,
+        mut worker: Worker,
         batch: &Assigned,
         send: &dyn Fn(Message),
-    ) {
-        let running = worker.as_mut().expect("a worker runs the batch");
+    ) -> Option<Worker> {
         let share = self.maxfail.share();
         send(Message::BatchStarted {
             worker: lane,
@@ -44,7 +43,7 @@ impl Shared<'_> {
             cases: u32::try_from(batch.spec.ids.len()).unwrap_or(u32::MAX),
             share,
         });
-        let end = self.run_batch(lane, running, batch, share, send);
+        let end = self.run_batch(lane, &mut worker, batch, share, send);
         let interrupted = self.idle(lane);
         match end {
             End::Done { status, track } => {
@@ -67,6 +66,7 @@ impl Shared<'_> {
                     verdict,
                     not_run: if cut { remaining } else { Vec::new() },
                 });
+                Some(worker)
             }
             End::Failed(message, track) => {
                 send(Message::Problem {
@@ -87,10 +87,11 @@ impl Shared<'_> {
                     verdict: Verdict::default(),
                     not_run: track.remaining(&batch.spec.ids),
                 });
+                Some(worker)
             }
             End::Eof(track) => {
-                let dead = worker.take().expect("running above");
-                self.crashed(lane, dead, batch, track, send);
+                self.crashed(lane, worker, batch, track, send);
+                None
             }
         }
     }
@@ -102,28 +103,26 @@ impl Shared<'_> {
     /// session. Not once the run is stopped (its workers are being killed);
     /// after `maxfail`, it still tears the session down, as pytest's `-x`
     /// does, and the log keeps what it reports as it keeps a halted run's.
+    /// The worker, unless it died meanwhile.
     pub(super) fn end_session(
         &self,
         lane: WorkerIndex,
-        worker: &mut Option<Worker>,
+        worker: Worker,
         adapter: &AdapterName,
         send: &dyn Fn(Message),
-    ) {
+    ) -> Option<Worker> {
         if self.stop.is_stopped() || !self.lists_session(adapter) {
-            return;
+            return Some(worker);
         }
-        let Some(running) = worker.as_mut() else {
-            return;
-        };
         // Registered busy so that a stop kills it; `maxfail` running out
         // interrupts only the workers busy then.
-        self.busy(lane, running.killer());
+        self.busy(lane, worker.killer());
         if self.stop.is_stopped() {
             self.idle(lane);
-            return;
+            return Some(worker);
         }
         let batch = self.queue.closing(adapter);
-        self.execute(lane, worker, &batch, send);
+        self.execute(lane, worker, &batch, send)
     }
 
     /// Run `batch` on `worker`, with its `share` of the run's `maxfail`.
