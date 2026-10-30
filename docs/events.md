@@ -324,7 +324,7 @@ How sure collection is that a case exists exactly as described.
 The renderers name each test, and each lifetime, by a short key beside its
 id: the start of its [test key](#identity), 5 hex digits long, longer only
 when needed (`3fae6`). A fold over the log in order
-(`aye_render::Keys`): every id, the first time a record names it
+(`aye_stream::Keys`): every id, the first time a record names it
 (`case_collected`, `test_started`, `sub_outcome`, `test_finished`; a
 lifetime's `lifetime_started` or `lifetime_finished`), takes the shortest
 start of at least 5 digits that no id before it starts with, and keeps it.

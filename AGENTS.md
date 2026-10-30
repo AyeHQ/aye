@@ -34,7 +34,8 @@ Runner crates (engine-agnostic; must never depend on an `aye-adapter-*` crate):
 - `crates/aye-config`, `crates/aye-collect`, `crates/aye-select`: the project root and config loading (`[tool.aye]` read as `AyeOptions` and resolved into typed `AyeSettings`, each value `Sourced` with its `ValueSource`), discovery infrastructure (walk, parse, recognize, refine), selection
 - `crates/aye-provision`: the interpreter (`PythonRequest` from a `RequestSource`, discovery, the `Interpreter` and its `PythonSource`) and the refinement cache's `EnvironmentFingerprint` (its venv layout and `InstalledModules`); later, environments through a `Provisioner` (uv as a subprocess first; bring-your-own paths), the version matrix's supplier
 - `crates/aye-runner`: workers, warm daemon, scheduling, backends, services, transport, and the embedded worker
-- `crates/aye-render`, `crates/aye-history`: consumers of the event stream (aye-render's text and JSON lines at a `Level`; aye-history also keeps each run's log in `.aye/runs`, which `aye show` reads back through aye-render)
+- `crates/aye-stream`: the folds over the event stream that aren't presentation, which the renderers, the run store and `aye show` share (`Consumer`, `Tee` and its error policies, `Keys`, `Tally`, held sub-outcomes, blocked tests, the first failure of each signature, definition lines, the run's facts, a stored run's `RunIndex`, `FileChange`)
+- `crates/aye-render`, `crates/aye-history`: consumers of the event stream (aye-render's text and JSON lines at a `Level`, presentation only, over aye-stream's folds; aye-history also keeps each run's log in `.aye/runs`, which `aye show` reads back through aye-stream's `RunIndex` and shows through aye-render)
 
 The engine crate (what workers run; the runner embeds it):
 

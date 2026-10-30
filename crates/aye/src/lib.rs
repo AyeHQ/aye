@@ -17,7 +17,8 @@
 //! Holds the static list of adapters the runner knows about, what the
 //! binary knows of each beyond the contract (its traits), and which of
 //! them a project runs (`registry.rs`); orchestration lives in
-//! `aye-runner`, presentation in `aye-render`. Linking an adapter here is
+//! `aye-runner`, the folds over the log that aren't presentation in
+//! `aye-stream`, presentation in `aye-render`. Linking an adapter here is
 //! the only place an adapter is depended on.
 //!
 //! Depends on: every runner crate and every `aye-adapter-*` crate. Its

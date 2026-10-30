@@ -23,11 +23,11 @@
 //! Depends on: aye-events, and aye-index for the places in a stored log.
 //!
 //! Decided (implementation, October 2026):
-//! - **The fold.** A [`Consumer`] receives every [`Record`](aye_events::Record) in log order and
-//!   is told when the stream ends ([`Consumer::finish`]); [`Tee`] fans one
-//!   stream out to several and keeps going when one of them fails, returning
-//!   the first error. Records of kinds a consumer does not know are
-//!   ignored. A consumer on stdout stops writing at its first error (a
+//! - **The fold.** A [`Consumer`] receives every
+//!   [`Record`](aye_events::Record) in log order and is told when the
+//!   stream ends ([`Consumer::finish`]); [`Tee`] fans one stream out to
+//!   several and keeps going when one of them fails, returning the first
+//!   error. Records of kinds a consumer does not know are ignored. A consumer on stdout stops writing at its first error (a
 //!   closed pipe), so it is reported once ([`StopAfterError`]); a report
 //!   written to a file at the end says its error, naming the file, and
 //!   fails the run, though the stream's end goes on ([`FailOnFinish`]).
