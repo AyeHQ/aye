@@ -8,82 +8,38 @@
 //! `lifetime`, `exit`, `passed` and `failed`, and `stale` lines. The
 //! renderers' own wording is theirs to pin.
 //!
-//! Runs need an interpreter, as in `cli.rs`: the workspace's `.venv` (from
-//! `uv sync`) or `AYE_TEST_PYTHON`; without one the tests are skipped,
-//! loudly. `aye show` itself needs none, and is never given one.
+//! Runs need an interpreter, the one aye-test finds; without one the tests
+//! are skipped, loudly. `aye show` itself needs none, and is never given
+//! one. Every run is in aye-test's hermetic environment.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use aye_render::Keys;
+use aye_test::{Needs, TestContext, code, json_lines, project, runs_dir, stderr, stdout};
 use serde_json::Value;
 
-#[expect(clippy::print_stderr, reason = "a test says why it skips")]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the tests' own settings, not the environment aye reads"
-)]
+/// The interpreter runs are given: any will do.
 fn python() -> Option<PathBuf> {
-    let candidate = std::env::var_os("AYE_TEST_PYTHON").map_or_else(
-        || {
-            let venv = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv");
-            if cfg!(windows) {
-                venv.join("Scripts/python.exe")
-            } else {
-                venv.join("bin/python")
-            }
-        },
-        PathBuf::from,
-    );
-    let ok = Command::new(&candidate)
-        .args(["-c", "import sys"])
-        .output()
-        .is_ok_and(|o| o.status.success());
-    if ok {
-        Some(candidate)
-    } else {
-        eprintln!("skipping: no Python (run `uv sync`, or set AYE_TEST_PYTHON)");
-        None
-    }
+    aye_test::test_python(Needs::Stdlib)
 }
 
-/// A project in a fresh directory: `files` are (path, contents), and a
-/// `pyproject.toml` is added at the top unless one is given.
-fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    if !files.iter().any(|(path, _)| *path == "pyproject.toml") {
-        fs::write(
-            dir.path().join("pyproject.toml"),
-            "[project]\nname = \"p\"\nversion = \"0\"\n",
-        )
-        .unwrap();
-    }
-    for (path, contents) in files {
-        let path = dir.path().join(path);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, contents).unwrap();
-    }
-    dir
+/// aye, as this test target builds it.
+fn context() -> TestContext {
+    TestContext::new(env!("CARGO_BIN_EXE_aye"))
 }
 
+/// aye with `args`, in `cwd`, in the hermetic environment.
 fn command(cwd: &Path, args: &[&str]) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_aye"));
-    command
-        .args(args)
-        .current_dir(cwd)
-        .env_remove("GITHUB_ACTIONS")
-        .env_remove("PYTEST_ADDOPTS")
-        .env_remove("AYE_PYTHON")
-        .env("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1");
+    let mut command = context().command(cwd);
+    command.args(args);
     command
 }
 
 /// A run, with `--python`.
 fn run(python: &Path, cwd: &Path, args: &[&str]) -> Output {
-    let mut all = vec!["--python", python.to_str().unwrap()];
-    all.extend(args);
-    command(cwd, &all).output().unwrap()
+    context().run(python, cwd, args).output().unwrap()
 }
 
 /// `aye show`, without an interpreter.
@@ -93,32 +49,13 @@ fn show(cwd: &Path, args: &[&str]) -> Output {
     command(cwd, &all).output().unwrap()
 }
 
-fn code(output: &Output) -> i32 {
-    output.status.code().unwrap()
-}
-
-fn stdout(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
-fn stderr(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stderr).into_owned()
-}
-
-fn json(output: &Output) -> Vec<Value> {
-    stdout(output)
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("{e}: {line}")))
-        .collect()
-}
-
 /// `aye show` with `args`, in JSON lines, which must exit 0.
 fn show_json(cwd: &Path, args: &[&str]) -> Vec<Value> {
     let mut all = vec!["--output", "json"];
     all.extend(args);
     let output = show(cwd, &all);
     assert_eq!(code(&output), 0, "{args:?}: {}", stderr(&output));
-    json(&output)
+    json_lines(&output)
 }
 
 /// The ids of the bad outcomes JSON lines detail: each `fail` line's test,
@@ -217,7 +154,7 @@ fn full_key(id: &str) -> String {
 }
 
 fn last(dir: &Path) -> String {
-    fs::read_to_string(dir.join(".aye/runs/last"))
+    fs::read_to_string(runs_dir(dir).join(aye_history::runs::LAST))
         .unwrap()
         .trim()
         .to_owned()
@@ -225,9 +162,7 @@ fn last(dir: &Path) -> String {
 
 /// The keys of the run stored as `run`, as the run printed them.
 fn keys(dir: &Path, run: &str) -> Keys {
-    let records = aye_history::RunStore::new(dir.join(".aye/runs"))
-        .log(run)
-        .unwrap();
+    let records = aye_history::RunStore::new(runs_dir(dir)).log(run).unwrap();
     Keys::of(&records)
 }
 
@@ -251,7 +186,7 @@ fn every_run_is_kept_numbered_with_its_history() {
     // The JSON lines' failures, as they finish, at the levels with a line
     // each.
     for verbosity in ["-v", "-vv"] {
-        let lines = json(&run(&python, dir.path(), &["--output", "json", verbosity]));
+        let lines = json_lines(&run(&python, dir.path(), &["--output", "json", verbosity]));
         assert_eq!(failures(&lines), [FAIL, INNER, PARAM_2], "{verbosity}");
     }
     assert_eq!(last(dir.path()), "r3");
@@ -264,7 +199,7 @@ fn every_run_is_kept_numbered_with_its_history() {
         stdout(&log),
         stdout(&show(dir.path(), &["--log", "--output", "text"]))
     );
-    let records = json(&log);
+    let records = json_lines(&log);
     assert_eq!(records[0]["event"], "run_started");
     assert_eq!(records[0]["run_number"], 3);
     assert_eq!(records[0]["run"].as_str().unwrap().len(), 16);
@@ -292,7 +227,7 @@ fn every_run_is_kept_numbered_with_its_history() {
     );
     assert_eq!(history(&records, "tests/test_a.py::test_pass"), Value::Null);
     // The first run's: no history yet.
-    let first = json(&show(dir.path(), &["--log", "--run", "r1"]));
+    let first = json_lines(&show(dir.path(), &["--log", "--run", "r1"]));
     assert_eq!(first[0]["run_number"], 1);
     assert_eq!(history(&first, FAIL), Value::Null);
     // History keeps each test's last outcomes, and when its bad streak
@@ -425,7 +360,7 @@ fn show_filters_the_list_and_failed_details_every_failure() {
         &dir.path().join("tests"),
         &["test_b.py", "--output", "json", "-q"],
     );
-    assert_eq!(count(summary(&json(&sub)), "passed"), 2);
+    assert_eq!(count(summary(&json_lines(&sub)), "passed"), 2);
 }
 
 #[test]
@@ -958,13 +893,13 @@ fn the_whole_list_ends_with_the_runs_own_summary() {
     );
     // The same summary, but for `tests`, which only the run's collection
     // says.
-    let mut ran_summary = json(&ran)[0].clone();
+    let mut ran_summary = json_lines(&ran)[0].clone();
     ran_summary.as_object_mut().unwrap().remove("tests");
     assert_eq!(
-        json(&show(dir.path(), &["-q", "--output", "json"])),
+        json_lines(&show(dir.path(), &["-q", "--output", "json"])),
         [ran_summary]
     );
-    assert_eq!(count(summary(&json(&ran)), "skipped"), 1);
+    assert_eq!(count(summary(&json_lines(&ran)), "skipped"), 1);
     // The list: the collection error as the run shows it, a line for the
     // module skipped, the tests, then the summary.
     let error = "error[syntax-error] tests/test_broken.py:1: syntax error at 1:14: Expected a parameter or the end of the parameter list\n";

@@ -154,6 +154,7 @@ dependencies = [
  "aye-runner",
  "aye-select",
  "aye-static",
+ "aye-test",
  "clap",
  "ctrlc",
  "insta",
@@ -361,6 +362,16 @@ dependencies = [
 [[package]]
 name = "aye-static"
 version = "0.0.1"
+
+[[package]]
+name = "aye-test"
+version = "0.0.1"
+dependencies = [
+ "aye-fs",
+ "aye-static",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "bitflags"

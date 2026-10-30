@@ -40,6 +40,7 @@ aye-select = { workspace = true }
 aye-static = { workspace = true }
 
 [dev-dependencies]
+aye-test = { path = "../aye-test" }
 insta = { workspace = true }
 insta-cmd = { workspace = true }
 ruff_python_parser = { workspace = true }

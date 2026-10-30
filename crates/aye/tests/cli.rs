@@ -2,214 +2,62 @@
 //! arguments are read, exit codes, and what reaches stdout, the JUnit report
 //! and history.
 //!
-//! Runs with the workspace's `.venv` (from `uv sync`), or `AYE_TEST_PYTHON`,
-//! which have pytest installed, so that aye's own `pytest` module is shown
-//! to win over it (aye never imports pytest); some tests also make a venv
-//! without pytest. Without one the tests are skipped, loudly. Every run has
-//! `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`, so that the plugins the interpreter
+//! Runs with the interpreter aye-test finds, which has pytest, so that aye's
+//! own `pytest` module is shown to win over it (aye never imports pytest);
+//! some tests also make a venv without pytest. Without one the tests are
+//! skipped, loudly. Every run is in aye-test's hermetic environment, where
+//! pytest's plugin autoloading is off, so that the plugins the interpreter
 //! happens to install (platformdirs ships one) don't add warnings to what a
 //! test checks.
 
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use serde_json::{Map, Value, json};
+use aye_test::{
+    Needs, TestContext, as_records, code, events, json_lines, project, stdout, venv_without_pytest,
+};
+use serde_json::{Value, json};
 
-#[expect(clippy::print_stderr, reason = "a test says why it skips")]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the tests' own settings, not the environment aye reads"
-)]
+mod common;
+
+use common::{kept, runs_in};
+
+/// aye, as this test target builds it.
+fn context() -> TestContext {
+    TestContext::new(env!("CARGO_BIN_EXE_aye"))
+}
+
+/// The interpreter runs are given: one with pytest.
 fn python() -> Option<PathBuf> {
-    let candidate = std::env::var_os("AYE_TEST_PYTHON").map_or_else(
-        || {
-            let venv = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv");
-            if cfg!(windows) {
-                venv.join("Scripts/python.exe")
-            } else {
-                venv.join("bin/python")
-            }
-        },
-        PathBuf::from,
-    );
-    let ok = Command::new(&candidate)
-        .args(["-c", "import pytest"])
-        .output()
-        .is_ok_and(|o| o.status.success());
-    if ok {
-        Some(candidate)
-    } else {
-        eprintln!("skipping: no Python with pytest (run `uv sync`, or set AYE_TEST_PYTHON)");
-        None
-    }
+    aye_test::test_python(Needs::Pytest)
 }
 
-/// A project in a fresh directory: `files` are (path, contents), and a
-/// `pyproject.toml` is added at the top unless one is given.
-fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    if !files.iter().any(|(path, _)| *path == "pyproject.toml") {
-        fs::write(
-            dir.path().join("pyproject.toml"),
-            "[project]\nname = \"p\"\nversion = \"0\"\n",
-        )
-        .unwrap();
-    }
-    for (path, contents) in files {
-        let path = dir.path().join(path);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, contents).unwrap();
-    }
-    dir
-}
-
-/// What pytest would autoload from the interpreter's packages is left out
-/// of every run (see the module's docs).
-const NO_AUTOLOAD: (&str, &str) = ("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1");
-
+/// A run with `python`, in `cwd`, in the hermetic environment.
 fn aye_command(python: &Path, cwd: &Path, args: &[&str]) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_aye"));
-    command
-        .arg("--python")
-        .arg(python)
-        .args(args)
-        .current_dir(cwd)
-        .env_remove("GITHUB_ACTIONS")
-        .env_remove("PYTEST_ADDOPTS")
-        .env(NO_AUTOLOAD.0, NO_AUTOLOAD.1);
-    command
+    context().run(python, cwd, args)
 }
 
 fn aye(python: &Path, cwd: &Path, args: &[&str]) -> Output {
     aye_command(python, cwd, args).output().unwrap()
 }
 
-fn code(output: &Output) -> i32 {
-    output.status.code().unwrap()
-}
-
-fn stdout(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
-/// Each line of stdout, read as JSON.
-fn records(output: &Output) -> Vec<Value> {
-    stdout(output)
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("{e}: {line}")))
-        .collect()
-}
-
-/// The run store of the project `cwd` is in.
-fn store(cwd: &Path) -> aye_history::RunStore {
-    let root = cwd
-        .ancestors()
+/// The project `cwd` is in: the nearest directory with a `pyproject.toml`.
+fn root_of(cwd: &Path) -> &Path {
+    cwd.ancestors()
         .find(|dir| dir.join("pyproject.toml").is_file())
-        .unwrap_or(cwd);
-    aye_history::RunStore::new(root.join(".aye").join(aye_history::runs::DIR))
-}
-
-/// The runs the project `cwd` is in keeps.
-fn runs_in(cwd: &Path) -> HashSet<String> {
-    store(cwd)
-        .runs()
-        .into_iter()
-        .map(|meta| meta.run.to_string())
-        .collect()
-}
-
-/// The log of the run the project `cwd` is in kept since `before`, every
-/// record as the run wrote it (`aye show --log`; what `--output json
-/// -vvv` printed before the detail ladder); `None` when it kept none.
-fn kept(cwd: &Path, before: &HashSet<String>) -> Option<Vec<Value>> {
-    let store = store(cwd);
-    let meta = store
-        .runs()
-        .into_iter()
-        .find(|meta| !before.contains(&meta.run.to_string()))?;
-    let log = store.log(&meta.run.to_string()).unwrap();
-    Some(
-        log.iter()
-            .map(|record| serde_json::to_value(record).unwrap())
-            .collect(),
-    )
+        .unwrap_or(cwd)
 }
 
 /// Runs aye with `args` in `cwd`, and the run's log: the one it kept, or
 /// for a run that keeps none (collect-only, or nothing to show) what its
 /// JSON lines say, as records ([`as_records`]; `args` must ask for JSON).
 fn logged(python: &Path, cwd: &Path, args: &[&str]) -> (Output, Vec<Value>) {
-    let before = runs_in(cwd);
+    let root = root_of(cwd);
+    let before = runs_in(root);
     let output = aye(python, cwd, args);
-    let log = kept(cwd, &before).unwrap_or_else(|| as_records(&output));
+    let log = kept(root, &before).unwrap_or_else(|| as_records(&output));
     (output, log)
-}
-
-/// What a run's JSON lines say, as the records its log would hold: each
-/// case, diagnostic and failed worker, and the summary as
-/// `collection_finished` and `run_finished`. For runs that keep no log.
-fn as_records(output: &Output) -> Vec<Value> {
-    let mut log = Vec::new();
-    for line in records(output) {
-        let record = match line["type"].as_str().unwrap_or_default() {
-            "case" => json!({
-                "event": "case_collected",
-                "id": line["id"],
-                "certainty": if line["partial"] == true { "partial" } else { "exact" },
-            }),
-            "collection_error" => json!({
-                "event": "diagnostic",
-                "severity": "error",
-                "code": line["code"],
-                "path": line["path"],
-                "message": line["error"],
-            }),
-            "diagnostic" => json!({
-                "event": "diagnostic",
-                "severity": line["severity"],
-                "code": line["code"],
-                "path": line["path"],
-                "message": line["message"],
-            }),
-            "worker_error" => json!({"event": "worker_finished", "error": line["error"]}),
-            "summary" => {
-                let count = |name: &str| line.get(name).cloned().unwrap_or(json!(0));
-                log.push(json!({
-                    "event": "collection_finished",
-                    "selected": count("tests"),
-                    "deselected": count("deselected"),
-                }));
-                let mut finished = Map::new();
-                finished.insert("event".into(), json!("run_finished"));
-                finished.insert("exit_code".into(), line["exit"].clone());
-                finished.insert(
-                    "counts".into(),
-                    json!({
-                        "passed": count("passed"),
-                        "failed": count("failed"),
-                        "error": count("errors"),
-                        "skipped": count("skipped"),
-                        "expected_failure": count("expected_failure"),
-                        "unexpected_pass": count("unexpected_pass"),
-                        "deselected": count("deselected"),
-                    }),
-                );
-                if let Some(stopped) = line.get("stopped") {
-                    finished.insert("stopped".into(), stopped.clone());
-                }
-                Value::Object(finished)
-            }
-            _ => continue,
-        };
-        log.push(record);
-    }
-    log
-}
-
-fn events<'a>(records: &'a [Value], kind: &str) -> Vec<&'a Value> {
-    records.iter().filter(|r| r["event"] == kind).collect()
 }
 
 /// `(id, outcome)` of every `test_finished`.
@@ -466,7 +314,7 @@ fn annotations_are_relative_to_the_repository() {
             .output()
             .unwrap();
         assert_eq!(code(&output), 1);
-        records(&output);
+        json_lines(&output);
     }
 }
 
@@ -807,7 +655,7 @@ fn a_run_cut_short_says_why() {
         &["--output", "json", "-v", "--maxfail", "2"],
     );
     assert!(
-        records(&lines).last().unwrap()["stopped"] == "maxfail",
+        json_lines(&lines).last().unwrap()["stopped"] == "maxfail",
         "{}",
         stdout(&lines)
     );
@@ -1172,13 +1020,8 @@ fn aye_config_shows_the_output() {
     let Some(python) = python() else { return };
     let dir = project(&[("tests/test_a.py", PASSING)]);
     let shown = |args: &[&str]| {
-        let output = Command::new(env!("CARGO_BIN_EXE_aye"))
-            .arg("config")
-            .arg("--python")
-            .arg(&python)
-            .args(args)
-            .current_dir(dir.path())
-            .env_remove("PYTEST_ADDOPTS")
+        let output = context()
+            .config(&python, dir.path(), args)
             .output()
             .unwrap();
         assert_eq!(code(&output), 0, "{args:?}: {}", stdout(&output));
@@ -1262,7 +1105,7 @@ fn json_output_follows_the_verbosity() {
     let lines = |args: &[&str]| {
         let output = aye(&python, dir.path(), &[&["--output", "json"], args].concat());
         assert_eq!(code(&output), 1, "{args:?}: {}", stdout(&output));
-        records(&output)
+        json_lines(&output)
     };
     let key = key_of("test_fail");
 
@@ -1659,14 +1502,7 @@ fn the_frameworks_junit_report_is_aye_s_whole_report() {
 
 /// `aye config`, run in `cwd` with `python`.
 fn config(python: &Path, cwd: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_aye"))
-        .arg("config")
-        .arg("--python")
-        .arg(python)
-        .current_dir(cwd)
-        .env_remove("PYTEST_ADDOPTS")
-        .output()
-        .unwrap()
+    context().config(python, cwd, &[]).output().unwrap()
 }
 
 /// What `aye config` says about the adapters: their names and why.
@@ -1680,52 +1516,6 @@ fn adapters_line(python: &Path, cwd: &Path) -> String {
         .unwrap_or_else(|| panic!("no adapters line: {}", stdout(&output)))
         .trim()
         .to_string()
-}
-
-/// A venv of `python`'s base interpreter without pytest, laid out as
-/// `python -m venv` lays one out (an interpreter beside a `pyvenv.cfg`
-/// leaving out the system's packages, and an empty `site-packages`), in
-/// `dir`. `None` when the base interpreter itself has pytest.
-#[cfg(unix)]
-#[expect(clippy::print_stderr, reason = "a test says why it skips")]
-fn venv_without_pytest(python: &Path, dir: &Path) -> Option<PathBuf> {
-    let probe = Command::new(python)
-        .args([
-            "-c",
-            "import sys; print(sys._base_executable); print(f'{sys.version_info[0]}.{sys.version_info[1]}')",
-        ])
-        .output()
-        .unwrap();
-    let text = String::from_utf8(probe.stdout).unwrap();
-    let mut lines = text.lines();
-    let base = PathBuf::from(lines.next()?);
-    let version = lines.next()?;
-    let venv = dir.join("venv");
-    fs::create_dir_all(venv.join("bin")).unwrap();
-    fs::create_dir_all(venv.join(format!("lib/python{version}/site-packages"))).unwrap();
-    fs::write(
-        venv.join("pyvenv.cfg"),
-        format!(
-            "home = {}\ninclude-system-site-packages = false\nversion = {version}\n",
-            base.parent()?.display()
-        ),
-    )
-    .unwrap();
-    let interpreter = venv.join("bin/python");
-    std::os::unix::fs::symlink(&base, &interpreter).unwrap();
-    let has_pytest = Command::new(&interpreter)
-        .args(["-c", "import pytest"])
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    if has_pytest {
-        eprintln!(
-            "skipping: the base interpreter {} has pytest",
-            base.display()
-        );
-        return None;
-    }
-    Some(interpreter)
 }
 
 /// Without `[tool.aye] adapters`, the default is doctest then pytest, for
@@ -2038,11 +1828,10 @@ fn session_plugins_options_pin_nothing() {
         ("test_a.py", PASSING),
         ("test_b.py", PASSING),
     ]);
-    let output = Command::new(env!("CARGO_BIN_EXE_aye"))
+    let output = context()
+        .command(dir.path())
         .args(["config", "-n", "2", "--python"])
         .arg(&python)
-        .current_dir(dir.path())
-        .env_remove("PYTEST_ADDOPTS")
         .output()
         .unwrap();
     assert_eq!(code(&output), 0, "{}", stdout(&output));
@@ -3140,13 +2929,12 @@ fn a_run_of_pytests_tests_cant_do_without_refinement() {
 #[cfg(unix)]
 fn aye_alone(cwd: &Path, home: &Path, args: &[&str]) -> Output {
     let path = tempfile::tempdir().unwrap();
-    Command::new(env!("CARGO_BIN_EXE_aye"))
+    context()
+        .bare(cwd)
         .args(args)
-        .current_dir(cwd)
-        .env_clear()
         .env("PATH", path.path())
         .env("HOME", home)
-        .env(NO_AUTOLOAD.0, NO_AUTOLOAD.1)
+        .env("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
         .output()
         .unwrap()
 }
@@ -3372,12 +3160,10 @@ fn aye_config_says_where_the_interpreter_came_from() {
         if project_venv {
             fake(&root.join(".venv/bin/python"));
         }
-        let mut command = Command::new(env!("CARGO_BIN_EXE_aye"));
+        let mut command = context().bare(&root);
         command
             .arg("config")
             .args(args)
-            .current_dir(&root)
-            .env_clear()
             .env("PATH", &elsewhere)
             .env("HOME", &elsewhere);
         for (name, value) in vars {

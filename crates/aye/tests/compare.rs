@@ -24,10 +24,11 @@
 //! failure on. `PYTEST_ADDOPTS` and `AYE_EXAMPLE_FAIL` from the caller's
 //! environment never reach a run.
 //!
-//! Needs a Python with pytest, the referee's: the workspace's `.venv` (from
-//! `uv sync`), or `AYE_TEST_PYTHON`, which aye runs with too (its `pytest`
-//! module wins over the installed one). Without one the tests are skipped,
-//! loudly.
+//! Needs a Python with pytest, the referee's, which aye runs with too (its
+//! `pytest` module wins over the installed one): the one aye-test finds.
+//! Without one the tests are skipped, loudly. aye runs in the referee's
+//! environment, not aye-test's hermetic one: only what `record.py` clears
+//! is cleared.
 //!
 //! `native_suites` (ignored: `cargo test -p aye --test compare --
 //! --ignored native_suites --nocapture`) runs every suite and example as
@@ -37,44 +38,25 @@
 //! (`auto`, a count), and prints a table of what agrees. It never fails: it
 //! measures.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::{Value, json};
+use aye_test::{Needs, as_records, events, examples_dir, venv_without_pytest};
+use serde_json::Value;
+
+mod common;
+
+use common::{kept, runs_in};
 
 /// Removed from every run's environment, so the caller's shell can't change
 /// a result (`record.py` clears the same).
 const CLEARED: [&str; 2] = ["PYTEST_ADDOPTS", "AYE_EXAMPLE_FAIL"];
 
-#[expect(clippy::print_stderr, reason = "a test says why it skips")]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the tests' own settings, not the environment aye reads"
-)]
+/// The referee's interpreter, with pytest.
 fn python() -> Option<PathBuf> {
-    let candidate = std::env::var_os("AYE_TEST_PYTHON").map_or_else(
-        || {
-            let venv = manifest_dir().join("../../.venv");
-            if cfg!(windows) {
-                venv.join("Scripts/python.exe")
-            } else {
-                venv.join("bin/python")
-            }
-        },
-        PathBuf::from,
-    );
-    let ok = Command::new(&candidate)
-        .args(["-c", "import pytest"])
-        .output()
-        .is_ok_and(|o| o.status.success());
-    if ok {
-        Some(candidate)
-    } else {
-        eprintln!("skipping: no Python with pytest (run `uv sync`, or set AYE_TEST_PYTHON)");
-        None
-    }
+    aye_test::test_python(Needs::Pytest)
 }
 
 /// A project the harness compares, a suite or an example, by its test's
@@ -92,10 +74,6 @@ fn dir_name(test: &str) -> String {
 
 fn manifest_dir() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-}
-
-fn examples_dir() -> PathBuf {
-    manifest_dir().join("../../examples")
 }
 
 /// The directories in `of`, sorted.
@@ -163,32 +141,11 @@ impl Project {
     }
 }
 
-/// A fresh copy of a project, so runs never share history or caches.
+/// A fresh copy of a project, so runs never share history or caches, and
+/// without the referee's recording.
 fn copy_project(project: Project) -> tempfile::TempDir {
-    fn copy(from: &Path, to: &Path) {
-        fs::create_dir_all(to).unwrap();
-        for entry in fs::read_dir(from).unwrap() {
-            let entry = entry.unwrap();
-            let name = entry.file_name();
-            let skip = [
-                ".aye",
-                "__pycache__",
-                ".pytest_cache",
-                ".venv",
-                "expected.json",
-            ];
-            if skip.iter().any(|s| name == *s) {
-                continue;
-            }
-            if entry.file_type().unwrap().is_dir() {
-                copy(&entry.path(), &to.join(&name));
-            } else {
-                fs::copy(entry.path(), to.join(&name)).unwrap();
-            }
-        }
-    }
     let dir = tempfile::tempdir().unwrap();
-    copy(&project.dir(), dir.path());
+    aye_test::copy_project(&project.dir(), dir.path(), &["expected.json"]);
     dir
 }
 
@@ -246,67 +203,6 @@ fn recorded(project: Project) -> Recorded {
     }
 }
 
-/// The run store of the project copied to `root`.
-fn store(root: &Path) -> aye_history::RunStore {
-    aye_history::RunStore::new(root.join(".aye").join(aye_history::runs::DIR))
-}
-
-fn runs_in(root: &Path) -> HashSet<String> {
-    store(root)
-        .runs()
-        .into_iter()
-        .map(|meta| meta.run.to_string())
-        .collect()
-}
-
-/// The log of the run the project at `root` kept since `before`, every
-/// record as the run wrote it (`aye show --log`); `None` when it kept none.
-fn kept(root: &Path, before: &HashSet<String>) -> Option<Vec<Value>> {
-    let store = store(root);
-    let meta = store
-        .runs()
-        .into_iter()
-        .find(|meta| !before.contains(&meta.run.to_string()))?;
-    let log = store.log(&meta.run.to_string()).ok()?;
-    Some(
-        log.iter()
-            .map(|record| serde_json::to_value(record).unwrap())
-            .collect(),
-    )
-}
-
-/// What a collect-only run's JSON lines (`-vv`) say, as the records its
-/// log would hold: its cases (`exact` unless `partial`, as with
-/// `--no-refine`) and diagnostics.
-fn as_records(stdout: &str) -> Vec<Value> {
-    stdout
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter_map(|line| match line["type"].as_str().unwrap_or_default() {
-            "case" => Some(json!({
-                "event": "case_collected",
-                "id": line["id"],
-                "certainty": if line["partial"] == true { "partial" } else { "exact" },
-            })),
-            "collection_error" => Some(json!({
-                "event": "diagnostic",
-                "severity": "error",
-                "code": line["code"],
-                "path": line["path"],
-                "message": line["error"],
-            })),
-            "diagnostic" => Some(json!({
-                "event": "diagnostic",
-                "severity": line["severity"],
-                "code": line["code"],
-                "path": line["path"],
-                "message": line["message"],
-            })),
-            _ => None,
-        })
-        .collect()
-}
-
 /// Runs aye on the project copied to `root`, and the run's log: the one
 /// it kept, or a collect-only run's JSON lines read as records.
 fn aye(
@@ -330,18 +226,14 @@ fn aye(
     command.envs(env.iter().map(|(k, v)| (k, v)));
     let before = runs_in(root);
     let output = command.output().unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
     assert!(
         !stdout.trim().is_empty(),
         "aye printed nothing; stderr:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let records = kept(root, &before).unwrap_or_else(|| as_records(&stdout));
+    let records = kept(root, &before).unwrap_or_else(|| as_records(&output));
     (records, output.status.code())
-}
-
-fn events<'a>(records: &'a [Value], kind: &'a str) -> impl Iterator<Item = &'a Value> + 'a {
-    records.iter().filter(move |r| r["event"] == kind)
 }
 
 /// How a run is named in failure messages: its environment, if any.
@@ -366,6 +258,7 @@ fn compare_outcomes(project: Project) {
         let dir = copy_project(project);
         let (records, status) = aye(&python, project, dir.path(), &run.env, &[]);
         let actual: BTreeMap<String, String> = events(&records, "test_finished")
+            .into_iter()
             .map(|e| {
                 (
                     e["id"].as_str().unwrap().to_string(),
@@ -416,6 +309,7 @@ fn compare_collection(project: Project) {
         // With refinement: exactly the referee's ids, in its order.
         let (records, _) = aye(&python, project, dir.path(), &run.env, &["--collect-only"]);
         let collected: Vec<String> = events(&records, "case_collected")
+            .into_iter()
             .map(|e| e["id"].as_str().unwrap().to_string())
             .collect();
         let want: BTreeSet<&String> = run.collected.iter().collect();
@@ -452,10 +346,12 @@ fn compare_collection(project: Project) {
             &["--collect-only", "--no-refine"],
         );
         let unrefined: BTreeSet<String> = events(&records, "diagnostic")
+            .into_iter()
             .filter(|d| d["code"] == "not-refined")
             .map(|d| d["path"].as_str().unwrap().to_string())
             .collect();
         let exact: BTreeSet<String> = events(&records, "case_collected")
+            .into_iter()
             .filter(|e| e["certainty"] == "exact")
             .map(|e| e["id"].as_str().unwrap().to_string())
             .collect();
@@ -582,46 +478,6 @@ fn native_python(python: &Path, dir: &Path) -> (PathBuf, &'static str) {
     }
 }
 
-/// A venv of `python`'s base interpreter without pytest, laid out as
-/// `python -m venv` lays one out (as `cli.rs` makes one), in `dir`; `None`
-/// when it can't be made or the base interpreter has pytest.
-#[cfg(unix)]
-fn venv_without_pytest(python: &Path, dir: &Path) -> Option<PathBuf> {
-    let probe = Command::new(python)
-        .args([
-            "-c",
-            "import sys; print(sys._base_executable); print(f'{sys.version_info[0]}.{sys.version_info[1]}')",
-        ])
-        .output()
-        .ok()?;
-    let text = String::from_utf8(probe.stdout).ok()?;
-    let mut lines = text.lines();
-    let base = PathBuf::from(lines.next()?);
-    let version = lines.next()?;
-    let venv = dir.join("venv");
-    fs::create_dir_all(venv.join("bin")).ok()?;
-    fs::create_dir_all(venv.join(format!("lib/python{version}/site-packages"))).ok()?;
-    let home = base.parent()?.display().to_string();
-    fs::write(
-        venv.join("pyvenv.cfg"),
-        format!("home = {home}\ninclude-system-site-packages = false\nversion = {version}\n"),
-    )
-    .ok()?;
-    let interpreter = venv.join("bin/python");
-    std::os::unix::fs::symlink(&base, &interpreter).ok()?;
-    let has_pytest = Command::new(&interpreter)
-        .args(["-c", "import pytest"])
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    (!has_pytest).then_some(interpreter)
-}
-
-#[cfg(not(unix))]
-fn venv_without_pytest(_python: &Path, _dir: &Path) -> Option<PathBuf> {
-    None
-}
-
 /// How one recorded run went with `python`: `None` when it agrees with the
 /// referee, else why not, in a few words.
 fn native_run(python: &Path, workers: Option<&str>, project: Project, run: &Run) -> Option<String> {
@@ -643,8 +499,7 @@ fn native_run(python: &Path, workers: Option<&str>, project: Project, run: &Run)
         Ok(output) => output,
         Err(err) => return Some(format!("aye didn't start: {err}")),
     };
-    let records: Vec<Value> = kept(dir.path(), &before)
-        .unwrap_or_else(|| as_records(&String::from_utf8_lossy(&output.stdout)));
+    let records: Vec<Value> = kept(dir.path(), &before).unwrap_or_else(|| as_records(&output));
     if records.is_empty() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Some(format!(
@@ -653,6 +508,7 @@ fn native_run(python: &Path, workers: Option<&str>, project: Project, run: &Run)
         ));
     }
     let actual: BTreeMap<String, String> = events(&records, "test_finished")
+        .into_iter()
         .map(|e| {
             (
                 e["id"].as_str().unwrap_or_default().to_string(),
@@ -661,6 +517,7 @@ fn native_run(python: &Path, workers: Option<&str>, project: Project, run: &Run)
         })
         .collect();
     let collected: Vec<String> = events(&records, "case_collected")
+        .into_iter()
         .map(|e| e["id"].as_str().unwrap_or_default().to_string())
         .collect();
     let mut problems = Vec::new();
@@ -704,6 +561,7 @@ fn native_run(python: &Path, workers: Option<&str>, project: Project, run: &Run)
     }
     if !problems.is_empty() {
         let errors: Vec<String> = events(&records, "diagnostic")
+            .into_iter()
             .filter(|d| d["severity"] == "error")
             .take(1)
             .map(|d| {

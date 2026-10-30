@@ -9,84 +9,34 @@
 //!
 //! The project `fixtures/contracts` records what it sees in its own
 //! `observed.json`, which must equal `fixtures/contracts.json`, recorded
-//! with aye 0.0.1. Runs with the workspace's `.venv` (from `uv sync`), or
-//! `AYE_TEST_PYTHON`, which have pytest installed, so that aye's own module
-//! is shown to win over it; without one the tests are skipped, loudly.
+//! with aye 0.0.1. Runs with the interpreter aye-test finds, which has
+//! pytest, so that aye's own module is shown to win over it; without one
+//! the tests are skipped, loudly.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use aye_events::{Event, Outcome, TestResult};
+use aye_test::{Needs, TestContext, copy_project, runs_dir, test_python};
 use serde_json::Value;
-
-#[expect(clippy::print_stderr, reason = "a test says why it skips")]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the tests' own settings, not the environment aye reads"
-)]
-fn python() -> Option<PathBuf> {
-    let candidate = std::env::var_os("AYE_TEST_PYTHON").map_or_else(
-        || {
-            let venv = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv");
-            if cfg!(windows) {
-                venv.join("Scripts/python.exe")
-            } else {
-                venv.join("bin/python")
-            }
-        },
-        PathBuf::from,
-    );
-    let ok = Command::new(&candidate)
-        .args(["-c", "import pytest"])
-        .output()
-        .is_ok_and(|o| o.status.success());
-    if ok {
-        Some(candidate)
-    } else {
-        eprintln!("skipping: no Python with pytest (run `uv sync`, or set AYE_TEST_PYTHON)");
-        None
-    }
-}
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
-}
-
-fn copy_dir(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            if entry.file_name() != "__pycache__" {
-                copy_dir(&entry.path(), &target);
-            }
-        } else {
-            fs::copy(entry.path(), target).unwrap();
-        }
-    }
 }
 
 /// The contracts project, run once in a fresh copy: the copy, and its
 /// stored log's results by test name.
 fn run(python: &Path) -> (tempfile::TempDir, BTreeMap<String, TestResult>) {
     let dir = tempfile::tempdir().unwrap();
-    copy_dir(&fixtures().join("contracts"), dir.path());
-    let output = Command::new(env!("CARGO_BIN_EXE_aye"))
-        .arg("--python")
-        .arg(python)
-        .arg("-q")
-        .current_dir(dir.path())
-        .env_remove("GITHUB_ACTIONS")
-        .env_remove("PYTEST_ADDOPTS")
-        .env("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    copy_project(&fixtures().join("contracts"), dir.path(), &[]);
+    let output = TestContext::new(env!("CARGO_BIN_EXE_aye"))
+        .run(python, dir.path(), &["-q"])
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&output.stdout);
     assert_eq!(output.status.code(), Some(1), "{text}");
-    let store = aye_history::RunStore::new(dir.path().join(".aye/runs"));
+    let store = aye_history::RunStore::new(runs_dir(dir.path()));
     let last = store.last().expect("a stored run");
     let results = store
         .log(&last.run.to_string())
@@ -105,7 +55,9 @@ fn run(python: &Path) -> (tempfile::TempDir, BTreeMap<String, TestResult>) {
 
 #[test]
 fn the_names_user_code_sees_are_unchanged() {
-    let Some(python) = python() else { return };
+    let Some(python) = test_python(Needs::Pytest) else {
+        return;
+    };
     let (dir, results) = run(&python);
     assert_eq!(results.len(), 17, "{:?}", results.keys());
     for (name, result) in &results {
@@ -144,7 +96,9 @@ fn the_names_user_code_sees_are_unchanged() {
 /// reason, and a skip raised with `aye_engine.Skip`.
 #[test]
 fn the_qualified_names_in_failures_are_unchanged() {
-    let Some(python) = python() else { return };
+    let Some(python) = test_python(Needs::Pytest) else {
+        return;
+    };
     let (_dir, results) = run(&python);
     let failure = |name: &str| results[name].failure().unwrap().clone();
     let lookup = failure("test_missing_fixture_through_request");

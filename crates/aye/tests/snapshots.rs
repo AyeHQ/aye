@@ -7,61 +7,32 @@
 //! Hermetic: each run gets a fresh copy of its project, and the snapshots
 //! leave out what varies between machines and runs (the project's path, the
 //! interpreter's path and version, durations, pids, run ids, aye's
-//! version). Runs with the workspace's `.venv` (from `uv sync`), or
-//! `AYE_TEST_PYTHON`, which have pytest installed, so that aye's own
-//! `pytest` module is shown to win over it; without one the tests are
-//! skipped, loudly. Unix only: the paths in the output are written
-//! otherwise on Windows.
+//! version: aye-test's filters). Runs with the interpreter aye-test finds,
+//! which has pytest, so that aye's own `pytest` module is shown to win over
+//! it; without one the tests are skipped, loudly. Unix only: the paths in
+//! the output are written otherwise on Windows.
 #![cfg(unix)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use aye_static::EnvVars;
+use aye_test::{Needs, TestContext, copy_project, examples_dir, filters, test_python};
 use insta::internals::Content;
 use insta_cmd::assert_cmd_snapshot;
 
 /// The interpreter, as it names itself (`sys.executable`): the path the
 /// output shows, which the snapshots leave out.
-#[expect(clippy::print_stderr, reason = "a test says why it skips")]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the tests' own settings, not the environment aye reads"
-)]
 fn python() -> Option<PathBuf> {
-    let candidate = std::env::var_os("AYE_TEST_PYTHON").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv/bin/python"),
-        PathBuf::from,
-    );
-    let named = Command::new(&candidate)
-        .args(["-c", "import sys, pytest; print(sys.executable)"])
+    let python = test_python(Needs::Pytest)?;
+    let output = Command::new(&python)
+        .args(["-c", "import sys; print(sys.executable)"])
         .output()
-        .ok()
-        .filter(|o| o.status.success());
-    if let Some(output) = named {
-        let executable = String::from_utf8(output.stdout).unwrap();
-        Some(PathBuf::from(executable.trim_end()))
-    } else {
-        eprintln!("skipping: no Python with pytest (run `uv sync`, or set AYE_TEST_PYTHON)");
-        None
-    }
-}
-
-fn copy_dir(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let name = entry.file_name();
-        if name == ".aye" || name == "__pycache__" || name == ".venv" {
-            continue;
-        }
-        let target = to.join(&name);
-        if entry.file_type().unwrap().is_dir() {
-            copy_dir(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), target).unwrap();
-        }
-    }
+        .unwrap();
+    assert!(output.status.success(), "{}", python.display());
+    let executable = String::from_utf8(output.stdout).unwrap();
+    Some(PathBuf::from(executable.trim_end()))
 }
 
 /// A fresh copy of a project, in a directory of its own name (the text
@@ -74,11 +45,8 @@ struct Project {
 impl Project {
     /// A copy of the example `name`.
     fn example(name: &str) -> Self {
-        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples")
-            .join(name);
         let project = Self::empty(name);
-        copy_dir(&source, &project.root);
+        copy_project(&examples_dir().join(name), &project.root, &[]);
         project
     }
 
@@ -101,29 +69,15 @@ impl Project {
     }
 }
 
-/// `aye` with `args`, in `cwd`, in an environment that names nothing of the
-/// machine's beyond the interpreter.
+/// `aye` with `args`, in `cwd`, in aye-test's hermetic environment, which
+/// names nothing of the machine's beyond the interpreter, without colour
+/// and 120 columns wide.
 fn aye(cwd: &Path, args: &[&str]) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_aye"));
-    command.args(args).current_dir(cwd);
-    for name in [
-        "AYE_PYTHON",
-        "VIRTUAL_ENV",
-        "GITHUB_ACTIONS",
-        "GITHUB_WORKSPACE",
-        "PYTEST_ADDOPTS",
-        "PYTEST_PLUGINS",
-        "PYTHONPATH",
-        "PYTHONOPTIMIZE",
-        "PY_IGNORE_IMPORTMISMATCH",
-        "CLICOLOR_FORCE",
-    ] {
-        command.env_remove(name);
-    }
+    let mut command = TestContext::new(env!("CARGO_BIN_EXE_aye")).command(cwd);
     command
-        .env("NO_COLOR", "1")
-        .env("COLUMNS", "120")
-        .env("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1");
+        .args(args)
+        .env(EnvVars::NO_COLOR, "1")
+        .env("COLUMNS", "120");
     command
 }
 
@@ -139,21 +93,17 @@ fn run(project: &Project, python: &Path, args: &[&str]) -> Command {
     aye(&project.root, &all)
 }
 
-/// What the snapshots leave out: `root`'s path (as given and resolved),
-/// the interpreter's path (also in the snapshot's command) and version,
-/// durations, pids, run ids and aye's version.
+/// What the snapshots leave out: aye-test's [`filters`] (`root`'s path,
+/// the interpreter's path and version, durations, pids, run ids and aye's
+/// version), and the interpreter's path in the snapshot's command.
 fn settings(root: Option<&Path>, python: Option<&Path>) -> insta::Settings {
     let mut settings = insta::Settings::clone_current();
     settings.set_prepend_module_to_snapshot(false);
-    if let Some(root) = root {
-        let resolved = fs::canonicalize(root).unwrap();
-        for path in [resolved.as_path(), root] {
-            settings.add_filter(&regex_escape(path.to_str().unwrap()), "[ROOT]");
-        }
+    for (pattern, replacement) in filters(root, python) {
+        settings.add_filter(&pattern, replacement);
     }
     if let Some(python) = python {
         let python = python.to_str().unwrap().to_owned();
-        settings.add_filter(&regex_escape(&python), "[PYTHON]");
         settings.add_dynamic_redaction(".args[]", move |value: Content, _| {
             if value.as_str() == Some(python.as_str()) {
                 Content::from("[PYTHON]")
@@ -162,32 +112,7 @@ fn settings(root: Option<&Path>, python: Option<&Path>) -> insta::Settings {
             }
         });
     }
-    for (pattern, replacement) in [
-        (r"python \d+\.\d+\.\d+\S*", "python [VERSION]"),
-        (r#""python":"\d+\.\d+[^"]*""#, r#""python":"[VERSION]""#),
-        (r#""version":"\d+\.\d+[^"]*""#, r#""version":"[VERSION]""#),
-        (r#""aye_version":"[^"]*""#, r#""aye_version":"[VERSION]""#),
-        (
-            r#""(t_ms|duration_ms|body_duration_ms|ms|s)":[-0-9.eE+]+"#,
-            r#""$1":[N]"#,
-        ),
-        (r"\b\d+(\.\d+)? ?(ms|s)\b", "[TIME]"),
-        (r#""pid":\d+"#, r#""pid":[PID]"#),
-        (r"\bpid \d+", "pid [PID]"),
-        (r#""run":"[0-9a-f]{16}""#, r#""run":"[RUN]""#),
-    ] {
-        settings.add_filter(pattern, replacement);
-    }
     settings
-}
-
-fn regex_escape(text: &str) -> String {
-    text.chars()
-        .flat_map(|c| {
-            let special = "\\.+*?()|[]{}^$#&-~".contains(c);
-            special.then_some('\\').into_iter().chain([c])
-        })
-        .collect()
 }
 
 #[test]
