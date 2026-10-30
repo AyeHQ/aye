@@ -44,6 +44,7 @@ The engine crate (what workers run; the runner embeds it):
 Framework libraries (what the adapters share; only the adapter crates depend on them):
 
 - `crates/aye-python-stdlib`: CPython's standard library behaviour in Rust (`fnmatch` with both readings of sets named, `glob` and the doctest adapter's approximation, `os.path`, reprs, builtins, `re` patterns, identifiers, the standard library's modules, unittest's loader rules); where the adapters' copies differed, each behaviour kept under a name
+- `crates/aye-python-semantic`: what a Python module binds, read statically on Ruff's AST (namespaces and the escape analysis, names resolved through imports, static values, classes and their C3 linearization, decorator and import-time facts, `sys.path` changes, module resolution); knows no framework, and takes what the one collecting a module does with it as a `Framework` its adapter gives
 
 Adapter crates (one framework each, implementing `aye-adapter`; only the binary links them):
 

@@ -16,7 +16,8 @@
 //! lands later behind the services interface in `aye-protocol`.
 //!
 //! Depends on: aye-adapter, aye-config (`[tool.aye.unittest]`, where a
-//! setting came from), aye-events, aye-protocol, aye-python-stdlib
+//! setting came from), aye-events, aye-protocol, aye-python-semantic (the
+//! C3 merge of a class's MRO, the `__main__` guard), aye-python-stdlib
 //! (`fnmatch`, `os.path`, the builtins, the standard library's modules,
 //! unittest's loader rules).
 //!

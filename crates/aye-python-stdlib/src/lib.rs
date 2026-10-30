@@ -31,7 +31,7 @@
 //!
 //! Owns: the standard library's behaviour, as the adapters read it. Does
 //! not own: a framework's rules (pytest's are the pytest and doctest
-//! adapters'), nor what a module binds (each adapter reads that itself).
+//! adapters'), nor what a module binds (aye-python-semantic reads that).
 //!
 //! Depends on: aye-fs, for `os.path`'s lexical forms. Knows no framework
 //! but the standard library's own unittest; only the adapters depend on it.

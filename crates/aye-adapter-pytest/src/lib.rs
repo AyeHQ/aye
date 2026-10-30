@@ -27,10 +27,13 @@
 //! Depends on: aye-adapter, aye-config (the INI and TOML loaders, where a
 //! setting came from, the worker count), aye-engine (the modules its
 //! front-end runs on), aye-events, aye-fs (pytest's common ancestor),
-//! aye-protocol, aye-python-stdlib (`fnmatch`, `glob`, `os.path`, the
-//! reprs, builtins and `re` patterns static values need, identifiers,
-//! unittest's bases), aye-static (the variables it reads by name). Must not
-//! be depended on by any runner crate; only the binary links it.
+//! aye-protocol, aye-python-semantic (what a module binds, read with
+//! pytest's `Framework`, `PYTEST`: namespaces and the escape analysis,
+//! static values, classes and their MRO, decorators, import-time facts,
+//! `sys.path` and module resolution), aye-python-stdlib (`fnmatch`, `glob`,
+//! `os.path`, ids' reprs and `str.isdigit`, identifiers, unittest's bases),
+//! aye-static (the variables it reads by name). Must not be depended on by
+//! any runner crate; only the binary links it.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **The project scan covers what pytest's session can load**: the
@@ -65,7 +68,7 @@
 //!   unconditionally before use that an escape analysis of the whole module
 //!   shows nothing can change (`CASES = [...]`, concatenations and `*`
 //!   splats of such lists; a `del` in a class body falls through to the
-//!   module's name; see `scope.rs` for what counts as a change). Dict
+//!   module's name; see aye-python-semantic's `namespace`). Dict
 //!   argvalues keep one entry per key, as Python compares keys. Containers,
 //!   and instances of well-known classes without a `__name__`
 //!   (`Decimal(...)`, `Path(...)`, `np.array(...)`), make pytest fall back
@@ -251,7 +254,7 @@
 //!   - a class whose tests may be added or removed: one handed to code aye
 //!     can't follow (passed to a call, iterated over, held by a name whose
 //!     attributes are set, `setattr`, `del K.attr`, a method called on it;
-//!     `scope.rs`'s escape analysis, which doesn't count `super(K, …)`,
+//!     the escape analysis, which doesn't count `super(K, …)`,
 //!     reads, or the module's own `K.attr = …` statements), one holding a
 //!     value when the module defines a `__set_name__`, one whose class or
 //!     base the module sets a test name, `pytestmark`, `runTest` or a dunder

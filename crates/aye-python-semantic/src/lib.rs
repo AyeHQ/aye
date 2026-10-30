@@ -15,7 +15,8 @@
 //!   the builtins, where an expression is evaluated.
 //! - [`eval`]: static values, and which of them building surely succeeds.
 //! - [`flow`]: generators, exclusive bindings, what may skip or raise
-//!   while a module is imported, and the statements that may not run.
+//!   while a module is imported, the statements that may not run, and the
+//!   `__main__` guard.
 //! - [`class`]: classes: their bases, known classes from elsewhere, and
 //!   names as a class body stores them.
 //! - [`c3`]: C3 linearization, the order of a class's MRO.
@@ -29,12 +30,12 @@
 //! decorator and import-time facts, `sys.path` changes and module
 //! resolution. Does not own: the standard library's behaviour
 //! (aye-python-stdlib), nor a framework's rules: what a framework does with
-//! a module (pytest's marks, hooks and skips) is a [`Framework`](framework::Framework)
-//! its adapter gives.
+//! a module (pytest's marks, hooks and skips) is a
+//! [`Framework`](framework::Framework) its adapter gives.
 //!
-//! Depends on: aye-python-stdlib (the builtins, `re`, reprs), and Ruff's
-//! AST. Knows no framework but the standard library's own unittest; only
-//! the adapters depend on it.
+//! Depends on: aye-python-stdlib (the builtins, `re`, reprs, `os.path`,
+//! unittest's bases), and Ruff's AST. Knows no framework but the standard
+//! library's own unittest; only the adapters depend on it.
 
 pub mod c3;
 pub mod class;
