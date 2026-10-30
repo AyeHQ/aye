@@ -15,6 +15,7 @@ aye-config = { workspace = true }
 aye-events = { workspace = true }
 aye-fs = { workspace = true }
 aye-protocol = { workspace = true }
+aye-pytest = { workspace = true }
 aye-python-semantic = { workspace = true }
 aye-python-stdlib = { workspace = true }
 aye-static = { workspace = true }

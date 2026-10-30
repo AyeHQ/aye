@@ -1,6 +1,6 @@
 [package]
 name = "aye-config"
-description = "Configuration loading for aye: rootdir discovery, [tool.aye], and generic ini/toml readers for engines"
+description = "Configuration loading for aye: rootdir discovery, [tool.aye], and generic toml readers for engines"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

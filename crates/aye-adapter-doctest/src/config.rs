@@ -156,7 +156,7 @@ fn load(path: &Path) -> Result<Option<Section>, AdapterError> {
     let extension = path.extension().map(|e| e.to_string_lossy().into_owned());
     match extension.as_deref() {
         Some("ini") => {
-            let sections = aye_config::read_ini(path).map_err(bad)?;
+            let sections = aye_pytest::ini::read_ini(path).map_err(bad)?;
             if let Some(section) = sections.get("pytest") {
                 let values = section
                     .iter()
@@ -170,7 +170,7 @@ fn load(path: &Path) -> Result<Option<Section>, AdapterError> {
             Ok(None)
         }
         Some("cfg") => {
-            let sections = aye_config::read_ini(path).map_err(bad)?;
+            let sections = aye_pytest::ini::read_ini(path).map_err(bad)?;
             Ok(sections.get("tool:pytest").map(|section| {
                 let values = section
                     .iter()

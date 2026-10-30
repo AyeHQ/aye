@@ -8,6 +8,9 @@
 //! section, an empty section name, and a section or a key given twice.
 
 use std::collections::BTreeMap;
+use std::path::Path;
+
+use aye_config::{ConfigError, read};
 
 /// One INI section: keys to raw values (continuation lines joined with `\n`).
 pub type Section = BTreeMap<String, String>;
@@ -95,6 +98,19 @@ pub fn parse(source: &str) -> Result<BTreeMap<String, Section>, String> {
     Ok(sections)
 }
 
+/// Parse an INI file into sections.
+pub fn read_ini(path: &Path) -> Result<BTreeMap<String, Section>, ConfigError> {
+    parse(&read(path)?).map_err(|message| ConfigError::Parse {
+        path: path.to_path_buf(),
+        message,
+    })
+}
+
+/// One section of an INI file, or `None` when absent.
+pub fn ini_section(path: &Path, section: &str) -> Result<Option<Section>, ConfigError> {
+    Ok(read_ini(path)?.remove(section))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,6 +173,16 @@ mod tests {
             let err = parse(ini).unwrap_err();
             assert!(err.contains(expected), "{ini:?}: {err}");
         }
+    }
+
+    #[test]
+    fn ini_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let ini_path = dir.path().join("tox.ini");
+        std::fs::write(&ini_path, "[pytest]\ntestpaths = a\n    b\n").unwrap();
+        let section = ini_section(&ini_path, "pytest").unwrap().unwrap();
+        assert_eq!(aye_config::split_list(&section["testpaths"]), ["a", "b"]);
+        assert!(ini_section(&ini_path, "tool:pytest").unwrap().is_none());
     }
 
     #[test]

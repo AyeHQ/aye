@@ -191,6 +191,7 @@ dependencies = [
  "aye-events",
  "aye-fs",
  "aye-protocol",
+ "aye-pytest",
  "aye-python-semantic",
  "aye-python-stdlib",
  "aye-static",
@@ -212,6 +213,7 @@ dependencies = [
  "aye-events",
  "aye-fs",
  "aye-protocol",
+ "aye-pytest",
  "aye-python-semantic",
  "aye-python-stdlib",
  "aye-static",
@@ -339,6 +341,10 @@ dependencies = [
 [[package]]
 name = "aye-pytest"
 version = "0.0.1"
+dependencies = [
+ "aye-config",
+ "tempfile",
+]
 
 [[package]]
 name = "aye-python-semantic"

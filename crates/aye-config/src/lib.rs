@@ -1,6 +1,6 @@
 //! Configuration as a mechanism. Finds the project root, reads
-//! `[tool.aye]`, and provides generic loaders (toml tables, ini sections, the
-//! upward search) that engines use to read their own framework's settings. Every
+//! `[tool.aye]`, and provides generic loaders (toml tables, the upward
+//! search) that engines use to read their own framework's settings. Every
 //! resolved value remembers where it came from ([`ValueSource`]) for `aye
 //! config`, which shows a source in a table's row (`pyproject.toml
 //! [tool.aye]`) or beside a setting's name on a header line (`[tool.aye]
@@ -51,11 +51,9 @@
 //!   error names one: an unknown key or a value of the wrong type first,
 //!   then the first bad one in that list.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub mod ini;
 mod options;
 mod settings;
 mod source;
@@ -167,19 +165,6 @@ pub fn toml_table(path: &Path, keys: &[&str]) -> Result<Option<toml::Table>, Con
     Ok(Some(table.clone()))
 }
 
-/// Parse an INI file into sections.
-pub fn read_ini(path: &Path) -> Result<BTreeMap<String, ini::Section>, ConfigError> {
-    ini::parse(&read(path)?).map_err(|message| ConfigError::Parse {
-        path: path.to_path_buf(),
-        message,
-    })
-}
-
-/// One section of an INI file, or `None` when absent.
-pub fn ini_section(path: &Path, section: &str) -> Result<Option<ini::Section>, ConfigError> {
-    Ok(read_ini(path)?.remove(section))
-}
-
 /// Split a value the way INI-style list options are written: on whitespace
 /// (and newlines).
 pub fn split_list(value: &str) -> Vec<String> {
@@ -288,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn toml_tables_and_ini_sections() {
+    fn toml_tables() {
         let dir = tempfile::tempdir().unwrap();
         let toml_path = write(
             dir.path(),
@@ -307,11 +292,6 @@ mod tests {
             ["-ra", "-q"]
         );
         assert!(toml_table(&toml_path, &["tool", "nope"]).unwrap().is_none());
-
-        let ini_path = write(dir.path(), "tox.ini", "[pytest]\ntestpaths = a\n    b\n");
-        let section = ini_section(&ini_path, "pytest").unwrap().unwrap();
-        assert_eq!(split_list(&section["testpaths"]), ["a", "b"]);
-        assert!(ini_section(&ini_path, "tool:pytest").unwrap().is_none());
     }
 
     #[test]

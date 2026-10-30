@@ -446,7 +446,7 @@ fn read_ini(inifile: Option<&Path>) -> BTreeMap<String, Value> {
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or_default();
-    let texts = |section: Option<aye_config::ini::Section>| -> BTreeMap<String, Value> {
+    let texts = |section: Option<aye_pytest::ini::Section>| -> BTreeMap<String, Value> {
         section
             .unwrap_or_default()
             .into_iter()
@@ -458,8 +458,12 @@ fn read_ini(inifile: Option<&Path>) -> BTreeMap<String, Value> {
         .and_then(|e| e.to_str())
         .unwrap_or_default()
     {
-        "ini" => texts(aye_config::ini_section(path, "pytest").ok().flatten()),
-        "cfg" => texts(aye_config::ini_section(path, "tool:pytest").ok().flatten()),
+        "ini" => texts(aye_pytest::ini::ini_section(path, "pytest").ok().flatten()),
+        "cfg" => texts(
+            aye_pytest::ini::ini_section(path, "tool:pytest")
+                .ok()
+                .flatten(),
+        ),
         "toml" => {
             let Ok(doc) = aye_config::read_toml(path) else {
                 return BTreeMap::new();

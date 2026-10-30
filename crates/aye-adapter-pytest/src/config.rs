@@ -7,8 +7,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use aye_adapter::{AdapterError, Project, Setting};
-use aye_config::{Sourced, ValueSource, ini_section, read_toml, split_args};
+use aye_config::{Sourced, ValueSource, read_toml, split_args};
 use aye_fs::common_ancestor;
+use aye_pytest::ini::{self, ini_section};
 use aye_python_stdlib::os_path;
 use aye_static::{EnvVars, ProcessEnv};
 
@@ -227,7 +228,7 @@ fn load_config(path: &Path) -> Result<Option<(RawConfig, String)>, AdapterError>
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or_default();
-    let from_ini = |section: &str, values: aye_config::ini::Section| {
+    let from_ini = |section: &str, values: ini::Section| {
         let mut config = RawConfig::default();
         for (key, value) in values {
             config.values.insert(
@@ -249,7 +250,7 @@ fn load_config(path: &Path) -> Result<Option<(RawConfig, String)>, AdapterError>
             None => Ok(None),
         },
         "cfg" => {
-            let sections = aye_config::read_ini(path).map_err(config_error)?;
+            let sections = ini::read_ini(path).map_err(config_error)?;
             if let Some(values) = sections.get("tool:pytest") {
                 Ok(Some(from_ini("tool:pytest", values.clone())))
             } else if sections.contains_key("pytest") {
