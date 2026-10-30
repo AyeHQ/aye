@@ -22,9 +22,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use aye_engine::{
-    ENGINE_MODULE, Executor, ExecutorSpec, ModuleSource, PROTOCOL_VERSION, Reply, Request,
-    WorkerLine, services,
+use aye_engine::ENGINE_MODULE;
+use aye_protocol::{
+    Executor, ExecutorSpec, ModuleSource, PROTOCOL_VERSION, Reply, Request, WorkerLine, services,
 };
 
 use aye_static::EnvVars;
@@ -915,8 +915,8 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use std::fmt::Write as _;
 
-    use aye_engine::EmbeddedModule;
     use aye_events::{AdapterName, BatchIndex, Event};
+    use aye_protocol::EmbeddedModule;
 
     use super::*;
 

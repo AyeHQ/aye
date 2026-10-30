@@ -353,7 +353,7 @@ pub(crate) struct Assigned {
     priority: bool,
     /// When it was handed out, nothing else of its adapter was left for
     /// its lane, and nothing could be pinned to it: its worker's last batch
-    /// ([`aye_engine::Batch::ends_session`]), unless a crashed batch comes
+    /// ([`aye_protocol::Batch::ends_session`]), unless a crashed batch comes
     /// back. Not kept when it goes back to the queue.
     pub ends_session: bool,
 }
@@ -503,7 +503,7 @@ impl Queue {
     }
 
     /// A batch of `adapter` with no ids that only ends its worker's session
-    /// ([`aye_engine::Batch::ends_session`]): for a worker whose last batch
+    /// ([`aye_protocol::Batch::ends_session`]): for a worker whose last batch
     /// didn't, as its lane finishes or leaves the adapter.
     pub(crate) fn closing(&self, adapter: &AdapterName) -> Assigned {
         let mut state = lock(&self.state);

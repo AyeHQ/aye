@@ -512,7 +512,7 @@ fn every_code_decides_the_exit_code_as_before() {
 /// A recognizer that collects nothing and hands out `context`.
 struct Context(serde_json::Value);
 
-impl aye_engine::Recognizer for Context {
+impl aye_adapter::Recognizer for Context {
     fn roots(&self, _: &Project<'_>) -> Vec<PathBuf> {
         Vec::new()
     }
@@ -521,16 +521,16 @@ impl aye_engine::Recognizer for Context {
         false
     }
 
-    fn claim(&self, _: &str, _: bool) -> aye_engine::Claim {
-        aye_engine::Claim::Ignore
+    fn claim(&self, _: &str, _: bool) -> aye_adapter::Claim {
+        aye_adapter::Claim::Ignore
     }
 
     fn recognize(
         &self,
-        _: &aye_engine::SourceFile<'_>,
-        _: &[aye_engine::SourceFile<'_>],
-    ) -> aye_engine::Recognition {
-        aye_engine::Recognition::default()
+        _: &aye_adapter::SourceFile<'_>,
+        _: &[aye_adapter::SourceFile<'_>],
+    ) -> aye_adapter::Recognition {
+        aye_adapter::Recognition::default()
     }
 
     fn context(&self) -> serde_json::Value {
@@ -545,7 +545,7 @@ fn prepared(contexts: &[serde_json::Value]) -> Vec<Prepared> {
         .iter()
         .zip(["pytest", "doctest", "unittest"])
         .map(|(context, name)| {
-            let recognizer: Box<dyn aye_engine::Recognizer> = Box::new(Context(context.clone()));
+            let recognizer: Box<dyn aye_adapter::Recognizer> = Box::new(Context(context.clone()));
             (name.into(), recognizer)
         })
         .collect()
@@ -1370,11 +1370,11 @@ fn a_collection_error_from_refinement_counts_as_the_pytest_adapters() {
         message: format!("cannot import {path}"),
     };
     let mut once = OneModuleErrors::default();
-    once.refined(&aye_engine_pytest::NAME, &error("test_imp.py"));
+    once.refined(&aye_adapter_pytest::NAME, &error("test_imp.py"));
     // A conftest's, or anything but an error, is another matter.
-    once.refined(&aye_engine_pytest::NAME, &error("conftest.py"));
+    once.refined(&aye_adapter_pytest::NAME, &error("conftest.py"));
     once.refined(
-        &aye_engine_pytest::NAME,
+        &aye_adapter_pytest::NAME,
         &Diagnostic {
             severity: Severity::Warning,
             ..error("test_warn.py")

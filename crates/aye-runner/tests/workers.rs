@@ -14,11 +14,11 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use aye_engine::{EmbeddedModule, Executor, Policy, RefineRequest, Refiner, Reply, Request};
 use aye_events::{
     AdapterName, AffinityKey, BatchIndex, Case, DiagnosticCode, Event, FrameworkStatus, Outcome,
     ProjectPath, Record, Stamper, StopReason, TestId, TestResult, WorkerIndex,
 };
+use aye_protocol::{EmbeddedModule, Executor, Policy, RefineRequest, Refiner, Reply, Request};
 #[cfg(unix)]
 use aye_runner::Worker;
 use aye_runner::{
@@ -444,7 +444,7 @@ fn a_worker_answers_requests_it_cannot_serve_with_failed() {
             digests_only: false,
         }))
         .unwrap();
-    let Incoming::Line(aye_engine::WorkerLine::Reply(Reply::Failed { message })) = worker.recv()
+    let Incoming::Line(aye_protocol::WorkerLine::Reply(Reply::Failed { message })) = worker.recv()
     else {
         panic!("expected failed");
     };
@@ -517,13 +517,13 @@ fn a_worker_of_another_protocol_is_refused() {
             error,
             SpawnError::Protocol {
                 worker: 99,
-                runner: aye_engine::PROTOCOL_VERSION
+                runner: aye_protocol::PROTOCOL_VERSION
             }
         ),
         "{error}"
     );
     let message = error.to_string();
-    let ours = format!("protocol {}", aye_engine::PROTOCOL_VERSION);
+    let ours = format!("protocol {}", aye_protocol::PROTOCOL_VERSION);
     assert!(
         message.contains("protocol 99") && message.contains(&ours),
         "{message}"
@@ -2088,7 +2088,7 @@ impl Fixture {
         calls
     }
 
-    fn refine_listing(&self, files: &[&str]) -> aye_engine::Refined {
+    fn refine_listing(&self, files: &[&str]) -> aye_protocol::Refined {
         self.runner
             .refine(&RefineRequest {
                 adapter: "listing".into(),

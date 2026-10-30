@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use aye_engine::Claim;
+use aye_adapter::Claim;
 use aye_events::{Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPath, Severity};
 use walkdir::WalkDir;
 

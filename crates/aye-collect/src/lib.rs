@@ -1,17 +1,19 @@
 //! Discovery infrastructure. Walks the tree, parses files with Ruff's parser,
 //! hands each file and its AST to every registered recognizer, merges the
-//! results, runs the refinement protocol for files any engine marked
+//! results, runs the refinement protocol for files any adapter marked
 //! runtime-dependent, caches refinement by file content hash, and emits
 //! diagnostics (duplicate definitions, uncollected tests, files with no tests)
 //! with the strict-mode policy.
 //!
 //! Owns: the mechanism of discovery. Does not own: what counts as a test, which
-//! is each engine's recognizer. If a framework's name pattern or id algorithm
+//! is each adapter's recognizer. If a framework's name pattern or id algorithm
 //! appears in this crate, the boundary has leaked.
 //!
-//! Depends on: aye-engine, aye-events, aye-fs (paths, and marking the state
-//! directory), aye-static (the variables it reads by name). Must not depend
-//! on any `aye-engine-*`.
+//! Depends on: aye-adapter (the recognizers it drives, and Ruff's syntax
+//! tree), aye-events, aye-fs (paths, and marking the state directory),
+//! aye-protocol (refinement's messages and the `Refiner` it asks),
+//! aye-static (the variables it reads by name). Must not depend on any
+//! `aye-adapter-*`.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **Stopping and progress.** [`Collector::with_stop`] takes a flag the
@@ -180,11 +182,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use aye_engine::{Project, Recognition, Recognizer, Refiner, SourceFile};
+use aye_adapter::{Project, Recognition, Recognizer, SourceFile};
 use aye_events::{
     AdapterName, Case, ContentDigest, Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPathRef,
     Severity, TestId,
 };
+use aye_protocol::Refiner;
 
 mod environment;
 mod parallel;

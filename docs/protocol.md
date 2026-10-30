@@ -2,9 +2,9 @@
 
 The runner (`crates/aye-runner`) and each worker talk over the worker's stdin
 and stdout, one UTF-8 JSON object per line. The message types are in
-`crates/aye-engine` (`Request`, `Reply`, `WorkerLine`, `Batch`, `Policy`).
+`crates/aye-protocol` (`Request`, `Reply`, `WorkerLine`, `Batch`, `Policy`).
 The worker is `crates/aye-runner/python/aye_worker.py`. The protocol version
-is `PROTOCOL_VERSION` in `aye-engine` and `PROTOCOL` in `aye_worker.py` and
+is `PROTOCOL_VERSION` in `aye-protocol` and `PROTOCOL` in `aye_worker.py` and
 `aye_engine.py`, and the handshake checks it.
 
 ## Starting a worker
@@ -98,7 +98,7 @@ context that gives each).
 | `deselect` | The `--deselect` prefixes of the three, as prefixes of aye's ids (none when pytest's rootdir is outside the project root). The binary drops the cases they name, except partial ones, and counts them as deselected. |
 | `env_plugins` | The plugins `PYTEST_PLUGINS` names, as `-p NAME` arguments, so the refinement cache's rule for plugins loaded by name covers them. |
 | `colliding_modules` | Names of helper modules that two test directories' import bases both hold, which pytest imports once: a refined module that imports one gets `import:NAME` as its first affinity key, as the recognizer gives static ones, so they share a batch. |
-| `native` | What the front-end starts from: the resolved settings (`rootdir`, `inifile`, `confcutdir`, `pythonpath`, `python_files`, `python_classes`, `python_functions`, `testpaths`, `norecursedirs`, `usefixtures`, `markers`, `filterwarnings`, the strictness and id flags, `import_mode`, `plugins`, `env_plugins`), `ini` (every raw value of the configuration, for `getini`), `args` (pytest's options as the front-end parses them: `addopts`, `PYTEST_ADDOPTS`, then the arguments after `--`, without what aye takes over: pytest-xdist's, `-x`/`--exitfirst`/`--maxfail`, the JUnit ones and, when the doctest adapter runs, pytest's doctest options; the arguments after `--` also lose `-o addopts=…`), `options` (those parsed with pytest's dest names and defaults, for options conftests read), `unknown_options`, and `modules_digest` (of the executor's sources, so the refinement cache never answers for other sources). `aye-engine-pytest`'s `native.rs` has the details. |
+| `native` | What the front-end starts from: the resolved settings (`rootdir`, `inifile`, `confcutdir`, `pythonpath`, `python_files`, `python_classes`, `python_functions`, `testpaths`, `norecursedirs`, `usefixtures`, `markers`, `filterwarnings`, the strictness and id flags, `import_mode`, `plugins`, `env_plugins`), `ini` (every raw value of the configuration, for `getini`), `args` (pytest's options as the front-end parses them: `addopts`, `PYTEST_ADDOPTS`, then the arguments after `--`, without what aye takes over: pytest-xdist's, `-x`/`--exitfirst`/`--maxfail`, the JUnit ones and, when the doctest adapter runs, pytest's doctest options; the arguments after `--` also lose `-o addopts=…`), `options` (those parsed with pytest's dest names and defaults, for options conftests read), `unknown_options`, and `modules_digest` (of the executor's sources, so the refinement cache never answers for other sources). `aye-adapter-pytest`'s `native.rs` has the details. |
 
 Until October 2026 the context also carried what only a real pytest session
 per batch read (`addopts`, `pytest_addopts_env` and `framework_args` as
@@ -364,7 +364,7 @@ runs its tests in plan order, as pytest-xdist's do.
   changes no duration.
 - Services are looked up by name (`Services.get` returns `None` when
   absent), so new services stay additive. The names are listed in
-  `aye_engine::services`. Today the runner asks for `context` (the test and
+  `aye_protocol::services`. Today the runner asks for `context` (the test and
   lifetimes running now) and `cleanup` (teardown registered on the running
   test), and the engine provides both. The others (capture, coverage,
   timeouts, patching, …) are not provided yet.

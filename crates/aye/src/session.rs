@@ -10,9 +10,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
+use aye_adapter::{Adapter, Project};
 use aye_collect::{Collector, Environment, Options, Prepared};
 use aye_config::AyeConfig;
-use aye_engine::{Adapter, Policy, Project, Refiner};
 use aye_events::{
     AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event,
     ExitCode, ProjectPath, Record, RerunCommand, RunId, SCHEMA_VERSION, Severity, Stamper,
@@ -20,6 +20,7 @@ use aye_events::{
 };
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter, StoredRunId};
+use aye_protocol::{Policy, Refiner};
 use aye_render::{
     ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
     JunitOptions, Reporter, Tally, Tee, Text, TextOptions,
@@ -177,7 +178,7 @@ impl Session {
             && !args.collect_only
             && adapters
                 .iter()
-                .any(|adapter| adapter.name() == aye_engine_pytest::NAME)
+                .any(|adapter| adapter.name() == aye_adapter_pytest::NAME)
         {
             anyhow::bail!(
                 "--no-refine lists tests without importing them, with --co; a run of \
@@ -481,7 +482,7 @@ impl Session {
         let pytest_runs = self
             .prepared
             .iter()
-            .any(|(name, _)| *name == aye_engine_pytest::NAME);
+            .any(|(name, _)| *name == aye_adapter_pytest::NAME);
         let mut collection_errors = false;
         let broken = broken_conftest_dirs(&collection.diagnostics);
         for diagnostic in &collection.diagnostics {
@@ -500,7 +501,7 @@ impl Session {
             }
             conftests.see(None, &mut diagnostic);
             if pytest_runs {
-                once.refined(&aye_engine_pytest::NAME, &diagnostic);
+                once.refined(&aye_adapter_pytest::NAME, &diagnostic);
             }
             collection_errors |= diagnostic.severity == Severity::Error;
             out.emit(Event::Diagnostic(diagnostic));

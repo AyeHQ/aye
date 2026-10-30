@@ -2,8 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use aye_engine::{Claim, Ranged, RefineError, RefineRequest, Refined, Setting, ast};
+use aye_adapter::{Claim, Ranged, Setting, ast};
 use aye_events::{Certainty, DiagnosticCode, ProjectPath};
+use aye_protocol::{RefineError, RefineRequest, Refined};
 
 use super::*;
 
@@ -1475,7 +1476,7 @@ fn refinement_is_cached_by_content() {
     // Nothing changed: no worker.
     assert_eq!(
         collect(&refiner, &fake(), "0.0.1"),
-        [] as [aye_engine::RefineRequest; 0]
+        [] as [aye_protocol::RefineRequest; 0]
     );
     // No refiner at all: the cache still answers.
     let collection = run_cached(
@@ -1500,7 +1501,7 @@ fn refinement_is_cached_by_content() {
     assert_eq!(requests[0].files, ["d_check.py", "e_check.py"]);
     assert_eq!(
         collect(&refiner, &fake(), "0.0.1"),
-        [] as [aye_engine::RefineRequest; 0]
+        [] as [aye_protocol::RefineRequest; 0]
     );
 
     // So do another version of aye and other settings.

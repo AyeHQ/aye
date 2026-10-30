@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use aye_engine::{LineIndex, SourceFile, TextSize, ast};
+use aye_adapter::{LineIndex, SourceFile, TextSize, ast};
 use aye_events::{Diagnostic, DiagnosticCode, ProjectPath, Severity, Span};
 use ruff_python_parser::ParseError;
 

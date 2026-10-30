@@ -9,12 +9,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use aye_engine::ast::visitor::{self, Visitor};
-use aye_engine::ast::{DictItem, Expr, ModModule, Stmt};
-use aye_engine::{EmbeddedModule, PROTOCOL_VERSION, services};
+use aye_adapter::ast::visitor::{self, Visitor};
+use aye_adapter::ast::{DictItem, Expr, ModModule, Stmt};
 use aye_events::{
     CompareKind, ComparisonOp, DiagnosticCode, FrameworkStatus, Outcome, Phase, Scope, Severity,
 };
+use aye_protocol::{EmbeddedModule, PROTOCOL_VERSION, services};
 use serde_json::{Value, json};
 
 /// Every Python module aye embeds, once each: the engine's, each adapter's,
@@ -26,9 +26,9 @@ fn embedded() -> Vec<EmbeddedModule> {
         aye_engine::REWRITE_MODULE,
         aye_engine::NATIVE_ENGINE_MODULE,
     ];
-    modules.extend(aye_engine_pytest::native::MODULES);
-    modules.push(aye_engine_unittest::MODULE);
-    modules.push(aye_engine_doctest::MODULE);
+    modules.extend(aye_adapter_pytest::native::MODULES);
+    modules.push(aye_adapter_unittest::MODULE);
+    modules.push(aye_adapter_doctest::MODULE);
     modules.push(EmbeddedModule {
         name: "aye_worker",
         source: aye_runner::WORKER_SOURCE,
@@ -54,7 +54,7 @@ fn literal(expr: &Expr) -> Option<&str> {
 fn integer(expr: &Expr) -> Option<u64> {
     expr.as_number_literal_expr()
         .and_then(|n| n.value.as_int())
-        .and_then(aye_engine::ast::Int::as_u64)
+        .and_then(aye_adapter::ast::Int::as_u64)
 }
 
 /// The value of the module-level `name = <int>`.

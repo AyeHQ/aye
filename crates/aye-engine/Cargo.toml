@@ -1,6 +1,6 @@
 [package]
 name = "aye-engine"
-description = "The engine contract: what a test engine provides to the aye runner and what it gets back"
+description = "aye's engine: the Python that runs every test inside aye's workers, embedded in the binary"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,17 +10,11 @@ homepage.workspace = true
 authors.workspace = true
 
 [dependencies]
-aye-events = { workspace = true }
-get-size2 = { workspace = true } # version pin only; see the workspace Cargo.toml
-ruff_python_ast = { workspace = true }
-ruff_source_file = { workspace = true }
-ruff_text_size = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-thiserror = { workspace = true }
+aye-protocol = { workspace = true }
 
 [dev-dependencies]
-ruff_python_parser = { workspace = true }
+aye-events = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
