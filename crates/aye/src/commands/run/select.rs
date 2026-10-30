@@ -30,7 +30,7 @@ use aye_events::{
     Severity, TestId,
 };
 use aye_fs::root_relative;
-use aye_select::{Named, Selection, dotted_reach};
+use aye_select::{Named, Selection, Selector, SelectorIndex, dotted_reach};
 
 use super::collect::Collected;
 use super::exit::RunVerdict;
@@ -88,7 +88,12 @@ pub(super) fn select(
     );
     let selected = selection.apply(collection.cases);
     let skips = skips(&collection.diagnostics, reach.as_ref(), &settings.root);
-    let unmatched = unmatched(&selected.unmatched, &settings.positionals, &skips);
+    let unmatched = unmatched(
+        &selection,
+        &selected.unmatched,
+        &settings.positionals,
+        &skips,
+    );
     // Whether an argument named nothing is known only now; the skips were
     // read without it.
     let reach = reach.map(|reach| Reach {
@@ -168,27 +173,29 @@ fn skips<'d>(diagnostics: &'d [Diagnostic], reach: Option<&Reach>, root: &Path) 
         .collect()
 }
 
-/// Selectors that match nothing (`selected`'s unmatched, each with its
-/// positional argument), as pytest's `not found:`: a missing path, or an
-/// id, dotted name or key that names no test. An existing file or
-/// directory that has no tests is not one (pytest collects it and finds
-/// nothing), and neither is a dotted name for a module or package that was
-/// skipped (in `skips`).
+/// Selectors of `selection` that match nothing (`unmatched`, each with its
+/// positional argument: the first that reads alike), as pytest's `not
+/// found:`: a missing path, or an id, dotted name or key that names no
+/// test. An existing file or directory that has no tests is not one
+/// (pytest collects it and finds nothing), and neither is a dotted name
+/// for a module or package that was skipped (in `skips`).
 fn unmatched<'a>(
-    selected: &'a [String],
+    selection: &'a Selection,
+    unmatched: &[SelectorIndex],
     positionals: &'a Positionals,
     skips: &[&str],
-) -> Vec<(&'a String, &'a Positional)> {
-    selected
+) -> Vec<(&'a Selector, &'a Positional)> {
+    unmatched
         .iter()
-        .filter_map(|selector| {
-            let positional = positionals.find(selector)?;
+        .filter_map(|&at| {
+            let selector = &selection.ids[at];
+            let positional = positionals.first_alike(at);
             let found = match positional {
                 Positional::Path { absolute, .. } => absolute.exists(),
                 Positional::Id { .. } => false,
                 Positional::Word(_) => skips
                     .iter()
-                    .any(|path| dotted_reach(selector, path) == Named::Whole),
+                    .any(|path| dotted_reach(selector.as_str(), path) == Named::Whole),
             };
             (!found).then_some((selector, positional))
         })
@@ -232,7 +239,7 @@ fn emit_diagnostics(
 /// (`unmatched`), but a missing path collection has reported already
 /// (among `diagnostics`), which is reported once.
 fn not_found(
-    unmatched: Vec<(&String, &Positional)>,
+    unmatched: Vec<(&Selector, &Positional)>,
     diagnostics: &[Diagnostic],
     root: &Path,
 ) -> Vec<Diagnostic> {
@@ -255,7 +262,7 @@ fn not_found(
             code: DiagnosticCode::NotFound,
             path: DiagnosticPath::as_written(path),
             span: None,
-            message: not_found_message(selector),
+            message: not_found_message(selector.as_str()),
         });
     }
     not_found

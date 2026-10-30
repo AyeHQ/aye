@@ -18,6 +18,7 @@
 use std::path::{Path, PathBuf};
 
 use aye_fs::{normalize_absolute, root_relative};
+use aye_select::SelectorIndex;
 
 /// A positional argument, read: a file or directory, a test in a file, or
 /// a word. What each gives selection is its [`selector`](Self::selector).
@@ -186,11 +187,15 @@ impl Positionals {
         self.iter().map(Positional::selector)
     }
 
-    /// The argument whose selector is `selector`: the first, when several
-    /// read alike.
-    pub(crate) fn find(&self, selector: &str) -> Option<&Positional> {
+    /// The argument the run reports for selection's selector `at` (the
+    /// run's selection has one per argument, in order): the first that
+    /// reads alike. Selection reports a word it reads more than one way
+    /// each time it is given, and the run reports each as the first.
+    pub(crate) fn first_alike(&self, at: SelectorIndex) -> &Positional {
+        let selector = self.0[at.as_usize()].selector();
         self.iter()
             .find(|positional| positional.selector() == selector)
+            .unwrap_or(&self.0[at.as_usize()])
     }
 }
 

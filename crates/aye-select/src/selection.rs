@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use aye_events::{AdapterName, Case, Certainty, IdPrefix, TestId};
+use aye_index::{IndexVec, newtype_index};
 
 use crate::keyword::{keyword_truth, parse_keyword};
 use crate::last_failed::{Failed, Seen, Visible};
@@ -13,12 +14,18 @@ use crate::marker::{parse_tags, tags_truth};
 use crate::selector::Parts;
 use crate::{Expression, SelectError, Selector, Truth};
 
+newtype_index! {
+    /// A positional argument's place among a selection's
+    /// ([`Selection::ids`]): what [`Selected::unmatched`] names them by.
+    pub struct SelectorIndex;
+}
+
 /// What to run, out of what was collected. The default selects everything.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Selection {
-    /// Positional arguments; a case is kept when any of them selects it.
-    /// Empty selects every case.
-    pub ids: Vec<Selector>,
+    /// Positional arguments, in the order given; a case is kept when any
+    /// of them selects it. Empty selects every case.
+    pub ids: IndexVec<SelectorIndex, Selector>,
     /// `-k`.
     pub keyword: Option<Expression>,
     /// `-m`.
@@ -79,10 +86,10 @@ pub struct Selected {
     /// hand the engine in place of the case's own, in the order of the
     /// arguments that asked for them.
     pub narrowed: BTreeMap<TestId, Vec<TestId>>,
-    /// Positional arguments that matched no case, as given. An argument
+    /// Positional arguments that matched no case, in order. An argument
     /// another one subsumes (`tests/t.py` beside `tests`, or a repeat) is
     /// never listed, as pytest drops it before collecting.
-    pub unmatched: Vec<String>,
+    pub unmatched: Vec<SelectorIndex>,
 }
 
 impl Selected {
@@ -189,13 +196,13 @@ impl Selection {
     /// The verdict on one case from the selectors and both expressions.
     /// Last failed is left out: it depends on every other case.
     pub fn truth(&self, case: &Case) -> Truth {
-        let mut matched = vec![false; self.ids.len()];
+        let mut matched = self.ids.iter().map(|_| false).collect();
         self.judge(&Parts::new(case), &mut matched).truth
     }
 
     /// Keep the cases whose verdict is not `False`.
     pub fn apply(&self, cases: Vec<Case>) -> Selected {
-        let mut matched = vec![false; self.ids.len()];
+        let mut matched = self.ids.iter().map(|_| false).collect();
         let failed = self
             .last_failed
             .as_ref()
@@ -268,10 +275,9 @@ impl Selection {
             deselected: u32::try_from(deselected).unwrap_or(u32::MAX),
             unmatched: self
                 .ids
-                .iter()
-                .enumerate()
+                .iter_enumerated()
                 .filter(|&(at, selector)| !matched[at] && !self.subsumed(at, selector))
-                .map(|(_, selector)| selector.as_str().to_string())
+                .map(|(at, _)| at)
                 .collect(),
             ..Selected::default()
         };
@@ -285,17 +291,17 @@ impl Selection {
     }
 
     /// The verdict on one case. Marks the selectors that matched.
-    fn judge(&self, case: &Parts<'_>, matched: &mut [bool]) -> Verdict {
+    fn judge(&self, case: &Parts<'_>, matched: &mut IndexVec<SelectorIndex, bool>) -> Verdict {
         let mut narrow = Vec::new();
-        let mut owner = (usize::MAX, 0);
+        let mut owner = (usize::MAX, SelectorIndex::from_u32(0));
         let ids = if self.ids.is_empty() {
             Truth::True
         } else {
             let mut truth = Truth::False;
-            for (at, (selector, matched)) in self.ids.iter().zip(matched).enumerate() {
+            for (at, selector) in self.ids.iter_enumerated() {
                 let (found, rank) = selector.select_ranked(case, &mut narrow);
                 if !found.is_false() {
-                    *matched = true;
+                    matched[at] = true;
                     owner = owner.min((rank, at));
                 }
                 truth = truth | found;
@@ -348,8 +354,8 @@ impl Selection {
 
     /// Whether another positional argument subsumes the one at `at` (an
     /// equal one only when it comes first).
-    fn subsumed(&self, at: usize, selector: &Selector) -> bool {
-        self.ids.iter().enumerate().any(|(by, other)| {
+    fn subsumed(&self, at: SelectorIndex, selector: &Selector) -> bool {
+        self.ids.iter_enumerated().any(|(by, other)| {
             by != at && other.subsumes(selector) && (by < at || !selector.subsumes(other))
         })
     }
@@ -365,8 +371,9 @@ struct Verdict {
     /// the order of the arguments that ask for them.
     narrow: Vec<TestId>,
     /// The argument the case is collected for: the most general one that
-    /// selects it, the first among equals (0 when there are none).
-    owner: usize,
+    /// selects it, the first among equals (the first place when there are
+    /// none).
+    owner: SelectorIndex,
 }
 
 /// What a name the case lacks means: `False`, unless the case's parameter

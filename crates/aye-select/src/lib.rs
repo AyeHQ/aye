@@ -5,7 +5,7 @@
 //!
 //! Owns: the selection language and its evaluation. Universal across engines.
 //!
-//! Depends on: aye-events.
+//! Depends on: aye-events, aye-index (the positional arguments' places).
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **One verdict per case**, a [`Truth`]: the explicit selectors (any of
@@ -105,7 +105,7 @@ mod truth;
 
 pub use expression::{Expression, Kwarg, ParseError, Value};
 pub use order::failed_first;
-pub use selection::{AdapterSelection, Selected, Selection};
+pub use selection::{AdapterSelection, Selected, Selection, SelectorIndex};
 pub use selector::{Named, Selector, dotted_reach};
 pub use truth::Truth;
 

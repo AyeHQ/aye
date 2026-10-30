@@ -27,6 +27,15 @@ fn failed(ids: &[&str]) -> Vec<TestId> {
     ids.iter().map(|id| TestId::new(*id)).collect()
 }
 
+/// The arguments `selection` applied left unmatched, as given.
+fn unmatched<'s>(selection: &'s Selection, selected: &Selected) -> Vec<&'s str> {
+    selected
+        .unmatched
+        .iter()
+        .map(|&at| selection.ids[at].as_str())
+        .collect()
+}
+
 /// A small project: two files, a class, a parametrized test collected
 /// exactly and one only known at runtime.
 fn project() -> Vec<Case> {
@@ -110,11 +119,13 @@ fn deselected_counts_only_what_the_expressions_drop() {
     assert_eq!(ids(&one), ["tests/auth/test_api.py::test_logout"]);
     assert_eq!(one.deselected, 0);
 
-    let missing = Selection::default()
-        .with_ids(["tests/auth/test_api.py::test_nope"])
-        .apply(project());
+    let nope = Selection::default().with_ids(["tests/auth/test_api.py::test_nope"]);
+    let missing = nope.apply(project());
     assert_eq!(missing.deselected, 0);
-    assert_eq!(missing.unmatched, ["tests/auth/test_api.py::test_nope"]);
+    assert_eq!(
+        unmatched(&nope, &missing),
+        ["tests/auth/test_api.py::test_nope"]
+    );
 
     let dotted = Selection::default()
         .with_ids(["tests.auth.test_api.test_logout"])
@@ -201,49 +212,48 @@ fn cases_follow_the_arguments_order() {
 
 #[test]
 fn subsumed_arguments_are_never_unmatched() {
-    let selected = Selection::default()
-        .with_ids([
-            "tests/auth/test_api.py::test_nope",
-            "tests/auth/test_api.py",
-            "tests/test_cart.py::test_add[gbp]",
-            "tests/test_cart.py::test_add",
-            "tests/missing.py",
-            "tests",
-            "nowhere/t.py",
-            "nowhere/t.py",
-            "tests/test_cart.py::test_total[x]",
-        ])
-        .apply(project());
+    let selection = Selection::default().with_ids([
+        "tests/auth/test_api.py::test_nope",
+        "tests/auth/test_api.py",
+        "tests/test_cart.py::test_add[gbp]",
+        "tests/test_cart.py::test_add",
+        "tests/missing.py",
+        "tests",
+        "nowhere/t.py",
+        "nowhere/t.py",
+        "tests/test_cart.py::test_total[x]",
+    ]);
+    let selected = selection.apply(project());
     assert_eq!(selected.cases.len(), 6);
     // A repeat is reported once.
-    assert_eq!(selected.unmatched, ["nowhere/t.py"]);
+    assert_eq!(unmatched(&selection, &selected), ["nowhere/t.py"]);
 
-    let ids_only = Selection::default()
-        .with_ids([
-            "t.py::TestA::test_b[1]",
-            "t.py::TestA::test_b[2]",
-            "t.py::TestA",
-        ])
-        .apply(Vec::new());
-    assert_eq!(ids_only.unmatched, ["t.py::TestA"]);
-    let params = Selection::default()
-        .with_ids(["t.py::test_b[1]", "t.py::test_b[2]"])
-        .apply(Vec::new());
-    assert_eq!(params.unmatched, ["t.py::test_b[1]", "t.py::test_b[2]"]);
+    let ids_only = Selection::default().with_ids([
+        "t.py::TestA::test_b[1]",
+        "t.py::TestA::test_b[2]",
+        "t.py::TestA",
+    ]);
+    assert_eq!(
+        unmatched(&ids_only, &ids_only.apply(Vec::new())),
+        ["t.py::TestA"]
+    );
+    let params = Selection::default().with_ids(["t.py::test_b[1]", "t.py::test_b[2]"]);
+    assert_eq!(
+        unmatched(&params, &params.apply(Vec::new())),
+        ["t.py::test_b[1]", "t.py::test_b[2]"]
+    );
 }
 
 #[test]
 fn unmatched_arguments_are_reported() {
-    let selected = Selection::default()
-        .with_ids([
-            "tests/auth",
-            "tests/test_cart.py::test_nope",
-            "tests/test_cart.py::test_total[x]",
-            "nowhere",
-        ])
-        .apply(project());
+    let selection = Selection::default().with_ids([
+        "tests/auth",
+        "tests/test_cart.py::test_nope",
+        "tests/test_cart.py::test_total[x]",
+        "nowhere",
+    ]);
     assert_eq!(
-        selected.unmatched,
+        unmatched(&selection, &selection.apply(project())),
         ["tests/test_cart.py::test_nope", "nowhere"]
     );
 }
@@ -408,7 +418,7 @@ fn everything_is_joined_with_and() {
     // TestLogin's two, dropped by the expressions; test_logout was never
     // selected.
     assert_eq!(selected.deselected, 2);
-    assert_eq!(selected.unmatched, [] as [std::string::String; 0]);
+    assert_eq!(selected.unmatched, [] as [SelectorIndex; 0]);
 }
 
 #[test]
@@ -419,7 +429,7 @@ fn deselected_by_an_expression_is_still_matched() {
         .unwrap()
         .apply(project());
     assert_eq!(selected.cases, [] as [aye_events::Case; 0]);
-    assert_eq!(selected.unmatched, [] as [std::string::String; 0]);
+    assert_eq!(selected.unmatched, [] as [SelectorIndex; 0]);
 }
 
 #[test]
@@ -678,7 +688,7 @@ fn deselect_prefixes_drop_and_count_their_adapters_cases() {
         .apply(project());
     assert_eq!(selected.cases, [] as [aye_events::Case; 0]);
     assert_eq!(selected.deselected, 1);
-    assert_eq!(selected.unmatched, [] as [std::string::String; 0]);
+    assert_eq!(selected.unmatched, [] as [SelectorIndex; 0]);
     assert!(
         !Selection::default()
             .with_deselect("pytest", ["x"])
@@ -808,7 +818,7 @@ fn last_failed_meets_explicit_narrowing() {
 #[test]
 fn a_selection_is_built_once_and_applied_to_many() {
     let selection = Selection {
-        ids: vec![Selector::parse("tests/auth")],
+        ids: [Selector::parse("tests/auth")].into_iter().collect(),
         keyword: Some(Expression::parse("ok").unwrap()),
         ..Selection::default()
     };

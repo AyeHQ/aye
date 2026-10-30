@@ -96,11 +96,14 @@ pub(super) fn choose(
                 .filter(|(_, item)| kept.contains(&item.name))
                 .map(|(at, _)| at),
         );
-        for unmatched in &selected.unmatched {
+        for &at in &selected.unmatched {
+            // The first argument that reads alike: selection reports a word
+            // it reads more than one way each time it is given.
+            let (_, unmatched) = selectors[at.as_usize()];
             let arg = selectors
                 .iter()
-                .find(|(_, selector)| selector == unmatched)
-                .map_or(unmatched.as_str(), |(arg, _)| *arg);
+                .find(|(_, selector)| *selector == unmatched)
+                .map_or(unmatched, |(arg, _)| *arg);
             problems.push(nothing_named(arg, &meta.run, &closest(arg, &names)));
         }
     }

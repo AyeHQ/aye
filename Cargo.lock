@@ -364,6 +364,7 @@ name = "aye-select"
 version = "0.0.1"
 dependencies = [
  "aye-events",
+ "aye-index",
  "thiserror",
 ]
 
