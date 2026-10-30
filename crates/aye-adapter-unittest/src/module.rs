@@ -26,7 +26,7 @@ use aye_python_stdlib::builtins::{DYNAMIC_CALLS, READING_BUILTINS};
 use aye_python_stdlib::modules::STDLIB;
 use aye_python_stdlib::unittest::{
     CLASS_DECORATORS, KEEPING_DECORATORS, PLAIN_CLASS_DECORATORS, PROPERTY_DECORATORS,
-    TEST_METHOD_PREFIX, TESTCASE_ROOTS, looks_like_tests,
+    RUNTEST_BASES, TEST_METHOD_PREFIX, TESTCASE_ROOTS, looks_like_tests,
 };
 
 /// Whether `path` (dotted) is in the standard library, `unittest` included.
@@ -1246,12 +1246,7 @@ fn classify(path: &str) -> Result<Base, String> {
         return Ok(Base::Object);
     }
     let top = path.split('.').next().unwrap_or(path);
-    if top == "doctest"
-        || matches!(
-            path,
-            "unittest.FunctionTestCase" | "unittest.case.FunctionTestCase"
-        )
-    {
+    if top == "doctest" || RUNTEST_BASES.contains(&path) {
         return Err(format!(
             "inherits from {path}, which brings a test of its own"
         ));

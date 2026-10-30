@@ -8,6 +8,7 @@ use aye_adapter::ast::{Expr, ExprLambda, Stmt, StmtClassDef, StmtFunctionDef};
 use aye_adapter::{Ranged, Recognition, SourceFile, TextRange, TextSize};
 use aye_events::{AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity};
 use aye_python_stdlib::fnmatch::matches_prefix_or_glob;
+use aye_python_stdlib::unittest::{KNOWN_BASES, RUNTEST_BASES, TESTCASE_ROOTS};
 
 use crate::SETS;
 use crate::ids::{IdOptions, parameterset_ids};
@@ -173,37 +174,6 @@ const IGNORED_ATTRIBUTES: &[&str] = &[
     "__str__",
     "__subclasshook__",
     "__weakref__",
-];
-
-/// unittest base classes that hold no tests of their own.
-const UNITTEST_BASES: &[&str] = &[
-    "unittest.TestCase",
-    "unittest.case.TestCase",
-    "unittest.IsolatedAsyncioTestCase",
-    "unittest.async_case.IsolatedAsyncioTestCase",
-    "django.test.TestCase",
-    "django.test.SimpleTestCase",
-    "django.test.TransactionTestCase",
-    "django.test.LiveServerTestCase",
-    "django.test.testcases.TestCase",
-    "django.test.testcases.SimpleTestCase",
-    "django.test.testcases.TransactionTestCase",
-    "django.test.testcases.LiveServerTestCase",
-    "django.contrib.staticfiles.testing.StaticLiveServerTestCase",
-    "rest_framework.test.APITestCase",
-    "rest_framework.test.APISimpleTestCase",
-    "rest_framework.test.APITransactionTestCase",
-    "rest_framework.test.APILiveServerTestCase",
-    "twisted.trial.unittest.TestCase",
-    "twisted.trial.unittest.SynchronousTestCase",
-    "asynctest.TestCase",
-    "aiounittest.AsyncTestCase",
-];
-
-/// unittest base classes that bring a `runTest` of their own.
-const UNITTEST_RUNTEST: &[&str] = &[
-    "unittest.FunctionTestCase",
-    "unittest.case.FunctionTestCase",
 ];
 
 /// Packages whose names never hold tests (nor fixtures or hooks) when
@@ -398,9 +368,7 @@ fn external_kind(path: &str) -> Option<External> {
         "abc.ABC" => External::Abc,
         _ if PLAIN.contains(&path) => External::Plain,
         _ if PROTOCOL.contains(&path) => External::Protocol,
-        _ if UNITTEST_BASES.contains(&path) || UNITTEST_RUNTEST.contains(&path) => {
-            External::UnitTest
-        }
+        _ if is_unittest_base(path) => External::UnitTest,
         _ if INIT_NEW.contains(&path) => External::InitNew,
         _ if NEW.contains(&path) => External::New,
         _ if builtin.is_some_and(|name| {
@@ -1149,7 +1117,7 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
                     || name.ends_with("TestCase");
                 // `FunctionTestCase` brings a `runTest`, so pytest collects
                 // it wherever it is bound.
-                if (wanted && !no_tests(path)) || UNITTEST_RUNTEST.contains(&path.as_str()) {
+                if (wanted && !no_tests(path)) || RUNTEST_BASES.contains(&path.as_str()) {
                     self.doubt(format!("{name} is imported from {path} and may be a test"));
                 } else if self.may_be_project_unittest(name, path) {
                     // pytest collects a unittest case whatever its name.
@@ -1674,11 +1642,8 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
     }
 
     fn is_unittest(mro: &[Klass<'a>]) -> bool {
-        mro.iter().any(|k| {
-            matches!(k, Klass::External(path)
-                if UNITTEST_BASES.contains(&path.as_str())
-                    || UNITTEST_RUNTEST.contains(&path.as_str()))
-        })
+        mro.iter()
+            .any(|k| matches!(k, Klass::External(path) if is_unittest_base(path)))
     }
 
     /// `__test__` along the MRO: set in a class body, or on a class of
@@ -2030,7 +1995,7 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
         if found.is_empty()
             && self.lookup_mro(mro, "runTest").is_none()
             && mro.iter().any(
-                |k| matches!(k, Klass::External(path) if UNITTEST_RUNTEST.contains(&path.as_str())),
+                |k| matches!(k, Klass::External(path) if RUNTEST_BASES.contains(&path.as_str())),
             )
         {
             let certainty = if unknown || self.module_marks_unknown || self.marking_hooks() {
@@ -3052,14 +3017,14 @@ impl<'a> aye_adapter::ast::visitor::Visitor<'a> for ClassMaker {
 /// Whether `path` names one of the unittest base classes pytest's unittest
 /// plugin knows.
 pub(crate) fn is_unittest_base(path: &str) -> bool {
-    UNITTEST_BASES.contains(&path) || UNITTEST_RUNTEST.contains(&path)
+    TESTCASE_ROOTS.contains(&path) || KNOWN_BASES.contains(&path) || RUNTEST_BASES.contains(&path)
 }
 
 /// Whether names imported from `path` are known not to be tests (nor
 /// fixtures or hooks).
 pub(crate) fn no_tests(path: &str) -> bool {
     let top = path.split('.').next().unwrap_or_default();
-    NO_TESTS.contains(&top) || UNITTEST_BASES.contains(&path)
+    NO_TESTS.contains(&top) || TESTCASE_ROOTS.contains(&path) || KNOWN_BASES.contains(&path)
 }
 
 /// What a module or class body may skip at runtime.

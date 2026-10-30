@@ -15,8 +15,18 @@ pub const TESTCASE_ROOTS: &[&str] = &[
     "unittest.async_case.IsolatedAsyncioTestCase",
 ];
 
+/// `unittest.FunctionTestCase`, by both its paths: a base that brings a
+/// `runTest` of its own, so a class deriving from it holds a test wherever
+/// it is bound.
+pub const RUNTEST_BASES: &[&str] = &[
+    "unittest.FunctionTestCase",
+    "unittest.case.FunctionTestCase",
+];
+
 /// `TestCase` subclasses of well-known installed packages, with no tests of
-/// their own: importing one into a test module adds no tests.
+/// their own: importing one into a test module adds no tests. Django's,
+/// Django REST framework's, Twisted's, asynctest's and aiounittest's;
+/// [`MORE_KNOWN_BASES`] has more.
 pub const KNOWN_BASES: &[&str] = &[
     "django.test.TestCase",
     "django.test.SimpleTestCase",
@@ -35,6 +45,13 @@ pub const KNOWN_BASES: &[&str] = &[
     "twisted.trial.unittest.SynchronousTestCase",
     "asynctest.TestCase",
     "aiounittest.AsyncTestCase",
+];
+
+/// More `TestCase` subclasses of well-known installed packages with no
+/// tests of their own: absl's, Tornado's, aiohttp's, Flask-Testing's,
+/// pyfakefs's and testtools'. [`looks_like_tests`] knows them; the pytest
+/// adapter's bases are [`TESTCASE_ROOTS`] and [`KNOWN_BASES`] alone.
+pub const MORE_KNOWN_BASES: &[&str] = &[
     "absl.testing.absltest.TestCase",
     "absl.testing.parameterized.TestCase",
     "tornado.testing.AsyncTestCase",
@@ -50,7 +67,7 @@ pub const KNOWN_BASES: &[&str] = &[
 /// `*TestCase`), other than the well-known bases that hold none. Installed
 /// packages are otherwise taken to export no test classes.
 pub fn looks_like_tests(name: &str, path: &str) -> bool {
-    if KNOWN_BASES.contains(&path) {
+    if KNOWN_BASES.contains(&path) || MORE_KNOWN_BASES.contains(&path) {
         return false;
     }
     let own = path.rsplit('.').next().unwrap_or(path);
@@ -60,6 +77,17 @@ pub fn looks_like_tests(name: &str, path: &str) -> bool {
             || n.ends_with("Tests")
             || n.ends_with("TestCase")
     })
+}
+
+/// Endings of class names unittest cases usually have.
+const CASE_NAME_ENDINGS: [&str; 4] = ["Test", "Tests", "TestCase", "TestCases"];
+
+/// Whether a class's name ends as unittest cases' names usually do
+/// (`*Test`, `*Tests`, `*TestCase`, `*TestCases`), for a class the reader
+/// can't see: the pytest adapter's guess. [`looks_like_tests`], the
+/// unittest adapter's, also takes `Test*` and leaves the known bases out.
+pub fn named_like_test_case(name: &str) -> bool {
+    CASE_NAME_ENDINGS.iter().any(|end| name.ends_with(end))
 }
 
 /// Decorators that keep a test method callable (and its name).

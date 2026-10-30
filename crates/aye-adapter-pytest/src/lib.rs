@@ -481,6 +481,7 @@ use aye_protocol::AdapterContext;
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
 use aye_python_stdlib::glob;
 use aye_python_stdlib::os_path::normalize_absolute;
+use aye_python_stdlib::unittest;
 use aye_static::{EnvVars, ProcessEnv};
 
 pub use config::{PytestConfig, split_xdist};
@@ -1615,9 +1616,6 @@ struct ProjectImports<'r> {
     own_dirs: &'r [PathBuf],
 }
 
-/// Endings of class names unittest cases usually have.
-const UNITTEST_ENDINGS: [&str; 4] = ["Test", "Tests", "TestCase", "TestCases"];
-
 impl module::Imports for ProjectImports<'_> {
     fn may_be_unittest(&self, path: &str) -> bool {
         self.supports.may_be_unittest(path, self.dir, self.bases)
@@ -1637,7 +1635,7 @@ impl module::Imports for ProjectImports<'_> {
         let name = path.rsplit('.').next().unwrap_or(path);
         self.path_unknown
             || support::found_in(path, self.own_dirs)
-            || UNITTEST_ENDINGS.iter().any(|end| name.ends_with(end))
+            || unittest::named_like_test_case(name)
     }
 
     fn project_test(&self, path: &str) -> bool {
