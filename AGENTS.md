@@ -50,7 +50,7 @@ Framework libraries (what the adapters share; only the adapter crates depend on 
 Adapter crates (one framework each, implementing `aye-adapter`; only the binary links them):
 
 - `crates/aye-adapter-pytest`: aye's own `pytest` module, the pytest front-end and its executor (`python/native/`), standard library only; the static recognizer, over pytest's configuration as aye-pytest reads it (`src/`: the adapter, the Python it embeds, the recognizers and the context at the top; `session/`, `claims/` and `conftest/`, which every run needs; `predict/` and `marks/`, which only `--co --no-refine` does); referee plain pytest
-- `crates/aye-adapter-unittest`: native, standard library only; referee `python -m unittest discover`
+- `crates/aye-adapter-unittest`: native, standard library only; the static recognizer (`src/`: the recognizer, discovery, the options, settings and context at the top; `module/`, a module read without importing it; `project.rs`, the project's modules, each read once; `loader.rs`, what the loader takes along each class's MRO); referee `python -m unittest discover`
 - `crates/aye-adapter-doctest`: native, standard library only; referee pytest's doctest plugin
 
 Test support (not published; each crate names it by path, as a dev-dependency):

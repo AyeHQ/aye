@@ -15,6 +15,16 @@
 //! used by this adapter and by the pytest adapter, not a fourth adapter; it
 //! lands later behind the services interface in `aye-protocol`.
 //!
+//! The Rust half's modules: the recognizer ([`UnittestRecognizer`]: the
+//! cases it predicts and why it refines) and the context it sends;
+//! `[tool.aye.unittest]` as written (`options`) and resolved (`settings`,
+//! [`UnittestConfig`]); where discovery starts and goes (`discovery`); a
+//! module read without importing it (`module`: what its names are bound
+//! to, the walk of its statements and of its class statements, what runs
+//! while it is imported); the project's modules, each read once in an arena
+//! (`project`); and what the loader takes from a module, along each
+//! class's MRO (`loader`).
+//!
 //! Depends on: aye-adapter, aye-config (`[tool.aye.unittest]`, where a
 //! setting came from), aye-events, aye-index (the project's modules and
 //! their classes, by index), aye-protocol, aye-python-semantic (the C3
