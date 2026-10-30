@@ -26,6 +26,7 @@ use aye_runner::{Echo, Plan, Runner, RunnerOptions};
 use aye_select::Selection;
 use aye_static::EnvVars;
 
+use crate::exit::{Errors, RunStage, RunVerdict};
 use crate::positional::Positional;
 use crate::registry;
 use crate::settings::{JunitTarget, RunSettings};
@@ -191,9 +192,13 @@ pub(crate) fn run(mut settings: RunSettings) -> ExitCode {
             refined_files: 0,
             duration: collect_started.elapsed(),
         });
+        let verdict = RunVerdict {
+            interrupted: true,
+            ..RunVerdict::default()
+        };
         return out.finish(
-            ExitCode::Interrupted,
-            Counts::default(),
+            verdict.exit_code(RunStage::Collection),
+            verdict.counts,
             Some(StopReason::Interrupted),
             &file_failed,
         );
@@ -327,49 +332,32 @@ pub(crate) fn run(mut settings: RunSettings) -> ExitCode {
     for case in &cases {
         out.emit(Event::CaseCollected(Box::new(case.clone())));
     }
-    out.emit(Event::CollectionFinished {
+    let collected = RunVerdict {
+        internal: internal_error,
+        usage: usage_error,
+        errors: collection_errors,
         selected: u32::try_from(cases.len()).unwrap_or(u32::MAX),
+        counts: Counts {
+            deselected: selected.deselected,
+            ..Counts::default()
+        },
+        collect_only: settings.collect_only,
+        continue_on_collection_errors: settings.continue_on_collection_errors,
+        ..RunVerdict::default()
+    };
+    out.emit(Event::CollectionFinished {
+        selected: collected.selected,
         deselected: selected.deselected,
         refined_files: collection.refined_files,
         duration: collect_started.elapsed(),
     });
-
-    let counts = Counts {
-        deselected: selected.deselected,
-        ..Counts::default()
-    };
-    if internal_error {
-        return out.finish(ExitCode::InternalError, counts, None, &file_failed);
-    }
-    if usage_error {
-        return out.finish(ExitCode::UsageError, counts, None, &file_failed);
-    }
-    // pytest counts each collection error as a failure: it stops the run
-    // (2), or, with `--continue-on-collection-errors`, fails it (1)
-    // whatever the tests do, `--co` included.
-    let continuing = settings.continue_on_collection_errors;
-    if settings.collect_only {
-        let code = if collection_errors && !continuing {
-            ExitCode::Interrupted
-        } else if collection_errors {
-            ExitCode::TestsFailed
-        } else if cases.is_empty() {
-            ExitCode::NoTests
-        } else {
-            ExitCode::Ok
-        };
-        return out.finish(code, counts, None, &file_failed);
-    }
-    if collection_errors && !continuing {
-        return out.finish(ExitCode::Interrupted, counts, None, &file_failed);
-    }
-    if cases.is_empty() {
-        let code = if collection_errors {
-            ExitCode::TestsFailed
-        } else {
-            ExitCode::NoTests
-        };
-        return out.finish(code, counts, None, &file_failed);
+    if collected.ends_after_collection() {
+        return out.finish(
+            collected.exit_code(RunStage::Collection),
+            collected.counts,
+            None,
+            &file_failed,
+        );
     }
 
     // -- run ----------------------------------------------------------------
@@ -424,13 +412,13 @@ pub(crate) fn run(mut settings: RunSettings) -> ExitCode {
         deselected: selected.deselected,
         ..summary.counts
     };
-    let stopped = summary.stopped.clone();
-    let mut errors = out.errors;
-    // Collection's errors, which `--continue-on-collection-errors` let
-    // the run go past, still fail it.
-    errors.any |= collection_errors;
-    let code = run_exit_code(&summary, errors, &counts, continuing);
-    out.finish(code, counts, stopped, &file_failed)
+    let verdict = collected.with_run(&summary, out.errors, counts);
+    out.finish(
+        verdict.exit_code(RunStage::Run),
+        verdict.counts,
+        summary.stopped,
+        &file_failed,
+    )
 }
 
 /// The run's reporters: its output format's on stdout (and GitHub's
@@ -890,29 +878,6 @@ fn dotted_reach(word: &str, path: &str) -> Named {
     named
 }
 
-/// Error diagnostics seen in the stream, by what they mean for the exit code
-/// ([`aye_events::ErrorClass::exit_code`]).
-#[derive(Debug, Clone, Copy, Default)]
-struct Errors {
-    any: bool,
-    usage: bool,
-    internal: bool,
-}
-
-impl Errors {
-    fn see(&mut self, diagnostic: &Diagnostic, origin: DiagnosticOrigin) {
-        let Some(class) = diagnostic.error_class(origin) else {
-            return;
-        };
-        self.any = true;
-        match class.exit_code() {
-            Some(ExitCode::UsageError) => self.usage = true,
-            Some(ExitCode::InternalError) => self.internal = true,
-            _ => {}
-        }
-    }
-}
-
 /// The reporters, history, the run store, the stamper for the binary's own
 /// records, and the errors the stream has carried so far.
 struct Stream<'a> {
@@ -1158,37 +1123,6 @@ fn requested_ids(positionals: &[Positional]) -> Vec<TestId> {
         .filter(|id| seen.insert(id.clone()))
         .map(TestId::new)
         .collect()
-}
-
-/// The exit code of a run that ran: an interruption decides first (Ctrl-C,
-/// or a framework that stopped a batch as interrupted: `pytest.exit`, a test
-/// raising `KeyboardInterrupt`), then an internal error, then a usage error
-/// a batch reported (pytest rejecting its arguments or failing to load an
-/// initial conftest, which pytest exits 4 for), then other error
-/// diagnostics, then the counts, and a framework that failed a batch none
-/// of whose tests failed (a conftest's `session.exitstatus`, pytest-cov's
-/// `--cov-fail-under`), as pytest exits 1 then.
-fn run_exit_code(
-    summary: &aye_runner::RunSummary,
-    errors: Errors,
-    counts: &Counts,
-    continue_on_collection_errors: bool,
-) -> ExitCode {
-    if summary.interrupted {
-        ExitCode::Interrupted
-    } else if summary.internal_error || errors.internal {
-        ExitCode::InternalError
-    } else if errors.usage {
-        ExitCode::UsageError
-    } else if errors.any && !continue_on_collection_errors {
-        ExitCode::Interrupted
-    } else if counts.bad() > 0 || errors.any || summary.framework_failed {
-        ExitCode::TestsFailed
-    } else if counts.total() == 0 {
-        ExitCode::NoTests
-    } else {
-        ExitCode::Ok
-    }
 }
 
 /// By adapter, the files collection found its tests in (selected or not),

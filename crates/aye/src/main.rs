@@ -245,6 +245,7 @@ mod busy;
 mod cli;
 mod config_cmd;
 mod environment;
+mod exit;
 mod framework_args;
 mod positional;
 mod registry;
