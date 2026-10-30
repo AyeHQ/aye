@@ -16,12 +16,12 @@
 //!   `pyproject.toml`; failing that, one holding `.git`; failing that, the
 //!   starting directory. Test ids are relative to it. Frameworks keep their
 //!   own notion of a root (pytest's rootdir) and translate. Paths are made
-//!   absolute lexically, as `aye_fs` decides. Where the paths spell one
-//!   directory two ways that share more than the filesystem's root (both
-//!   under Linux's `/tmp`), their common ancestor stays lexical, as pytest's
-//!   `get_common_ancestor` keeps it, but when no project holds it the root is
-//!   searched for from the resolved one ([`project_root`]), so one command
-//!   finds one root on every platform.
+//!   absolute lexically, as `aye_fs` decides. Where two spellings of one
+//!   directory share more than the filesystem's root (both under Linux's
+//!   `/tmp`), their common ancestor stays lexical, as pytest's
+//!   `get_common_ancestor` keeps it, but when no project holds it the root
+//!   is searched for from the resolved one ([`project_root`]), so one
+//!   command finds one root on every platform.
 //! - **`[tool.aye]` rejects unknown keys and values**, so a typo is an error
 //!   rather than a setting that silently does nothing: `output` must be
 //!   `text` or `json`, in any case as on the command line (it is kept in
@@ -146,11 +146,11 @@ pub fn find_root(start: &Path) -> PathBuf {
 }
 
 /// aye's project root for `paths` given in `cwd`: [`find_root`] from their
-/// [`aye_fs::common_ancestor`]. When nothing above that ancestor marks a
-/// project, but the paths, resolved, share a directory inside it (one
-/// directory spelled two ways under a shared `/tmp`, as on Linux), the
-/// search starts from that directory instead, so the root doesn't depend on
-/// how much two spellings happen to share.
+/// common ancestor. When nothing above that ancestor marks a project, but
+/// the paths, resolved, share a directory inside it (one directory spelled
+/// two ways under a shared `/tmp`, as on Linux), the search starts from
+/// that directory instead, so the root doesn't depend on how much two
+/// spellings happen to share.
 pub fn project_root(cwd: &Path, paths: &[PathBuf]) -> PathBuf {
     let ancestor = aye_fs::normpath(&aye_fs::common_ancestor(cwd, paths));
     if let Some(root) = marked(&ancestor) {
@@ -562,12 +562,13 @@ mod tests {
         let alias = alias_dir.path().join("alias");
         std::os::unix::fs::symlink(real.join("proj"), &alias).unwrap();
         let cwd = real.join("proj");
-        // Whether the two spellings share only the filesystem's root (macOS)
-        // or more (/tmp on Linux), the root is the project's.
         let paths = [
             alias.join("tests/test_a.py"),
             PathBuf::from("tests/test_b.py"),
         ];
+        // Whether the common ancestor is the resolved one (macOS's
+        // /private/var against /var) or a lexical one above both (Linux's
+        // /tmp), the root is the project's.
         assert_eq!(project_root(&cwd, &paths), real.join("proj"));
         // A symlinked directory inside the project keeps its own name.
         std::os::unix::fs::symlink(real.join("proj/tests"), real.join("proj/linked")).unwrap();
