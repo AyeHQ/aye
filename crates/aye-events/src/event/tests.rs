@@ -1,6 +1,7 @@
+use std::collections::BTreeMap;
 use std::time::Duration;
 
-use super::*;
+use crate::*;
 
 fn round_trip(record: &Record) -> Record {
     let line = serde_json::to_string(record).unwrap();
@@ -31,7 +32,7 @@ fn every_event() -> Vec<Event> {
             source: Some("assert add(2, 2) == 5".into()),
             ..Default::default()
         }],
-        signature: "abc".into(),
+        signature: FailureSignature::new("abc"),
         detail: None,
         ..Default::default()
     };
@@ -44,7 +45,7 @@ fn every_event() -> Vec<Event> {
     result.failures = vec![failure.clone()];
     result.output.stdout = "hello\n".into();
     result.reproduce = Some(Reproduce {
-        command: vec!["aye".into(), id.0.clone()],
+        command: vec!["aye".into(), id.as_str().to_owned()],
         inputs: BTreeMap::from([("seed".into(), "42".into())]),
     });
     result.properties = vec![("example_key".into(), "1".into())];
@@ -72,9 +73,9 @@ fn every_event() -> Vec<Event> {
         Event::Diagnostic(Diagnostic {
             severity: Severity::Warning,
             code: "duplicate-definition".into(),
-            path: "tests/test_cart.py".into(),
+            path: ProjectPath::new("tests/test_cart.py").unwrap().into(),
             span: Some(Span {
-                path: "tests/test_cart.py".into(),
+                path: ProjectPath::new("tests/test_cart.py").unwrap(),
                 start: 10,
                 end: 20,
                 line: Some(3),
@@ -99,7 +100,7 @@ fn every_event() -> Vec<Event> {
         },
         Event::LifetimeStarted {
             lifetime: "class:tests/test_cart.py::TestCart".into(),
-            kind: "class".into(),
+            kind: Scope::Class,
         },
         Event::TestStarted { id: id.clone() },
         Event::SubOutcome {
@@ -120,7 +121,9 @@ fn every_event() -> Vec<Event> {
             failure: Some(failure),
             duration: Duration::from_millis(2),
         },
-        Event::BatchFinished { status: Some(1) },
+        Event::BatchFinished {
+            status: Some(FrameworkStatus::TESTS_FAILED),
+        },
         Event::WorkerFinished {
             exit_status: Some(0),
             error: None,
@@ -144,8 +147,8 @@ fn every_event_round_trips() {
             envelope: Envelope {
                 run: Some("r1".into()),
                 environment: Some("py313".into()),
-                worker: Some(0),
-                batch: Some(0),
+                worker: Some(WorkerIndex::FIRST),
+                batch: Some(BatchIndex::from_u32(0)),
                 seq: Some(7),
                 t_ms: Some(1.25),
             },
@@ -165,7 +168,7 @@ fn the_runs_number_and_its_id_are_two_keys() {
         root: "/p".into(),
         collect_only: false,
         workers: 1,
-        run: Some(81),
+        run: RunNumber::new(81),
     });
     record.envelope.run = Some("e14d5f08d1554fbc".into());
     let line = serde_json::to_string(&record).unwrap();
@@ -237,48 +240,6 @@ fn properties_and_the_bodys_duration_are_optional_on_the_wire() {
         serde_json::to_string(&record).unwrap(),
         r#"{"event":"test_finished","id":"t.py::test_x","outcome":"passed","duration_ms":2.5}"#
     );
-}
-
-#[test]
-fn ids_split_into_path_and_params() {
-    let id = TestId::new("tests/t.py::TestX::test_y[a-1]");
-    assert_eq!(id.path(), "tests/t.py");
-    assert_eq!(id.without_params(), "tests/t.py::TestX::test_y");
-    assert_eq!(TestId::new("tests/t.py").without_params(), "tests/t.py");
-    assert_eq!(
-        TestId::new("tests/t[1].py::test_x").without_params(),
-        "tests/t[1].py::test_x"
-    );
-}
-
-#[test]
-fn keys_are_stable_hashes() {
-    // FNV-1a 64 of "" and "a" (cbf29ce484222325, af63dc4c8601ec8c), mixed.
-    assert_eq!(TestKey::of("").0, "f52a15e9a9b5e89b");
-    assert_eq!(TestKey::of("a").0, "02c0bdbf481420f8");
-    // Ids that differ in their last byte differ from the first digit.
-    assert_eq!(&TestKey::of("tests/test_k.py::test_0").0[..5], "25ece");
-    assert_eq!(&TestKey::of("tests/test_k.py::test_1").0[..5], "23ea0");
-    assert_eq!(
-        TestId::new("t.py::test_x").key(),
-        TestKey::of("t.py::test_x")
-    );
-}
-
-#[test]
-fn counts_fold_outcomes() {
-    let mut counts = Counts::default();
-    for outcome in [
-        Outcome::Passed,
-        Outcome::Failed,
-        Outcome::Error,
-        Outcome::Skipped,
-    ] {
-        counts.record(outcome);
-    }
-    assert_eq!(counts.total(), 4);
-    assert_eq!(counts.bad(), 2);
-    assert!(Outcome::Error.severity() > Outcome::Failed.severity());
 }
 
 #[test]

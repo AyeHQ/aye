@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use aye_engine::{Claim, Ranged, RefineError, RefineRequest, Refined, Setting, ast};
-use aye_events::Certainty;
+use aye_events::{Certainty, DiagnosticCode, ProjectPath};
 
 use super::*;
 
@@ -98,8 +98,8 @@ impl Recognizer for Fake {
                     ] {
                         recognition.diagnostics.push(Diagnostic {
                             severity,
-                            code: code.to_string(),
-                            path: file.rel.to_string(),
+                            code: code.into(),
+                            path: file.rel.to_project_path().into(),
                             span: Some(file.span(def.range())),
                             message: format!("{name} is broken"),
                         });
@@ -192,7 +192,7 @@ impl Refiner for FakeRefiner {
             .iter()
             .flat_map(|file| {
                 ["dynamic[1]", "dynamic[2]"].map(|name| {
-                    let mut case = Case::new(format!("{file}::{name}"), &request.adapter);
+                    let mut case = Case::new(format!("{file}::{name}"), request.adapter.clone());
                     case.certainty = Certainty::Refined;
                     case
                 })
@@ -230,7 +230,7 @@ fn run(
 }
 
 fn fake() -> Vec<Prepared> {
-    vec![("fake", Box::new(Fake::new()))]
+    vec![("fake".into(), Box::new(Fake::new()))]
 }
 
 /// A fake interpreter in a venv: `<dir>/venv/bin/python`, its
@@ -298,11 +298,11 @@ fn ids(collection: &Collection) -> Vec<&str> {
     collection.cases.iter().map(|c| c.id.as_str()).collect()
 }
 
-fn codes_of(collection: &Collection) -> Vec<(&str, Severity)> {
+fn codes_of(collection: &Collection) -> Vec<(DiagnosticCode, Severity)> {
     collection
         .diagnostics
         .iter()
-        .map(|d| (d.code.as_str(), d.severity))
+        .map(|d| (d.code.clone(), d.severity))
         .collect()
 }
 
@@ -358,7 +358,7 @@ fn explicit_files_are_claimed_as_explicit() {
     write(root, "tests/one_check.py", "def test_one(): pass\n");
     let recognizer = Fake::new();
     let claims = recognizer.claims.clone();
-    let recognizers: Vec<Prepared> = vec![("fake", Box::new(recognizer))];
+    let recognizers: Vec<Prepared> = vec![("fake".into(), Box::new(recognizer))];
 
     let targets = [PathBuf::from("plain.py"), root.join("tests/./../tests")];
     let collection = run(root, &recognizers, &targets, Options::default(), None);
@@ -438,7 +438,10 @@ fn explicit_paths_are_normalized_as_pytest_does() {
         root.join("tests"),
     ];
     let collection = run(root, &fake(), &targets, Options::default(), None);
-    assert_eq!(codes_of(&collection), [(codes::NOT_FOUND, Severity::Error)]);
+    assert_eq!(
+        codes_of(&collection),
+        [(DiagnosticCode::NotFound, Severity::Error)]
+    );
     assert_eq!(ids(&collection), walk);
 }
 
@@ -472,8 +475,8 @@ fn missing_and_unclaimed_targets_are_errors() {
     assert_eq!(
         codes_of(&collection),
         [
-            (codes::NOT_FOUND, Severity::Error),
-            (codes::UNCLAIMED, Severity::Error),
+            (DiagnosticCode::NotFound, Severity::Error),
+            (DiagnosticCode::Unclaimed, Severity::Error),
         ]
     );
     assert_eq!(collection.diagnostics[0].path, "nope.py");
@@ -489,8 +492,11 @@ fn roots_are_walked_only_for_the_recognizers_that_list_them() {
     write(root, "other/o_check.py", "def test_o(): pass\n");
     write(root, "other/notes.txt", "first\nsecond\n");
     let recognizers: Vec<Prepared> = vec![
-        ("fake", Box::new(Fake::rooted(vec![root.join("tests")]))),
-        ("lines", Box::new(Lines)),
+        (
+            "fake".into(),
+            Box::new(Fake::rooted(vec![root.join("tests")])),
+        ),
+        ("lines".into(), Box::new(Lines)),
     ];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(
@@ -508,7 +514,7 @@ fn non_python_files_reach_recognizers_with_an_empty_module() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     write(root, "doc.txt", "def (:\nalpha\n");
-    let recognizers: Vec<Prepared> = vec![("lines", Box::new(Lines))];
+    let recognizers: Vec<Prepared> = vec![("lines".into(), Box::new(Lines))];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(ids(&collection), ["doc.txt::def (:", "doc.txt::alpha"]);
     assert_eq!(collection.diagnostics, [] as [aye_events::Diagnostic; 0]);
@@ -609,7 +615,7 @@ fn a_file_claimed_as_tests_and_support_is_both() {
     let collection = run(root, &fake(), &[], Options::default(), None);
     assert_eq!(
         codes_of(&collection),
-        [(codes::SYNTAX_ERROR, Severity::Error)]
+        [(DiagnosticCode::SyntaxError, Severity::Error)]
     );
     assert_eq!(collection.diagnostics[0].path, "both.py");
     assert_eq!(keywords(&collection, "a_check.py::test_a"), ["helpers.py"]);
@@ -636,7 +642,7 @@ fn an_unreadable_file_claimed_as_tests_and_support_is_reported_once() {
     fs::set_permissions(&both, fs::Permissions::from_mode(0o644)).unwrap();
     assert_eq!(
         codes_of(&collection),
-        [(codes::UNREADABLE, Severity::Error)]
+        [(DiagnosticCode::Unreadable, Severity::Error)]
     );
     assert_eq!(collection.diagnostics[0].path, "both.py");
     assert_eq!(ids(&collection), ["a_check.py::test_a"]);
@@ -659,11 +665,11 @@ fn a_file_yields_tests_only_for_the_recognizers_whose_walk_reached_it() {
     // in the root's file would win the id.
     let recognizers: Vec<Prepared> = vec![
         (
-            "tests_only",
+            "tests_only".into(),
             Box::new(named("tests_only", vec![root.join("tests")])),
         ),
         (
-            "everywhere",
+            "everywhere".into(),
             Box::new(named("everywhere", vec![root.to_path_buf()])),
         ),
     ];
@@ -697,7 +703,7 @@ fn syntax_errors_are_reported_and_yield_no_cases() {
     assert_eq!(ids(&collection), ["good_check.py::test_good"]);
     assert_eq!(
         codes_of(&collection),
-        [(codes::SYNTAX_ERROR, Severity::Error)]
+        [(DiagnosticCode::SyntaxError, Severity::Error)]
     );
     let diagnostic = &collection.diagnostics[0];
     assert_eq!(diagnostic.path, "bad_check.py");
@@ -718,7 +724,7 @@ fn a_syntax_error_at_the_end_of_the_file_is_located() {
     let collection = run(root, &fake(), &[], Options::default(), None);
     assert_eq!(collection.cases, [] as [aye_events::Case; 0]);
     let diagnostic = &collection.diagnostics[0];
-    assert_eq!(diagnostic.code, codes::SYNTAX_ERROR);
+    assert_eq!(diagnostic.code, DiagnosticCode::SyntaxError);
     assert!(diagnostic.message.starts_with("syntax error at 2:"));
 }
 
@@ -776,7 +782,7 @@ fn a_file_that_is_not_utf8_is_refined() {
     assert_eq!(collection.cases, [] as [aye_events::Case; 0]);
     assert_eq!(
         codes_of(&collection),
-        [(codes::NOT_REFINED, Severity::Info)]
+        [(DiagnosticCode::NotRefined, Severity::Info)]
     );
     assert!(
         collection.diagnostics[0]
@@ -795,8 +801,8 @@ fn the_higher_priority_adapter_wins_a_duplicate_id() {
         ..Fake::new()
     };
     let recognizers: Vec<Prepared> = vec![
-        ("first", Box::new(named("first"))),
-        ("second", Box::new(named("second"))),
+        ("first".into(), Box::new(named("first"))),
+        ("second".into(), Box::new(named("second"))),
     ];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(ids(&collection), ["a_check.py::test_a"]);
@@ -822,7 +828,7 @@ fn the_higher_priority_adapter_wins_a_duplicate_id() {
     assert_eq!(ids(&collection), ["a_check.py::test_a"]);
     assert_eq!(
         codes_of(&collection),
-        [(codes::DUPLICATE_ID, Severity::Warning)]
+        [(DiagnosticCode::DuplicateId, Severity::Warning)]
     );
     assert!(
         collection.diagnostics[0]
@@ -853,7 +859,7 @@ fn an_adapter_repeating_an_id_keeps_the_first() {
     );
     assert_eq!(
         codes_of(&collection),
-        [(codes::DUPLICATE_ID, Severity::Warning)]
+        [(DiagnosticCode::DuplicateId, Severity::Warning)]
     );
     assert_eq!(
         collection.diagnostics[0].span.as_ref().unwrap().line,
@@ -876,7 +882,10 @@ fn a_test_file_without_tests_is_noted() {
     write(root, "empty_check.py", "X = 1\n");
     let collection = run(root, &fake(), &[], Options::default(), None);
     assert_eq!(collection.cases, [] as [aye_events::Case; 0]);
-    assert_eq!(codes_of(&collection), [(codes::NO_TESTS, Severity::Info)]);
+    assert_eq!(
+        codes_of(&collection),
+        [(DiagnosticCode::NoTests, Severity::Info)]
+    );
     let strict = Options {
         strict: true,
         ..Options::default()
@@ -898,8 +907,8 @@ fn a_file_whose_adapter_says_why_it_has_no_tests_gets_no_note() {
                     .0
                     .map(|code| Diagnostic {
                         severity: Severity::Info,
-                        code: code.to_string(),
-                        path: request.files[0].clone(),
+                        code: code.into(),
+                        path: request.files[0].clone().into(),
                         span: None,
                         message: "…".to_string(),
                     })
@@ -915,12 +924,15 @@ fn a_file_whose_adapter_says_why_it_has_no_tests_gets_no_note() {
     for code in ["skipped", "ignored"] {
         let refiner = Replies(Some(code));
         let collection = run(root, &fake(), &[], Options::default(), Some(&refiner));
-        assert_eq!(codes_of(&collection), [(code, Severity::Info)]);
+        assert_eq!(codes_of(&collection), [(code.into(), Severity::Info)]);
     }
     // Nothing said: the note.
     let refiner = Replies(None);
     let collection = run(root, &fake(), &[], Options::default(), Some(&refiner));
-    assert_eq!(codes_of(&collection), [(codes::NO_TESTS, Severity::Info)]);
+    assert_eq!(
+        codes_of(&collection),
+        [(DiagnosticCode::NoTests, Severity::Info)]
+    );
 }
 
 /// A file in a directory an adapter reported about (a conftest pytest
@@ -931,14 +943,14 @@ fn a_file_in_a_directory_the_adapter_reported_about_gets_no_note() {
     struct SkipsSub;
     impl Refiner for SkipsSub {
         fn refine(&self, request: &RefineRequest) -> Result<Refined, RefineError> {
-            let skips = request.files.iter().any(|f| f.starts_with("sub/"));
+            let skips = request.files.iter().any(|f| f.as_str().starts_with("sub/"));
             Ok(Refined {
                 cases: Vec::new(),
                 diagnostics: skips
                     .then(|| Diagnostic {
                         severity: Severity::Info,
-                        code: "skipped".to_string(),
-                        path: "sub".to_string(),
+                        code: DiagnosticCode::Skipped,
+                        path: "sub".into(),
                         span: None,
                         message: "could not import 'missing'".to_string(),
                     })
@@ -954,14 +966,17 @@ fn a_file_in_a_directory_the_adapter_reported_about_gets_no_note() {
         write(root, rel, "def dynamic():\n    pass\n");
     }
     let collection = run(root, &fake(), &[], Options::default(), Some(&SkipsSub));
-    let notes: Vec<(&str, &str)> = collection
+    let notes: Vec<(DiagnosticCode, &str)> = collection
         .diagnostics
         .iter()
-        .map(|d| (d.code.as_str(), d.path.as_str()))
+        .map(|d| (d.code.clone(), d.path.as_str()))
         .collect();
     assert_eq!(
         notes,
-        [(codes::NO_TESTS, "subway/c_check.py"), ("skipped", "sub")]
+        [
+            (DiagnosticCode::NoTests, "subway/c_check.py"),
+            (DiagnosticCode::Skipped, "sub")
+        ]
     );
 }
 
@@ -979,7 +994,10 @@ fn files_claimed_whatever_their_names_may_hold_no_tests() {
         any_name: true,
         ..Fake::new()
     };
-    let recognizers: Vec<Prepared> = vec![("every", Box::new(every)), ("lines", Box::new(Lines))];
+    let recognizers: Vec<Prepared> = vec![
+        ("every".into(), Box::new(every)),
+        ("lines".into(), Box::new(Lines)),
+    ];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(collection.cases, [] as [aye_events::Case; 0]);
     // `empty_check.py` is claimed by name too, by the same recognizer: one
@@ -989,16 +1007,19 @@ fn files_claimed_whatever_their_names_may_hold_no_tests() {
 
     let recognizers: Vec<Prepared> = vec![
         (
-            "every",
+            "every".into(),
             Box::new(Fake {
                 any_name: true,
                 ..Fake::new()
             }),
         ),
-        ("named", Box::new(Fake::new())),
+        ("named".into(), Box::new(Fake::new())),
     ];
     let collection = run(root, &recognizers, &[], Options::default(), None);
-    assert_eq!(codes_of(&collection), [(codes::NO_TESTS, Severity::Info)]);
+    assert_eq!(
+        codes_of(&collection),
+        [(DiagnosticCode::NoTests, Severity::Info)]
+    );
     assert_eq!(collection.diagnostics[0].path, "pkg/empty_check.py");
     assert_eq!(
         collection.diagnostics[0].message,
@@ -1026,7 +1047,7 @@ fn a_packages_init_comes_first_in_the_walk() {
         any_name: true,
         ..Fake::new()
     };
-    let recognizers: Vec<Prepared> = vec![("every", Box::new(every))];
+    let recognizers: Vec<Prepared> = vec![("every".into(), Box::new(every))];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(
         ids(&collection),
@@ -1069,7 +1090,7 @@ fn an_unreadable_directory_is_an_error() {
     // `skip` is never entered, so it can't fail.
     assert_eq!(
         codes_of(&collection),
-        [(codes::UNREADABLE, Severity::Error)]
+        [(DiagnosticCode::Unreadable, Severity::Error)]
     );
     assert_eq!(collection.diagnostics[0].path, "locked");
     assert!(collection.has_errors());
@@ -1106,8 +1127,11 @@ fn refined_cases_replace_the_static_ones() {
     assert_eq!(
         *refiner.requests.lock().unwrap(),
         [RefineRequest {
-            adapter: "fake".to_string(),
-            files: vec!["b_check.py".to_string(), "c_check.py".to_string()],
+            adapter: "fake".into(),
+            files: vec![
+                ProjectPath::new("b_check.py").unwrap(),
+                ProjectPath::new("c_check.py").unwrap(),
+            ],
             context: serde_json::json!({"rootdir": "/fake"}),
             digests_only: false,
         }]
@@ -1143,8 +1167,8 @@ fn refinement_only_replaces_the_adapter_that_asked() {
     let root = dir.path();
     write(root, "d_check.py", "def dynamic(): pass\n");
     let recognizers: Vec<Prepared> = vec![
-        ("fake", Box::new(Fake::new())),
-        ("static", Box::new(Static(Fake::new()))),
+        ("fake".into(), Box::new(Fake::new())),
+        ("static".into(), Box::new(Static(Fake::new()))),
     ];
     let refiner = FakeRefiner::default();
     let collection = run(root, &recognizers, &[], Options::default(), Some(&refiner));
@@ -1264,7 +1288,7 @@ fn stray_refined_cases_in_a_requested_package_keep_their_place() {
     write(root, "pkg/m_check.py", "def dynamic(): pass\n");
     write(root, "pkg/sub/__init__.py", "def dynamic(): pass\n");
     write(root, "z_check.py", "def test_z(): pass\n");
-    let packages: Vec<Prepared> = vec![("packages", Box::new(Packages))];
+    let packages: Vec<Prepared> = vec![("packages".into(), Box::new(Packages))];
     let collection = run(root, &packages, &[], Options::default(), Some(&Discovering));
     assert_eq!(
         ids(&collection),
@@ -1301,7 +1325,7 @@ fn refinement_failure_keeps_the_static_guess() {
     assert_eq!(collection.refined_files, 0);
     assert_eq!(
         codes_of(&collection),
-        [(codes::REFINE_FAILED, Severity::Warning)]
+        [(DiagnosticCode::RefineFailed, Severity::Warning)]
     );
     assert!(
         collection.diagnostics[0]
@@ -1319,7 +1343,7 @@ fn without_a_refiner_the_static_guess_stays() {
     assert_eq!(ids(&collection), ["d_check.py::dynamic"]);
     assert_eq!(
         codes_of(&collection),
-        [(codes::NOT_REFINED, Severity::Info)]
+        [(DiagnosticCode::NotRefined, Severity::Info)]
     );
     let message = &collection.diagnostics[0].message;
     assert!(message.contains("tests made at import"), "{message}");
@@ -1343,8 +1367,8 @@ fn a_refined_file_keeps_only_the_frameworks_errors() {
                 .iter()
                 .map(|file| Diagnostic {
                     severity: Severity::Error,
-                    code: "collection-error".to_string(),
-                    path: file.clone(),
+                    code: DiagnosticCode::CollectionError,
+                    path: file.clone().into(),
                     span: None,
                     message: "the framework could not collect it".to_string(),
                 })
@@ -1365,15 +1389,18 @@ fn a_refined_file_keeps_only_the_frameworks_errors() {
     assert_eq!(
         codes_of(&collection),
         [
-            ("static-lint", Severity::Warning),
-            ("collection-error", Severity::Error)
+            (DiagnosticCode::from("static-lint"), Severity::Warning),
+            (DiagnosticCode::CollectionError, Severity::Error)
         ]
     );
     assert_eq!(ids(&collection), [] as [&str; 0]);
     // A framework that collects the file has the final word too.
     let refiner = FakeRefiner::default();
     let collection = run(root, &fake(), &[], Options::default(), Some(&refiner));
-    assert_eq!(codes_of(&collection), [("static-lint", Severity::Warning)]);
+    assert_eq!(
+        codes_of(&collection),
+        [(DiagnosticCode::from("static-lint"), Severity::Warning)]
+    );
     assert_eq!(
         ids(&collection),
         ["b_check.py::dynamic[1]", "b_check.py::dynamic[2]"]
@@ -1384,9 +1411,9 @@ fn a_refined_file_keeps_only_the_frameworks_errors() {
     assert_eq!(
         codes_of(&collection),
         [
-            ("static-error", Severity::Error),
-            ("static-lint", Severity::Warning),
-            (codes::NOT_REFINED, Severity::Info)
+            (DiagnosticCode::from("static-error"), Severity::Error),
+            (DiagnosticCode::from("static-lint"), Severity::Warning),
+            (DiagnosticCode::NotRefined, Severity::Info)
         ]
     );
     let refiner = FakeRefiner::failing();
@@ -1394,9 +1421,9 @@ fn a_refined_file_keeps_only_the_frameworks_errors() {
     assert_eq!(
         codes_of(&collection),
         [
-            ("static-error", Severity::Error),
-            ("static-lint", Severity::Warning),
-            (codes::REFINE_FAILED, Severity::Warning)
+            (DiagnosticCode::from("static-error"), Severity::Error),
+            (DiagnosticCode::from("static-lint"), Severity::Warning),
+            (DiagnosticCode::RefineFailed, Severity::Warning)
         ]
     );
     assert_eq!(ids(&collection), ["b_check.py::broken"]);
@@ -1480,7 +1507,7 @@ fn refinement_is_cached_by_content() {
     assert_eq!(collect(&refiner, &fake(), "0.0.2").len(), 1);
     let mut other = Fake::new();
     other.setting = "2".to_string();
-    let recognizers: Vec<Prepared> = vec![("fake", Box::new(other))];
+    let recognizers: Vec<Prepared> = vec![("fake".into(), Box::new(other))];
     assert_eq!(collect(&refiner, &recognizers, "0.0.1").len(), 1);
 }
 
@@ -1615,7 +1642,7 @@ fn a_file_claimed_as_tests_and_support_keys_itself_and_the_files_below() {
             .collect::<Vec<_>>()
     };
     assert_eq!(files(), ["both.py", "sub/d_check.py"]);
-    assert_eq!(files(), [] as [std::string::String; 0]);
+    assert_eq!(files(), [] as [&str; 0]);
     write(root, "both.py", "def dynamic(): pass\n# edited\n");
     assert_eq!(files(), ["both.py", "sub/d_check.py"]);
     write(root, "sub/d_check.py", "def dynamic(): pass\n# edited\n");
@@ -1675,8 +1702,8 @@ fn only_clean_results_are_cached() {
     fn diagnostic(severity: Severity, code: &str, path: &str) -> Diagnostic {
         Diagnostic {
             severity,
-            code: code.to_string(),
-            path: path.to_string(),
+            code: code.into(),
+            path: path.into(),
             span: None,
             message: "…".to_string(),
         }
@@ -1692,12 +1719,16 @@ fn only_clean_results_are_cached() {
     let replies: [(&str, Reply); 6] = [
         ("an import error", |r| Refined {
             cases: Vec::new(),
-            diagnostics: vec![diagnostic(Severity::Error, "collection-error", &r.files[0])],
+            diagnostics: vec![diagnostic(
+                Severity::Error,
+                "collection-error",
+                r.files[0].as_str(),
+            )],
             digests: None,
         }),
         ("a module-level skip", |r| Refined {
             cases: Vec::new(),
-            diagnostics: vec![diagnostic(Severity::Info, "skipped", &r.files[0])],
+            diagnostics: vec![diagnostic(Severity::Info, "skipped", r.files[0].as_str())],
             digests: None,
         }),
         ("no tests", |_| Refined::default()),
@@ -1762,7 +1793,7 @@ fn only_clean_results_are_cached() {
     );
     assert_eq!(
         codes_of(&collection),
-        [(codes::REFINE_FAILED, Severity::Warning)]
+        [(DiagnosticCode::RefineFailed, Severity::Warning)]
     );
     assert_eq!(entries(cache.path()), 0);
 }
@@ -2375,7 +2406,7 @@ fn a_plugin_in_the_context_or_arguments_turns_the_cache_off() {
     let with_context = |context: serde_json::Value| -> Vec<Prepared> {
         let mut fake = Fake::new();
         fake.context = context;
-        vec![("fake", Box::new(fake))]
+        vec![("fake".into(), Box::new(fake))]
     };
     let refiner = FakeRefiner::default();
     for context in [
@@ -2447,7 +2478,7 @@ fn files_the_context_names_are_keyed_by_content() {
     write(root, "pytest.ini", "[pytest]\n");
     let mut fake = Fake::new();
     fake.context = serde_json::json!({"inifile": root.join("pytest.ini").to_string_lossy()});
-    let recognizers: Vec<Prepared> = vec![("fake", Box::new(fake))];
+    let recognizers: Vec<Prepared> = vec![("fake".into(), Box::new(fake))];
     let refiner = FakeRefiner::default();
     let calls = || {
         run_cached(

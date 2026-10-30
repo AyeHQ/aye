@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use aye_engine::Claim;
-use aye_events::{Diagnostic, Severity};
+use aye_events::{Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPath, Severity};
 use walkdir::WalkDir;
 
-use crate::{Prepared, codes};
+use crate::Prepared;
 
 /// A set of recognizers, by priority index.
 pub(crate) type Mask = u64;
@@ -20,7 +20,7 @@ pub(crate) fn bits(mask: Mask) -> impl Iterator<Item = usize> {
 pub(crate) struct Entry {
     pub abs: PathBuf,
     /// Relative to the project root, `/` separators.
-    pub rel: String,
+    pub rel: ProjectPath,
     /// Found by the walk, rather than while looking for support files above
     /// it. Only walked files yield tests.
     pub walked: bool,
@@ -105,8 +105,10 @@ impl<'r> Tree<'r> {
                         let path = err.path().unwrap_or(top);
                         self.diagnostics.push(Diagnostic {
                             severity: Severity::Error,
-                            code: codes::UNREADABLE.to_string(),
-                            path: aye_fs::relative_through_root(path, self.root),
+                            code: DiagnosticCode::Unreadable,
+                            path: DiagnosticPath::as_written(aye_fs::relative_through_root(
+                                path, self.root,
+                            )),
                             span: None,
                             message: format!("cannot read: {err}"),
                         });
@@ -156,7 +158,10 @@ impl<'r> Tree<'r> {
         }
         let had_tests = entry.tests != 0;
         for i in bits(mask & !entry.asked) {
-            entry.claim(i, recognizers[i].1.claim(&entry.rel, entry.explicit));
+            entry.claim(
+                i,
+                recognizers[i].1.claim(entry.rel.as_str(), entry.explicit),
+            );
         }
         entry.asked |= mask;
         if !had_tests && entry.tests != 0 {
@@ -171,7 +176,7 @@ impl<'r> Tree<'r> {
         }
         let at = self.entries.len();
         self.entries.push(Entry {
-            rel: aye_fs::relative_through_root(&abs, self.root),
+            rel: ProjectPath::as_written(aye_fs::relative_through_root(&abs, self.root)),
             abs: abs.clone(),
             walked: false,
             explicit: false,
@@ -231,7 +236,7 @@ impl<'r> Tree<'r> {
             if entry.asked & bit == 0 {
                 let claim = self.recognizers[recognizer]
                     .1
-                    .claim(&entry.rel, entry.explicit);
+                    .claim(entry.rel.as_str(), entry.explicit);
                 // Asked here, a file is only support: its tests belong to
                 // the recognizers whose walk reached it.
                 if claim.is_support() {

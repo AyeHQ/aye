@@ -251,7 +251,7 @@ fn runs_in(root: &Path) -> HashSet<String> {
     store(root)
         .runs()
         .into_iter()
-        .map(|meta| meta.run)
+        .map(|meta| meta.run.to_string())
         .collect()
 }
 
@@ -262,8 +262,8 @@ fn kept(root: &Path, before: &HashSet<String>) -> Option<Vec<Value>> {
     let meta = store
         .runs()
         .into_iter()
-        .find(|meta| !before.contains(&meta.run))?;
-    let log = store.log(&meta.run).ok()?;
+        .find(|meta| !before.contains(&meta.run.to_string()))?;
+    let log = store.log(&meta.run.to_string()).ok()?;
     Some(
         log.iter()
             .map(|record| serde_json::to_value(record).unwrap())

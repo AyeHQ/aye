@@ -1,16 +1,20 @@
 //! The constants Python and Rust must agree on, read from the Python aye
 //! embeds (parsed, not run): the outcomes and their severities, the
-//! phases, the service names and the services the engine provides itself,
-//! the protocol version, and the diagnostic codes and severities Python
-//! emits. Each is written once on each side, and a difference is a value
-//! one side sends that the other misreads or drops.
+//! phases, the scopes, the frameworks' statuses, the service names and the
+//! services the engine provides itself, the protocol version, the
+//! comparisons an assertion makes and the kinds a comparison tells apart,
+//! and the diagnostic codes and severities Python emits. Each is written
+//! once on each side, and a difference is a value one side sends that the
+//! other misreads or drops.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use aye_engine::ast::visitor::{self, Visitor};
-use aye_engine::ast::{Expr, ModModule, Stmt};
+use aye_engine::ast::{DictItem, Expr, ModModule, Stmt};
 use aye_engine::{EmbeddedModule, PROTOCOL_VERSION, services};
-use aye_events::{Outcome, Phase, Severity};
+use aye_events::{
+    CompareKind, ComparisonOp, DiagnosticCode, FrameworkStatus, Outcome, Phase, Scope, Severity,
+};
 use serde_json::{Value, json};
 
 /// Every Python module aye embeds, once each: the engine's, each adapter's,
@@ -65,9 +69,38 @@ fn module_int(module: &ModModule, name: &str) -> Option<u64> {
     })
 }
 
-/// The `NAME = "value"` assignments in the body of the class `name`, in
-/// order.
-fn class_strings(module: &ModModule, name: &str) -> Vec<(String, String)> {
+/// The items of the module-level dict `name = {…}` (or `name: T = {…}`),
+/// in order.
+fn module_dict<'m>(module: &'m ModModule, name: &str) -> &'m [DictItem] {
+    module
+        .body
+        .iter()
+        .find_map(|stmt| {
+            let (target, value) = match stmt {
+                Stmt::Assign(assign) => (&assign.targets[..], &*assign.value),
+                Stmt::AnnAssign(assign) => (
+                    std::slice::from_ref(&*assign.target),
+                    assign.value.as_deref()?,
+                ),
+                _ => return None,
+            };
+            match (target, value) {
+                ([Expr::Name(target)], Expr::Dict(dict)) if target.id.as_str() == name => {
+                    Some(&dict.items[..])
+                }
+                _ => None,
+            }
+        })
+        .unwrap_or_else(|| panic!("no dict {name}"))
+}
+
+/// The `NAME = <value>` assignments in the body of the class `name` whose
+/// value `read` reads, in order.
+fn class_values<T>(
+    module: &ModModule,
+    name: &str,
+    read: impl Fn(&Expr) -> Option<T>,
+) -> Vec<(String, T)> {
     let class = module
         .body
         .iter()
@@ -81,9 +114,15 @@ fn class_strings(module: &ModModule, name: &str) -> Vec<(String, String)> {
             let [Expr::Name(target)] = &assign.targets[..] else {
                 return None;
             };
-            Some((target.id.to_string(), literal(&assign.value)?.to_string()))
+            Some((target.id.to_string(), read(&assign.value)?))
         })
         .collect()
+}
+
+/// The `NAME = "value"` assignments in the body of the class `name`, in
+/// order.
+fn class_strings(module: &ModModule, name: &str) -> Vec<(String, String)> {
+    class_values(module, name, |value| literal(value).map(str::to_owned))
 }
 
 fn engine() -> ModModule {
@@ -183,6 +222,57 @@ fn phases_are_the_same_on_both_sides() {
     assert_eq!(class_strings(&engine(), "Phase"), rust);
 }
 
+/// The model's `Scope`, an `IntEnum` whose order is that of `Scope`:
+/// widest first.
+#[test]
+fn scopes_are_the_same_on_both_sides() {
+    let rust: Vec<(String, u64)> = Scope::ALL
+        .iter()
+        .zip(0..)
+        .map(|(scope, at)| (scope.as_str().to_ascii_uppercase(), at))
+        .collect();
+    assert_eq!(
+        class_values(&parse(&aye_engine::MODEL_MODULE), "Scope", integer),
+        rust
+    );
+}
+
+/// The statuses a batch ends with, which the runner reads as
+/// `FrameworkStatus`es: pytest's, as the pytest adapter's executor names
+/// them, and unittest's, as `python -m unittest` exits.
+#[test]
+fn framework_statuses_are_the_same_on_both_sides() {
+    let module = |name: &str| {
+        let module = embedded().into_iter().find(|m| m.name == name).unwrap();
+        parse(&module)
+    };
+    let number = |status: FrameworkStatus| u64::try_from(status.get()).ok();
+    let pytest = module("aye_pytest_native");
+    for (name, status) in [
+        ("OK", FrameworkStatus::OK),
+        ("TESTS_FAILED", FrameworkStatus::TESTS_FAILED),
+        ("INTERRUPTED", FrameworkStatus::INTERRUPTED),
+        ("INTERNAL_ERROR", FrameworkStatus::INTERNAL_ERROR),
+        ("USAGE_ERROR", FrameworkStatus::USAGE_ERROR),
+        ("NO_TESTS_COLLECTED", FrameworkStatus::NO_TESTS),
+    ] {
+        assert_eq!(module_int(&pytest, name), number(status), "pytest's {name}");
+    }
+    let unittest = module("aye_engine_unittest");
+    for (name, status) in [
+        ("OK", FrameworkStatus::OK),
+        ("FAILED", FrameworkStatus::TESTS_FAILED),
+        ("INTERRUPTED", FrameworkStatus::INTERRUPTED),
+        ("NO_TESTS", FrameworkStatus::NO_TESTS),
+    ] {
+        assert_eq!(
+            module_int(&unittest, name),
+            number(status),
+            "unittest's {name}"
+        );
+    }
+}
+
 #[test]
 fn service_names_are_the_same_on_both_sides() {
     let rust = [
@@ -254,6 +344,48 @@ fn the_engine_and_the_worker_speak_the_runners_protocol() {
     );
 }
 
+/// The operators of a rewritten `assert` (the rewriter's `_COMPARISONS`)
+/// are the first `ComparisonOp`s, in order, and with those of unittest's
+/// `assert*` methods (the unittest adapter's `_COMPARISONS`, each the first
+/// of its tuple) they are all of them. The kinds `aye_engine.compare` tells
+/// apart (its `_COMPARERS`) are `CompareKind`'s, in order.
+#[test]
+fn comparisons_are_the_same_on_both_sides() {
+    let module = |name: &str| {
+        let module = embedded().into_iter().find(|m| m.name == name).unwrap();
+        parse(&module)
+    };
+    let rewriter = parse(&aye_engine::REWRITE_MODULE);
+    let rewriter: Vec<&str> = module_dict(&rewriter, "_COMPARISONS")
+        .iter()
+        .map(|item| literal(&item.value).unwrap())
+        .collect();
+    let unittest = module("aye_engine_unittest");
+    let unittest: BTreeSet<&str> = module_dict(&unittest, "_COMPARISONS")
+        .iter()
+        .map(|item| {
+            let tuple = item.value.as_tuple_expr().unwrap();
+            literal(&tuple.elts[0]).unwrap()
+        })
+        .collect();
+    let known: Vec<&str> = ComparisonOp::ALL.iter().map(ComparisonOp::as_str).collect();
+    assert_eq!(rewriter, known[..rewriter.len()]);
+    let mut python: BTreeSet<&str> = rewriter.iter().copied().collect();
+    python.extend(&unittest);
+    assert_eq!(
+        python,
+        known.iter().copied().collect(),
+        "unittest: {unittest:?}"
+    );
+    let engine = engine();
+    let kinds: Vec<&str> = module_dict(&engine, "_COMPARERS")
+        .iter()
+        .map(|item| literal(item.key.as_ref().unwrap()).unwrap())
+        .collect();
+    let rust: Vec<&str> = CompareKind::ALL.iter().map(CompareKind::as_str).collect();
+    assert_eq!(kinds, rust);
+}
+
 /// The diagnostics a module builds: a call whose first two arguments are a
 /// severity and a code (`sink.diagnostic("error", "usage-error", …)`), or
 /// one to something named for a diagnostic whose second argument is a code
@@ -314,37 +446,6 @@ impl<'a> Visitor<'a> for Diagnostics {
     }
 }
 
-/// Every diagnostic code aye 0.0.1 knows, Rust's and Python's
-/// (`docs/reorganisation.md` §4.9). `stand-in` and `adapter-error` are
-/// documented and emitted by nothing.
-const KNOWN_CODES: [&str; 25] = [
-    "syntax-error",
-    "unreadable",
-    "not-found",
-    "unclaimed",
-    "duplicate-id",
-    "no-tests",
-    "not-refined",
-    "refine-failed",
-    "class-has-init",
-    "duplicate-definition",
-    "collection-error",
-    "usage-error",
-    "unknown-option",
-    "plugin-not-loaded",
-    "internal-error",
-    "skipped",
-    "ignored",
-    "batch-stopped",
-    "session-failed",
-    "protocol-error",
-    "batch-failed",
-    "no-executor",
-    "listing-differs",
-    "stand-in",
-    "adapter-error",
-];
-
 #[test]
 fn python_emits_only_codes_and_severities_rust_knows() {
     let mut found = Diagnostics::default();
@@ -370,29 +471,14 @@ fn python_emits_only_codes_and_severities_rust_knows() {
         "the codes Python emits changed: check that Rust knows each"
     );
     for code in &codes {
-        assert!(KNOWN_CODES.contains(code), "{code}");
+        assert!(
+            DiagnosticCode::ALL.contains(&DiagnosticCode::from(*code)),
+            "{code}"
+        );
     }
     let rust_severities: BTreeSet<String> = [Severity::Error, Severity::Warning, Severity::Info]
         .into_iter()
         .map(|severity| wire(&json!(severity)))
         .collect();
     assert_eq!(found.severities, rust_severities);
-}
-
-/// Collection's own codes are among those aye knows.
-#[test]
-fn collections_codes_are_known() {
-    use aye_collect::codes;
-    for code in [
-        codes::SYNTAX_ERROR,
-        codes::UNREADABLE,
-        codes::NOT_FOUND,
-        codes::UNCLAIMED,
-        codes::DUPLICATE_ID,
-        codes::NO_TESTS,
-        codes::NOT_REFINED,
-        codes::REFINE_FAILED,
-    ] {
-        assert!(KNOWN_CODES.contains(&code), "{code}");
-    }
 }

@@ -144,8 +144,9 @@ use anstream::AutoStream;
 use anstream::stream::{AsLockedWrite, RawStream};
 use anstyle::{AnsiColor, Style};
 use aye_events::{
-    Assertion, Captured, Certainty, Compare, Counts, Diagnostic, Event, ExitCode, Failure, Frame,
-    LifetimeId, Outcome, Phase, Record, Severity, TestId, TestResult,
+    Assertion, Captured, Certainty, Columns, Compare, CompareKind, Counts, Diagnostic,
+    DiagnosticCode, Event, ExitCode, Failure, FailureSignature, Frame, LifetimeId, Local, Outcome,
+    Phase, Record, RunNumber, Severity, StopReason, TestId, TestResult, WorkerIndex,
 };
 
 use crate::tally::{self, Noted, Tally, Tone};
@@ -252,17 +253,17 @@ pub struct Text<W: RawStream> {
     /// number.
     root: Option<String>,
     workers: u32,
-    run: Option<u64>,
+    run: Option<RunNumber>,
     /// From `collection_finished`.
     selected: Option<u32>,
     header_shown: bool,
     /// From `-vv`, the `collected` line, held to follow the header.
     collected: Option<String>,
     /// Each worker's Python version, from its `worker_started`.
-    pythons: HashMap<Option<u32>, String>,
+    pythons: HashMap<Option<WorkerIndex>, String>,
     /// The first bad outcome shown with each signature: its key and
     /// message.
-    signatures: HashMap<String, (String, String)>,
+    signatures: HashMap<FailureSignature, (String, String)>,
     warnings: Vec<Diagnostic>,
     /// Skip reasons, with how many tests (or modules) each, in order.
     skips: Vec<(String, u32)>,
@@ -271,7 +272,7 @@ pub struct Text<W: RawStream> {
     /// order they finished, to be listed under it.
     pending: Vec<(LifetimeId, Vec<NotRun>)>,
     /// Lifetime failures already shown, by lifetime and signature.
-    lifetimes: HashSet<(LifetimeId, String)>,
+    lifetimes: HashSet<(LifetimeId, Option<FailureSignature>)>,
     /// Lifetimes whose failure was shown.
     shown_lifetimes: HashSet<LifetimeId>,
     /// Bad sub-outcomes held until their test finishes, by test.
@@ -315,7 +316,7 @@ struct HeldSub {
     outcome: Outcome,
     failure: Option<Failure>,
     duration: Duration,
-    worker: Option<u32>,
+    worker: Option<WorkerIndex>,
 }
 
 /// A bad outcome to show.
@@ -334,7 +335,7 @@ struct Bad<'a> {
     /// The test's result: its resources, history and output.
     result: Option<&'a TestResult>,
     rerun: Option<String>,
-    worker: Option<u32>,
+    worker: Option<WorkerIndex>,
     /// Tests a failed lifetime kept from running.
     not_run: &'a [NotRun],
     /// At most L1 (a test's fourth bad sub-outcome and later, below L3).
@@ -532,7 +533,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// The key of a test's or a lifetime's id.
     fn key(&self, id: &str) -> String {
         self.keys.key(id).map_or_else(
-            || aye_events::TestKey::of(id).0[..crate::keys::MIN].to_owned(),
+            || aye_events::TestKey::of(id).prefix(crate::keys::MIN),
             str::to_owned,
         )
     }
@@ -546,7 +547,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
 
     /// The header, once, at the first worker: `aye · <root> · python 3.13.1
     /// · 15 tests · 1 worker`.
-    fn header(&mut self, worker: Option<u32>) -> io::Result<()> {
+    fn header(&mut self, worker: Option<WorkerIndex>) -> io::Result<()> {
         if self.header_shown || self.show.is_some() || self.collect_only || self.quiet() {
             return Ok(());
         }
@@ -590,7 +591,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
                 return self.result_line(
                     Outcome::Skipped,
                     None,
-                    &diagnostic.path,
+                    diagnostic.path.as_str(),
                     None,
                     Some(&diagnostic.message),
                 );
@@ -623,8 +624,8 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             Severity::Info => ("info", DIM),
         };
         let at = match diagnostic.span.as_ref().and_then(|span| span.line) {
-            Some(line) => format!(" {}", self.location(&diagnostic.path, line)),
-            None if diagnostic.path.is_empty() => String::new(),
+            Some(line) => format!(" {}", self.location(diagnostic.path.as_str(), line)),
+            None if diagnostic.path.is_nowhere() => String::new(),
             None => format!(" {}", diagnostic.path),
         };
         let mut lines = diagnostic.message.lines();
@@ -830,7 +831,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         )
     }
 
-    fn test(&mut self, result: &TestResult, worker: Option<u32>) -> io::Result<()> {
+    fn test(&mut self, result: &TestResult, worker: Option<WorkerIndex>) -> io::Result<()> {
         let outcome = result.outcome;
         let id = result.id.as_str();
         let key = self.key(id);
@@ -883,7 +884,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             outcome,
             key: &key,
             name: id,
-            path: result.id.path(),
+            path: result.id.path().as_str(),
             failures: &own,
             test: true,
             duration: Some(result.duration),
@@ -996,7 +997,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
                 outcome: sub.outcome,
                 key,
                 name: &name,
-                path: id.path(),
+                path: id.path().as_str(),
                 failures: sub.failure.as_slice(),
                 test: false,
                 duration: Some(sub.duration),
@@ -1055,7 +1056,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         lifetime: &LifetimeId,
         failure: &Failure,
         duration: Duration,
-        worker: Option<u32>,
+        worker: Option<WorkerIndex>,
     ) -> io::Result<()> {
         if !self
             .lifetimes
@@ -1068,7 +1069,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             Some(at) => self.pending.remove(at).1,
             None => Vec::new(),
         };
-        let key = self.key(lifetime);
+        let key = self.key(lifetime.as_str());
         self.note_bad(&key);
         let name = lifetime_name(lifetime, failure);
         let rerun = not_run.first().map(|(first, _)| shared::rerun(first, None));
@@ -1076,7 +1077,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             outcome: Outcome::Error,
             key: &key,
             name: &name,
-            path: shared::file_of(lifetime),
+            path: lifetime.file().as_str(),
             failures: std::slice::from_ref(failure),
             test: false,
             duration: Some(duration),
@@ -1100,7 +1101,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         if !self.shown_lifetimes.insert(lifetime.clone()) {
             return Ok(());
         }
-        let key = self.key(lifetime);
+        let key = self.key(lifetime.as_str());
         let name = lifetime_name(lifetime, failure);
         let why = shared::why(failure, false);
         self.lines()?;
@@ -1119,10 +1120,10 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     fn bad(&mut self, bad: &Bad<'_>) -> io::Result<bool> {
         let level = if bad.brief { Level::L1 } else { self.level() };
         if let Some(first) = bad.failures.first()
-            && !first.signature.is_empty()
+            && let Some(signature) = &first.signature
             && self.level() < Level::L3
         {
-            match self.signatures.entry(first.signature.clone()) {
+            match self.signatures.entry(signature.clone()) {
                 Entry::Occupied(seen) => {
                     let (same, message) = seen.get().clone();
                     self.same_as(bad, first, &same, &message)?;
@@ -1182,7 +1183,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
             let why = shared::why(failure, bad.test);
             write!(self.out, "{indent}{why}")?;
             if let Some((path, line)) = shared::origin(failure) {
-                write!(self.out, " at {}", self.location(path, line))?;
+                write!(self.out, " at {}", self.location(path.as_str(), line))?;
             }
             writeln!(self.out)?;
         } else {
@@ -1273,7 +1274,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
                 .context
                 .run
                 .or(self.run)
-                .map(|run| format!("run r{run}"));
+                .map(|run| format!("run {run}"));
             match (run, &self.context.ago) {
                 (Some(run), Some(ago)) => parts.push(format!("{run}, {ago}")),
                 (Some(run), None) => parts.push(run),
@@ -1298,7 +1299,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         let Some((path, line)) = shared::origin(failure) else {
             return Ok(());
         };
-        writeln!(self.out, "  {}", self.location(path, line))?;
+        writeln!(self.out, "  {}", self.location(path.as_str(), line))?;
         let Some(frame) = shared::pointed(failure) else {
             return Ok(());
         };
@@ -1342,7 +1343,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     }
 
     /// A source line, the span `cols` red and underlined.
-    fn marked(&mut self, source: &str, cols: Option<[u32; 2]>) -> io::Result<()> {
+    fn marked(&mut self, source: &str, cols: Option<Columns>) -> io::Result<()> {
         let Some(cols) = cols else {
             return writeln!(self.out, "{source}");
         };
@@ -1481,14 +1482,14 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         compare: &Compare,
         level: Level,
     ) -> io::Result<()> {
-        let text = matches!(compare.kind.as_str(), "str" | "bytes");
+        let text = compare.kind.is_text();
         let first_at = compare
             .differs
             .first()
             .and_then(|difference| difference.at.as_deref());
         let summary = match first_at {
             Some(at) if text && compare.differs.len() == 1 => {
-                let what = if compare.kind == "bytes" {
+                let what = if compare.kind == CompareKind::Bytes {
                     "bytes"
                 } else {
                     "strings"
@@ -1590,7 +1591,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         for item in shared::frame_items(frames) {
             match item {
                 shared::FrameItem::Project(frame) => {
-                    let mut line = self.location(&frame.path, frame.line);
+                    let mut line = self.location(frame.path.as_str(), frame.line);
                     if let Some(function) = &frame.function {
                         line = format!("{line} {DIM}in {function}{DIM:#}");
                     }
@@ -1611,9 +1612,9 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     }
 
     /// L3: the innermost frame's local variables.
-    fn locals(&mut self, locals: &[(String, String)]) -> io::Result<()> {
+    fn locals(&mut self, locals: &[Local]) -> io::Result<()> {
         let mut label = "locals";
-        for (name, value) in locals {
+        for Local { name, value } in locals {
             self.row(label, &format!("{name} = {value}"))?;
             label = "";
         }
@@ -1753,7 +1754,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
 
     fn worker_error(
         &mut self,
-        worker: Option<u32>,
+        worker: Option<WorkerIndex>,
         status: Option<i32>,
         error: &str,
     ) -> io::Result<()> {
@@ -1782,7 +1783,7 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
         exit_code: ExitCode,
         counts: &Counts,
         duration: Duration,
-        stopped: Option<&str>,
+        stopped: Option<&StopReason>,
     ) -> io::Result<()> {
         self.flush_collected()?;
         self.flush_subs()?;
@@ -1821,9 +1822,9 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// line each.
     fn grouped(&mut self) -> io::Result<()> {
         if !self.full() && !self.warnings.is_empty() {
-            let mut codes: Vec<(&str, usize)> = Vec::new();
+            let mut codes: Vec<(&DiagnosticCode, usize)> = Vec::new();
             for warning in &self.warnings {
-                match codes.iter_mut().find(|(code, _)| *code == warning.code) {
+                match codes.iter_mut().find(|(code, _)| **code == warning.code) {
                     Some((_, count)) => *count += 1,
                     None => codes.push((&warning.code, 1)),
                 }
@@ -1859,19 +1860,19 @@ impl<W: RawStream + AsLockedWrite> Text<W> {
     /// summary line's verdict says it already.
     fn stopped_line(
         &mut self,
-        stopped: &str,
+        stopped: &StopReason,
         exit_code: ExitCode,
         counts: &Counts,
     ) -> io::Result<()> {
         let why = match stopped {
-            "maxfail" => format!(
+            StopReason::Maxfail => format!(
                 "stopped after {} (-x/--maxfail)",
                 shared::plural(counts.bad(), "failure", "failures")
             ),
-            "interrupted" if exit_code == ExitCode::Interrupted => return Ok(()),
-            "interrupted" => "interrupted".to_owned(),
-            "framework" => "stopped early by the framework".to_owned(),
-            other => format!("stopped early: {other}"),
+            StopReason::Interrupted if exit_code == ExitCode::Interrupted => return Ok(()),
+            StopReason::Interrupted => "interrupted".to_owned(),
+            StopReason::Framework => "stopped early by the framework".to_owned(),
+            StopReason::Other(other) => format!("stopped early: {other}"),
         };
         writeln!(self.out, "{YELLOW}{why}{YELLOW:#}")
     }
@@ -1972,12 +1973,12 @@ fn indent(key: &str) -> String {
 
 /// Where in `source` the span `cols` is: its start and length in
 /// characters, within the line, at least one long.
-fn span(source: &str, cols: [u32; 2]) -> (usize, usize) {
+fn span(source: &str, cols: Columns) -> (usize, usize) {
     let length = source.chars().count();
-    let start = usize::try_from(cols[0])
+    let start = usize::try_from(cols.start)
         .unwrap_or(0)
         .min(length.saturating_sub(1));
-    let end = usize::try_from(cols[1])
+    let end = usize::try_from(cols.end)
         .unwrap_or(0)
         .clamp(start + 1, length.max(start + 1));
     (start, end - start)
@@ -2012,11 +2013,11 @@ fn file_url(root: &str, path: &str) -> String {
 
 /// What failed of a lifetime: `setup of <lifetime>`, `teardown of
 /// <lifetime>`, or the lifetime when its failure names no phase.
-fn lifetime_name(lifetime: &str, failure: &Failure) -> String {
+fn lifetime_name(lifetime: &LifetimeId, failure: &Failure) -> String {
     match failure.phase {
         Some(Phase::Setup) => format!("setup of {lifetime}"),
         Some(Phase::Teardown) => format!("teardown of {lifetime}"),
-        Some(Phase::Test) | None => lifetime.to_owned(),
+        Some(Phase::Test) | None => lifetime.to_string(),
     }
 }
 
@@ -2146,7 +2147,7 @@ impl<W: RawStream + AsLockedWrite> Reporter for Text<W> {
                 counts,
                 duration,
                 stopped,
-            } => self.run_finished(*exit_code, counts, *duration, stopped.as_deref()),
+            } => self.run_finished(*exit_code, counts, *duration, stopped.as_ref()),
             _ => Ok(()),
         }
     }

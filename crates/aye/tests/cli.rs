@@ -109,7 +109,11 @@ fn store(cwd: &Path) -> aye_history::RunStore {
 
 /// The runs the project `cwd` is in keeps.
 fn runs_in(cwd: &Path) -> HashSet<String> {
-    store(cwd).runs().into_iter().map(|meta| meta.run).collect()
+    store(cwd)
+        .runs()
+        .into_iter()
+        .map(|meta| meta.run.to_string())
+        .collect()
 }
 
 /// The log of the run the project `cwd` is in kept since `before`, every
@@ -120,8 +124,8 @@ fn kept(cwd: &Path, before: &HashSet<String>) -> Option<Vec<Value>> {
     let meta = store
         .runs()
         .into_iter()
-        .find(|meta| !before.contains(&meta.run))?;
-    let log = store.log(&meta.run).unwrap();
+        .find(|meta| !before.contains(&meta.run.to_string()))?;
+    let log = store.log(&meta.run.to_string()).unwrap();
     Some(
         log.iter()
             .map(|record| serde_json::to_value(record).unwrap())
@@ -746,7 +750,7 @@ fn a_test_failed_only_by_its_subtests_keeps_its_output_and_rerun() {
     let output = aye(&python, dir.path(), &["--color", "never", "-vv"]);
     assert_eq!(code(&output), 1);
     let text = stdout(&output);
-    let key = aye_events::TestKey::of("tests/test_s.py::test_sub").0[..5].to_owned();
+    let key = aye_events::TestKey::of("tests/test_s.py::test_sub").to_string()[..5].to_owned();
     assert!(
         text.contains(&format!(
             "✗ {key}  tests/test_s.py::test_sub › case (i=1)\n"
@@ -1222,7 +1226,7 @@ fn naming<'a>(lines: &'a [Value], name: &str) -> Vec<&'a Value> {
 
 /// The keys of `MIXED`'s test `name`.
 fn key_of(name: &str) -> String {
-    aye_events::TestKey::of(&format!("tests/test_m.py::{name}")).0[..5].to_owned()
+    aye_events::TestKey::of(&format!("tests/test_m.py::{name}")).to_string()[..5].to_owned()
 }
 
 /// JSON lines without what changes from run to run: durations, the run's
@@ -2670,7 +2674,9 @@ fn dotted_names_and_keys_start_the_run_from_the_files_they_select() {
             ("testing/conftest.py", conftest),
             ("testing/test_g.py", "def test_g():\n    pass\n"),
         ]);
-        let key = aye_events::TestId::new("tests/test_a.py::test_a").key().0;
+        let key = aye_events::TestId::new("tests/test_a.py::test_a")
+            .key()
+            .to_string();
         for arg in ["tests.test_a", key.as_str()] {
             let (output, output_log) =
                 logged(&python, dir.path(), &["--output", "json", "-vvv", arg]);

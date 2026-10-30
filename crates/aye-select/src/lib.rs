@@ -98,12 +98,12 @@ mod selector;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use aye_events::{Case, Certainty, TestId};
+use aye_events::{AdapterName, Case, Certainty, TestId};
 
 pub use expression::{Expression, Kwarg, ParseError, Truth, Value};
 pub use selector::Selector;
 
-use selector::{Parts, split_params};
+use selector::Parts;
 
 /// A malformed `-k` or `-m` expression: a usage error. The parse error is
 /// part of the message and not a [`std::error::Error::source`], so printing
@@ -129,13 +129,13 @@ pub struct Selection {
     /// The ids that failed last time, when running last-failed (`--lf`).
     pub last_failed: Option<HashSet<TestId>>,
     /// Id prefixes each adapter drops (pytest's `--deselect`), by adapter.
-    pub deselect: BTreeMap<String, Vec<String>>,
+    pub deselect: BTreeMap<AdapterName, Vec<String>>,
     /// Each adapter's own `-k` (or one the caller chose for its cases),
     /// for its cases when `keyword` is unset.
-    pub own_keyword: BTreeMap<String, Expression>,
+    pub own_keyword: BTreeMap<AdapterName, Expression>,
     /// Each adapter's own `-m` (or one the caller chose for its cases), for
     /// its cases when `tags` is unset.
-    pub own_tags: BTreeMap<String, Expression>,
+    pub own_tags: BTreeMap<AdapterName, Expression>,
 }
 
 /// The outcome of [`Selection::apply`].
@@ -200,18 +200,26 @@ impl Selection {
 
     /// Set `adapter`'s own keyword expression (pytest's `-k` in its
     /// `addopts`), for its cases when [`Selection::keyword`] is unset.
-    pub fn with_own_keyword(mut self, adapter: &str, expr: &str) -> Result<Self, SelectError> {
+    pub fn with_own_keyword(
+        mut self,
+        adapter: impl Into<AdapterName>,
+        expr: &str,
+    ) -> Result<Self, SelectError> {
         if let Some(parsed) = parse_keyword(expr)? {
-            self.own_keyword.insert(adapter.to_string(), parsed);
+            self.own_keyword.insert(adapter.into(), parsed);
         }
         Ok(self)
     }
 
     /// Set `adapter`'s own tag expression (pytest's `-m` in its `addopts`),
     /// for its cases when [`Selection::tags`] is unset.
-    pub fn with_own_tags(mut self, adapter: &str, expr: &str) -> Result<Self, SelectError> {
+    pub fn with_own_tags(
+        mut self,
+        adapter: impl Into<AdapterName>,
+        expr: &str,
+    ) -> Result<Self, SelectError> {
         if let Some(parsed) = parse_tags(expr)? {
-            self.own_tags.insert(adapter.to_string(), parsed);
+            self.own_tags.insert(adapter.into(), parsed);
         }
         Ok(self)
     }
@@ -220,7 +228,7 @@ impl Selection {
     /// (pytest's `--deselect`, from its options), counting them as
     /// deselected.
     #[must_use]
-    pub fn with_deselect<I>(mut self, adapter: &str, prefixes: I) -> Self
+    pub fn with_deselect<I>(mut self, adapter: impl Into<AdapterName>, prefixes: I) -> Self
     where
         I: IntoIterator,
         I::Item: Into<String>,
@@ -232,7 +240,7 @@ impl Selection {
             .collect();
         if !prefixes.is_empty() {
             self.deselect
-                .entry(adapter.to_string())
+                .entry(adapter.into())
                 .or_default()
                 .extend(prefixes);
         }
@@ -380,7 +388,7 @@ impl Selection {
         if !truth.is_false() && self.deselects(case.case) {
             truth = Truth::False;
         }
-        let adapter = case.case.adapter.as_str();
+        let adapter = &case.case.adapter;
         if let Some(expr) = self
             .keyword
             .as_ref()
@@ -632,23 +640,15 @@ impl<'a> Failed<'a> {
             reason = "fills lookups; what reaches output is sorted"
         )]
         for id in ids {
-            let text = id.as_str();
-            files.insert(text.split_once("::").map_or(text, |(path, _)| path));
-            match text.split_once("::") {
-                None => {
-                    let path: Vec<&str> = text.split('/').filter(|c| !c.is_empty()).collect();
-                    if !path.is_empty() {
-                        paths.push(path);
-                    }
+            let path = id.path();
+            files.insert(path.as_str());
+            if id.is_file() {
+                let path: Vec<&str> = path.components().collect();
+                if !path.is_empty() {
+                    paths.push(path);
                 }
-                Some((_, rest)) => {
-                    if let Some(own) = split_params(rest).1 {
-                        params
-                            .entry(&text[..text.len() - own.len() - 2])
-                            .or_default()
-                            .push(id);
-                    }
-                }
+            } else if id.parts().params.is_some() {
+                params.entry(id.without_params()).or_default().push(id);
             }
         }
         Self {
@@ -671,7 +671,7 @@ impl<'a> Failed<'a> {
     fn judge(&self, case: &Case, narrow: &[TestId]) -> Option<Vec<TestId>> {
         let whole = self.ids.contains(&case.id)
             || (!self.paths.is_empty() && {
-                let components: Vec<&str> = case.id.path().split('/').collect();
+                let components: Vec<&str> = case.id.path().as_str().split('/').collect();
                 self.paths.iter().any(|path| components.starts_with(path))
             });
         if !narrow.is_empty() {

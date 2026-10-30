@@ -321,7 +321,9 @@ use aye_engine::{
     Adapter, AdapterError, Claim, EmbeddedModule, Executor, Project, Recognition, Recognizer,
     Setting, SourceFile,
 };
-use aye_events::{Case, Certainty, Diagnostic, Severity, Span};
+use aye_events::{
+    AdapterName, AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity, Span,
+};
 use aye_static::EnvVars;
 
 pub use config::{DoctestConfig, ImportMode};
@@ -332,13 +334,20 @@ pub const MODULE: EmbeddedModule = EmbeddedModule {
     source: include_str!("../python/aye_engine_doctest.py"),
 };
 
+/// The adapter's name, in cases, batches and the registry.
+pub const NAME: AdapterName = AdapterName::new_static("doctest");
+
+/// The pytest adapter's name: beside it, pytest's default text glob
+/// applies without a pytest configuration file.
+const PYTEST: AdapterName = AdapterName::new_static("pytest");
+
 /// The doctest adapter.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Doctest;
 
 impl Adapter for Doctest {
-    fn name(&self) -> &'static str {
-        "doctest"
+    fn name(&self) -> AdapterName {
+        NAME
     }
 
     /// A recognizer when modules or text files are enabled, else `None`.
@@ -352,7 +361,7 @@ impl Adapter for Doctest {
     fn prepare_among(
         &self,
         project: &Project<'_>,
-        adapters: &[&str],
+        adapters: &[AdapterName],
     ) -> Result<Option<Box<dyn Recognizer>>, AdapterError> {
         let recognizer = DoctestRecognizer::among(project, adapters)?;
         if recognizer.config.active() {
@@ -364,7 +373,7 @@ impl Adapter for Doctest {
 
     fn executor(&self) -> Executor {
         Executor {
-            adapter: "doctest",
+            adapter: NAME,
             modules: &[MODULE],
             entry: "aye_engine_doctest:DoctestExecutor",
             lists_session: false,
@@ -737,7 +746,7 @@ impl DoctestRecognizer {
     /// [`Self::new`] for a run that uses `adapters` (by name): beside
     /// `pytest`, `test*.txt` files are doctests without a pytest
     /// configuration file too.
-    pub fn among(project: &Project<'_>, adapters: &[&str]) -> Result<Self, AdapterError> {
+    pub fn among(project: &Project<'_>, adapters: &[AdapterName]) -> Result<Self, AdapterError> {
         Self::with_environment(project, adapters, &Env::from_process())
     }
 
@@ -755,7 +764,7 @@ impl DoctestRecognizer {
     /// and no other variable set.
     pub fn with_env_among(
         project: &Project<'_>,
-        adapters: &[&str],
+        adapters: &[AdapterName],
         pytest_addopts: Option<&str>,
         python_optimize: Option<&str>,
     ) -> Result<Self, AdapterError> {
@@ -770,7 +779,7 @@ impl DoctestRecognizer {
     /// [`Self::among`] with the environment variables given.
     pub fn with_environment(
         project: &Project<'_>,
-        adapters: &[&str],
+        adapters: &[AdapterName],
         env: &Env,
     ) -> Result<Self, AdapterError> {
         let aye = aye_config::AyeConfig::load(project.root)
@@ -781,7 +790,7 @@ impl DoctestRecognizer {
             .doctest
             .as_ref()
             .map(|t| (t, pyproject.as_path()));
-        let beside_pytest = adapters.contains(&"pytest");
+        let beside_pytest = adapters.contains(&PYTEST);
         let config =
             DoctestConfig::discover(project, env.pytest_addopts.as_deref(), table, beside_pytest)?;
         // `PYTHONOPTIMIZE=2` is `-OO`; any other non-empty value is `-O`.
@@ -1062,12 +1071,18 @@ impl DoctestRecognizer {
                 .components()
                 .map(|c| c.as_os_str().to_string_lossy().into_owned())
                 .collect(),
-            Err(_) => file.rel.split('/').map(str::to_string).collect(),
+            Err(_) => file.rel.as_str().split('/').map(str::to_string).collect(),
         }
     }
 
-    fn case(&self, file: &SourceFile<'_>, name: &str, span: Span, affinity: Vec<String>) -> Case {
-        let mut case = Case::new(format!("{}::{name}", file.rel), "doctest");
+    fn case(
+        &self,
+        file: &SourceFile<'_>,
+        name: &str,
+        span: Span,
+        affinity: Vec<AffinityKey>,
+    ) -> Case {
+        let mut case = Case::new(format!("{}::{name}", file.rel), NAME);
         case.span = Some(span);
         let mut keywords = self.path_keywords(file);
         if !keywords.iter().any(|k| k == name) {
@@ -1101,14 +1116,14 @@ impl DoctestRecognizer {
             if let Some(why) = self.skipping_conftest(file.abs) {
                 recognition.refine = Some(why);
             }
-            let name = file.rel.rsplit('/').next().unwrap_or(file.rel);
+            let name = file.rel.file_name();
             let span = Span {
-                path: file.rel.to_string(),
+                path: file.rel.to_project_path(),
                 start: 0,
                 end: 0,
                 line: Some(1),
             };
-            let case = self.case(file, name, span, vec![file.rel.to_string()]);
+            let case = self.case(file, name, span, vec![AffinityKey::file(file.rel)]);
             recognition.cases.push(case);
         }
         recognition
@@ -1164,8 +1179,8 @@ impl DoctestRecognizer {
             // mismatch, a collection error.
             recognition.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                code: "collection-error".into(),
-                path: file.rel.to_string(),
+                code: DiagnosticCode::CollectionError,
+                path: file.rel.to_project_path().into(),
                 span: None,
                 message: format!(
                     "import file mismatch:\nimported module 'conftest' has this __file__ \
@@ -1207,7 +1222,7 @@ impl DoctestRecognizer {
             // its collection error.
             reasons.push(NO_STATIC_DOCTESTS.to_string());
         }
-        let affinity = vec![format!("import:{name}"), file.rel.to_string()];
+        let affinity = vec![AffinityKey::import(&name), AffinityKey::file(file.rel)];
         for test in finding.tests {
             let span = file.span(test.range);
             let case = self.case(file, &test.name, span, affinity.clone());

@@ -42,7 +42,7 @@ impl Parsed {
 
     fn file(&self) -> SourceFile<'_> {
         SourceFile {
-            rel: &self.rel,
+            rel: aye_events::ProjectPathRef::as_written(&self.rel),
             abs: &self.abs,
             source: &self.source,
             module: self.ast.syntax(),
@@ -147,7 +147,7 @@ fn recognize(
 fn ids(found: &[(String, Recognition)]) -> Vec<String> {
     found
         .iter()
-        .flat_map(|(_, r)| r.cases.iter().map(|c| c.id.0.clone()))
+        .flat_map(|(_, r)| r.cases.iter().map(|c| c.id.as_str().to_owned()))
         .collect()
 }
 
@@ -158,7 +158,7 @@ fn exact(found: &[(String, Recognition)]) -> Vec<String> {
         .filter(|(_, r)| r.refine.is_none())
         .flat_map(|(_, r)| {
             assert!(r.cases.iter().all(|c| c.certainty == Certainty::Exact));
-            r.cases.iter().map(|c| c.id.0.clone())
+            r.cases.iter().map(|c| c.id.as_str().to_owned())
         })
         .collect()
 }
@@ -414,7 +414,7 @@ fn cases_carry_keywords_affinity_and_spans() {
     // The empty `tests/__init__.py` isn't claimed.
     assert_eq!(found.len(), 1);
     let case = &found[0].1.cases[0];
-    assert_eq!(case.id.0, "tests/test_cart.py::TestCart::test_add");
+    assert_eq!(case.id.as_str(), "tests/test_cart.py::TestCart::test_add");
     assert_eq!(case.adapter, "unittest");
     assert_eq!(
         case.keywords,
@@ -446,7 +446,7 @@ fn inherited_methods_point_at_their_definition() {
     ]);
     let found = collect(dir.path(), &[]);
     let cases = &found[0].1.cases;
-    let ids: Vec<&str> = cases.iter().map(|c| c.id.0.as_str()).collect();
+    let ids: Vec<&str> = cases.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(
         ids,
         [

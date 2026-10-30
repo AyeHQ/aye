@@ -287,7 +287,7 @@ use aye_engine::{
     Adapter, AdapterError, Claim, EmbeddedModule, Executor, Project, Recognition, Recognizer,
     Setting, SourceFile,
 };
-use aye_events::{Case, Certainty, Span};
+use aye_events::{AdapterName, AffinityKey, Case, Certainty, ProjectPath, ProjectPathRef, Span};
 use aye_fs::normalize_absolute;
 
 pub use config::UnittestConfig;
@@ -303,7 +303,7 @@ pub const MODULE: EmbeddedModule = EmbeddedModule {
 };
 
 /// The adapter's name, in cases, batches and the registry.
-pub const NAME: &str = "unittest";
+pub const NAME: AdapterName = AdapterName::new_static("unittest");
 
 /// Why a test module with no test aye can see is refined.
 const NO_STATIC_TESTS: &str = "no test is visible statically; discovery imports the module to tell";
@@ -313,7 +313,7 @@ const NO_STATIC_TESTS: &str = "no test is visible statically; discovery imports 
 pub struct Unittest;
 
 impl Adapter for Unittest {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> AdapterName {
         NAME
     }
 
@@ -520,16 +520,11 @@ impl UnittestRecognizer {
         &self,
         file: &SourceFile<'_>,
         loaded: &[module::Loaded],
-        package: Option<&str>,
+        package: Option<ProjectPathRef<'_>>,
         certainty: Certainty,
     ) -> Vec<Case> {
         let mut cases = Vec::new();
-        let parts: Vec<String> = file
-            .rel
-            .split('/')
-            .filter(|p| !p.is_empty())
-            .map(str::to_string)
-            .collect();
+        let parts: Vec<String> = file.rel.components().map(str::to_string).collect();
         for class in loaded {
             // The name the loader found the class under, as pytest names it.
             let class_names = [class.name.as_str()];
@@ -537,7 +532,7 @@ impl UnittestRecognizer {
             for method in &class.methods {
                 let mut case = Case::new(format!("{class_id}::{}", method.name), NAME);
                 case.span = Some(Span {
-                    path: self.relative(&method.file),
+                    path: ProjectPath::as_written(self.relative(&method.file)),
                     start: method.range.start().to_u32(),
                     end: method.range.end().to_u32(),
                     line: Some(method.line),
@@ -549,9 +544,12 @@ impl UnittestRecognizer {
                 keywords.retain(|k| seen.insert(k.clone()));
                 case.keywords = keywords;
                 case.affinity = package
-                    .map(|p| format!("package:{p}"))
+                    .map(AffinityKey::package)
                     .into_iter()
-                    .chain([file.rel.to_string(), class_id.clone()])
+                    .chain([
+                        AffinityKey::file(file.rel),
+                        AffinityKey::file_class(file.rel, &class_names),
+                    ])
                     .collect();
                 case.certainty = certainty;
                 cases.push(case);
@@ -672,7 +670,12 @@ impl Recognizer for UnittestRecognizer {
         } else {
             Certainty::Exact
         };
-        let cases = self.cases(file, &loaded, package_rel.as_deref(), certainty);
+        let cases = self.cases(
+            file,
+            &loaded,
+            package_rel.as_deref().map(ProjectPathRef::as_written),
+            certainty,
+        );
         if cases.is_empty() && refine.is_none() {
             // Nothing to run statically, but discovery imports the module
             // all the same: its import error is unittest's error to report.

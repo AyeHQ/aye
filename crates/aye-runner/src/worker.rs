@@ -136,7 +136,7 @@ impl WorkerSpec {
                 .executors
                 .iter()
                 .map(|e| ExecutorSpec {
-                    adapter: e.adapter.to_string(),
+                    adapter: e.adapter.clone(),
                     entry: e.entry.to_string(),
                     lists_session: e.lists_session,
                 })
@@ -916,7 +916,7 @@ mod tests {
     use std::fmt::Write as _;
 
     use aye_engine::EmbeddedModule;
-    use aye_events::Event;
+    use aye_events::{AdapterName, BatchIndex, Event};
 
     use super::*;
 
@@ -934,13 +934,13 @@ mod tests {
         let mut spec = WorkerSpec::new("python", "/repo", "/repo");
         spec.executors = vec![
             Executor {
-                adapter: "a",
+                adapter: AdapterName::new_static("a"),
                 modules: &[ONE, TWO],
                 entry: "two:A",
                 lists_session: false,
             },
             Executor {
-                adapter: "b",
+                adapter: AdapterName::new_static("b"),
                 modules: &[TWO, ENGINE_MODULE],
                 entry: "two:B",
                 lists_session: true,
@@ -988,7 +988,7 @@ mod tests {
         assert_eq!(
             got[0],
             Incoming::Line(WorkerLine::Reply(Reply::BatchDone {
-                batch: 2,
+                batch: BatchIndex::from_u32(2),
                 status: None
             }))
         );
@@ -996,7 +996,7 @@ mod tests {
         let Incoming::Line(WorkerLine::Record(record)) = &got[2] else {
             panic!("expected a record: {:?}", got[2]);
         };
-        assert_eq!(record.envelope.batch, Some(2));
+        assert_eq!(record.envelope.batch, Some(BatchIndex::from_u32(2)));
         assert!(matches!(record.event, Event::TestStarted { .. }));
         assert!(matches!(&got[3], Incoming::Garbage { .. }));
         assert_eq!(got[4], Incoming::Eof);

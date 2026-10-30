@@ -467,7 +467,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_engine::{AdapterError, Claim, Project, Recognition, Recognizer, Setting, SourceFile};
-use aye_events::{Certainty, Diagnostic, Severity};
+use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 use aye_fs::normalize_absolute;
 use aye_static::EnvVars;
 
@@ -1385,13 +1385,13 @@ impl PytestRecognizer {
     /// `consider_namespace_packages` the name depends on `sys.path` at
     /// runtime; the file's stem stands in, which groups every file that
     /// could clash (and some that can't).
-    fn import_key(&self, file: &Path) -> String {
+    fn import_key(&self, file: &Path) -> AffinityKey {
         let stem = file
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
         if self.config.consider_namespace_packages {
-            return format!("import:{stem}");
+            return AffinityKey::import(&stem);
         }
         let packaged = package_path(file)
             .and_then(|package| module_name(package.parent().unwrap_or(&package), file));
@@ -1423,7 +1423,7 @@ impl PytestRecognizer {
             }
             (None, _) => stem,
         };
-        format!("import:{name}")
+        AffinityKey::import(&name)
     }
 
     /// Whether pytest ignores `path` (`collect_ignore`, `--ignore` and
@@ -1521,7 +1521,7 @@ impl PytestRecognizer {
                     _ => None,
                 })
                 .collect(),
-            Err(_) => file.rel.split('/').map(str::to_string).collect(),
+            Err(_) => file.rel.as_str().split('/').map(str::to_string).collect(),
         }
     }
 }
@@ -1720,9 +1720,13 @@ impl Recognizer for PytestRecognizer {
 
     fn recognize(&self, file: &SourceFile<'_>, support: &[SourceFile<'_>]) -> Recognition {
         // Recorded by `claim`, when pytest collects doctests.
-        let explicit =
-            self.doctests.is_some() && self.explicit.lock().expect("lock").contains(file.rel);
-        let doctest = self.doctest_file(file.rel, explicit);
+        let explicit = self.doctests.is_some()
+            && self
+                .explicit
+                .lock()
+                .expect("lock")
+                .contains(file.rel.as_str());
+        let doctest = self.doctest_file(file.rel.as_str(), explicit);
         if self.settings.python_blocked && doctest.is_none() {
             // `-p no:python`: nothing collects Python files.
             return Recognition::default();
@@ -1748,8 +1752,12 @@ impl Recognizer for PytestRecognizer {
                 );
                 recognition.diagnostics.push(Diagnostic {
                     severity: Severity::Error,
-                    code: "collection-error".into(),
-                    path: if rel.is_empty() { ".".into() } else { rel },
+                    code: DiagnosticCode::CollectionError,
+                    path: if rel.is_empty() {
+                        DiagnosticPath::Root
+                    } else {
+                        DiagnosticPath::as_written(rel)
+                    },
                     span: None,
                     message,
                 });
@@ -1759,7 +1767,8 @@ impl Recognizer for PytestRecognizer {
         match doctest {
             Some(DoctestFile::Text) => return doctest_text(file),
             Some(DoctestFile::Module)
-                if self.settings.python_blocked || !self.python_module(file.rel, explicit) =>
+                if self.settings.python_blocked
+                    || !self.python_module(file.rel.as_str(), explicit) =>
             {
                 // Only pytest's doctest plugin collects it, importing it: an
                 // import error is a collection error.
@@ -1819,7 +1828,7 @@ impl Recognizer for PytestRecognizer {
             scope.hooks_unknown |= summary.hooks_unknown();
             scope.patched.extend(summary.patched.iter().cloned());
             scope.reflective |= summary.reflective;
-            scope.imports_module |= module::names_module(&summary.modules, file.rel);
+            scope.imports_module |= module::names_module(&summary.modules, file.rel.as_str());
         }
         // Fixtures the test module imports from project files register
         // with its own.
@@ -1827,7 +1836,7 @@ impl Recognizer for PytestRecognizer {
         let mut namespace = scope::Namespace::build(&file.module.body);
         // What support files do to modules holds here too.
         namespace.assume_patched(scope.patched.iter().cloned(), scope.reflective);
-        if !module::reached(&namespace, &scope, file.rel).is_empty() {
+        if !module::reached(&namespace, &scope, file.rel.as_str()).is_empty() {
             // Its names may change in ways the module's code doesn't show:
             // none is a constant.
             namespace.assume_reached();
@@ -1959,7 +1968,7 @@ impl Recognizer for PytestRecognizer {
             }
             // Test modules that import it run in one session, as pytest
             // runs them.
-            key = format!("import:{name}");
+            key = AffinityKey::import(&name);
         }
         for case in &mut recognition.cases {
             case.affinity.insert(0, key.clone());

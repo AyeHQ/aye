@@ -15,6 +15,7 @@ use aye_engine::{
     REWRITE_MODULE, Recognizer,
 };
 use aye_engine_pytest::native::SHIM_MODULE;
+use aye_events::AdapterName;
 
 /// Every adapter the binary links, in priority order: the pytest adapter
 /// (for a static listing, `aye --co --no-refine`, the one that predicts
@@ -71,7 +72,7 @@ struct WithAyePytest<A> {
 }
 
 impl<A: Adapter> Adapter for WithAyePytest<A> {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> AdapterName {
         self.inner.name()
     }
 
@@ -82,7 +83,7 @@ impl<A: Adapter> Adapter for WithAyePytest<A> {
     fn prepare_among(
         &self,
         project: &Project<'_>,
-        adapters: &[&str],
+        adapters: &[AdapterName],
     ) -> Result<Option<Box<dyn Recognizer>>, AdapterError> {
         self.inner.prepare_among(project, adapters)
     }
@@ -101,8 +102,8 @@ impl<A: Adapter> Adapter for WithAyePytest<A> {
 /// to import is then one collection error, however many of these adapters
 /// load it. The doctest adapter's tests are pytest's `DoctestModule`,
 /// another collector, whose error pytest reports as well.
-pub(crate) fn collects_in_one_module(adapter: &str) -> bool {
-    adapter == aye_engine_pytest::NAME || adapter == aye_engine_unittest::NAME
+pub(crate) fn collects_in_one_module(adapter: &AdapterName) -> bool {
+    *adapter == aye_engine_pytest::NAME || *adapter == aye_engine_unittest::NAME
 }
 
 /// Whether a diagnostic's path (relative to the root, `/` separators) is a
@@ -121,7 +122,7 @@ pub(crate) struct Chosen {
 
 impl Chosen {
     #[cfg(test)]
-    pub(crate) fn names(&self) -> Vec<&'static str> {
+    pub(crate) fn names(&self) -> Vec<AdapterName> {
         self.adapters.iter().map(|a| a.name()).collect()
     }
 }
@@ -164,7 +165,7 @@ pub(crate) fn choose(
         Some(names) => (names.clone(), Why::Configured),
         None => (
             vec![
-                aye_engine_doctest::Doctest.name().to_string(),
+                aye_engine_doctest::NAME.to_string(),
                 aye_engine_pytest::NAME.to_string(),
             ],
             Why::Default,
@@ -178,16 +179,16 @@ pub(crate) fn choose(
         .join(", ");
     let mut adapters: Vec<Box<dyn Adapter>> = Vec::new();
     for name in &names {
-        if adapters.iter().any(|a| a.name() == name) {
+        if adapters.iter().any(|a| a.name() == name.as_str()) {
             bail!("[tool.aye] adapters: {name:?} is listed twice");
         }
-        let Some(at) = known.iter().position(|a| a.name() == name) else {
+        let Some(at) = known.iter().position(|a| a.name() == name.as_str()) else {
             bail!("[tool.aye] adapters: unknown adapter {name:?} (known: {all})");
         };
         adapters.push(known.remove(at));
     }
     for adapter in &known {
-        if settings.adapter_table(adapter.name()).is_some() {
+        if settings.adapter_table(adapter.name().as_str()).is_some() {
             adapter
                 .prepare(project)
                 .with_context(|| format!("invalid {} configuration", adapter.name()))?;
@@ -222,7 +223,7 @@ mod tests {
         }
     }
 
-    fn names(chosen: Option<&[&str]>) -> Result<Vec<&'static str>> {
+    fn names(chosen: Option<&[&str]>) -> Result<Vec<AdapterName>> {
         let dir = tempfile::tempdir().unwrap();
         let settings = AyeSettings {
             adapters: chosen.map(|names| names.iter().map(ToString::to_string).collect()),
@@ -269,7 +270,10 @@ mod tests {
             let chosen = choose(&settings, &project(root, args), false).unwrap();
             (chosen.names(), chosen.why)
         };
-        let default = (vec!["doctest", "pytest"], Why::Default);
+        let default = (
+            vec![aye_engine_doctest::NAME, aye_engine_pytest::NAME],
+            Why::Default,
+        );
         assert_eq!(chosen(&[]), default);
         assert_eq!(chosen(&[PathBuf::from("tests")]), default);
         write(root, "tests/conftest.py", "");

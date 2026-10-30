@@ -4,22 +4,21 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
-use std::fmt;
-use std::hash::{BuildHasher, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use aye_engine::{
-    Batch, Executor, Policy, RefineError, RefineRequest, Refined, Refiner, Reply, Request,
-    WorkerLine,
+    Batch, Executor, ListingDigest, Policy, RefineError, RefineRequest, Refined, Refiner, Reply,
+    Request, WorkerLine,
 };
 use aye_events::{
-    BatchId, Case, Counts, Diagnostic, EnvironmentId, Event, Failure, LifetimeId, Outcome, Record,
-    Severity, TestId, TestResult, WorkerId,
+    AdapterName, BatchIndex, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticPath, Event,
+    Failure, FrameworkStatus, LifetimeId, Outcome, ProjectPath, Record, Severity, Stamper,
+    StopReason, TestId, TestResult, WorkerIndex,
 };
 use aye_static::EnvVars;
 
@@ -33,26 +32,12 @@ const POLL: Duration = Duration::from_millis(50);
 /// as long to stop.
 const INTERRUPT_GRACE: Duration = Duration::from_secs(10);
 
-/// The diagnostic an adapter emits when the framework stopped a batch before
-/// running all of it: as an `error`, the framework would have ended the
-/// whole session there (pytest's `pytest.exit`, a `KeyboardInterrupt`, an
-/// internal error).
-const BATCH_STOPPED: &str = "batch-stopped";
-/// pytest's status for a session whose tests failed.
-const STATUS_TESTS_FAILED: i32 = 1;
-/// pytest's status for an interrupted session.
-const STATUS_INTERRUPTED: i32 = 2;
-/// pytest's status for an internal error (`INTERNALERROR`).
-const STATUS_INTERNAL_ERROR: i32 = 3;
 /// The context key under which a batch re-queued after a crash names the
 /// tests that ran before it (see [`Shared::crashed`]).
 const RAN_IDS: &str = "ran_ids";
-/// The warning a lane gives, once per file, when it lists a file's tests
-/// otherwise than the first lane: the file's tests run on the first lane.
-const LISTING_DIFFERS: &str = "listing-differs";
 
 /// By file, a digest of its tests' ids in order ([`Refined::digests`]).
-type Digests = BTreeMap<String, String>;
+type Digests = BTreeMap<ProjectPath, ListingDigest>;
 
 /// What a [`Runner`] needs to start workers.
 #[derive(Debug, Clone, Default)]
@@ -89,7 +74,7 @@ pub struct Plan {
     /// where [`RunnerOptions::echo`] says; `maxfail` 0 is no limit.
     pub policy: Policy,
     /// Sent with each batch, per adapter (the recognizer's `context()`).
-    pub contexts: HashMap<String, serde_json::Value>,
+    pub contexts: HashMap<AdapterName, serde_json::Value>,
     /// Historical durations, for balancing.
     pub durations: HashMap<TestId, Duration>,
     /// Tests to run first (`--ff`: last run's failures): the batches holding
@@ -98,7 +83,7 @@ pub struct Plan {
     /// By adapter, every file collection claimed for its tests (selected or
     /// not), in collection order: what each worker of an adapter whose
     /// executor lists the session lists before its first batch.
-    pub session_files: BTreeMap<String, Vec<String>>,
+    pub session_files: BTreeMap<AdapterName, Vec<ProjectPath>>,
 }
 
 impl Default for Plan {
@@ -158,49 +143,14 @@ pub struct RunSummary {
     pub crashes: Vec<Crash>,
 }
 
-/// Why a run stopped early.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StopReason {
-    /// `maxfail` bad outcomes were reached.
-    Maxfail,
-    /// The [`StopHandle`] stopped the run (Ctrl-C).
-    Interrupted,
-    /// The framework stopped a batch, ending its session there: the
-    /// adapter said so with a `batch-stopped` error diagnostic (`pytest.exit`
-    /// whatever its `returncode`, a `KeyboardInterrupt`, `shouldstop`, a
-    /// `shouldfail` that isn't aye's `maxfail`, an internal error that left
-    /// tests), or the batch ended with pytest's status 2. The run
-    /// counts as interrupted, except after an internal error (status 3),
-    /// which makes it an internal error instead.
-    Framework,
-}
-
-impl StopReason {
-    /// `maxfail`, `interrupted` or `framework`, as `run_finished.stopped`
-    /// spells it.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Maxfail => "maxfail",
-            Self::Interrupted => "interrupted",
-            Self::Framework => "framework",
-        }
-    }
-}
-
-impl fmt::Display for StopReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchSummary {
-    pub id: BatchId,
-    pub adapter: String,
-    pub worker: WorkerId,
+    pub id: BatchIndex,
+    pub adapter: AdapterName,
+    pub worker: WorkerIndex,
     pub cases: u32,
     /// The framework's own status, from `batch_done`.
-    pub status: Option<i32>,
+    pub status: Option<FrameworkStatus>,
     pub end: BatchEnd,
 }
 
@@ -220,8 +170,8 @@ pub enum BatchEnd {
 /// A worker that died before finishing its batch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Crash {
-    pub worker: WorkerId,
-    pub batch: BatchId,
+    pub worker: WorkerIndex,
+    pub batch: BatchIndex,
     /// The test that was running, if any.
     pub test: Option<TestId>,
     /// `exit status 3`, `killed by signal 11 (SIGSEGV)`.
@@ -262,85 +212,6 @@ impl StopHandle {
     }
 }
 
-/// Stamps the run's part of every record's envelope: the run id, the
-/// environment, the run-wide `seq` and `t_ms` since the run started. The
-/// binary stamps its own records (`run_started`, collection) with the same
-/// stamper it hands to [`Runner::run`], so `seq` is one sequence.
-#[derive(Debug)]
-pub struct Stamper {
-    run: String,
-    environment: Option<EnvironmentId>,
-    started: Instant,
-    next: u64,
-}
-
-impl Default for Stamper {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Stamper {
-    /// A new run, with a fresh id, starting now.
-    pub fn new() -> Self {
-        Self::with_run(new_run_id())
-    }
-
-    pub fn with_run(run: impl Into<String>) -> Self {
-        Self {
-            run: run.into(),
-            environment: None,
-            started: Instant::now(),
-            next: 0,
-        }
-    }
-
-    #[must_use]
-    pub fn environment(mut self, environment: impl Into<EnvironmentId>) -> Self {
-        self.environment = Some(environment.into());
-        self
-    }
-
-    pub fn run_id(&self) -> &str {
-        &self.run
-    }
-
-    pub fn started(&self) -> Instant {
-        self.started
-    }
-
-    /// The `seq` the next record gets.
-    pub fn next_seq(&self) -> u64 {
-        self.next
-    }
-
-    /// Set `run`, `environment` (when known), `seq` and `t_ms`; keep
-    /// `worker` and `batch`.
-    pub fn stamp(&mut self, mut record: Record) -> Record {
-        let envelope = &mut record.envelope;
-        envelope.run = Some(self.run.clone());
-        if self.environment.is_some() {
-            envelope.environment.clone_from(&self.environment);
-        }
-        envelope.seq = Some(self.next);
-        envelope.t_ms = Some((self.started.elapsed().as_secs_f64() * 1_000_000.0).round() / 1000.0);
-        self.next += 1;
-        record
-    }
-}
-
-/// 16 hex digits, random per call.
-pub fn new_run_id() -> String {
-    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-    hasher.write_u128(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos()),
-    );
-    hasher.write_u32(std::process::id());
-    format!("{:016x}", hasher.finish())
-}
-
 /// Runs plans on workers, and refines files on them.
 #[derive(Debug)]
 pub struct Runner {
@@ -357,7 +228,7 @@ pub struct Runner {
 /// A worker kept from refinement, with what it listed.
 #[derive(Debug)]
 struct Warm {
-    adapter: String,
+    adapter: AdapterName,
     worker: Worker,
     /// The lanes its environment was made for (see [`lane_env`]).
     lanes: u32,
@@ -369,8 +240,8 @@ struct Warm {
 /// that the run's lanes start ready rather than listing then.
 #[derive(Debug)]
 struct Prelisting {
-    adapter: String,
-    lane: WorkerId,
+    adapter: AdapterName,
+    lane: WorkerIndex,
     /// The lanes its environment was made for (see [`lane_env`]).
     lanes: u32,
     /// Starts the worker and sends it its listings, in the background.
@@ -492,17 +363,17 @@ impl Runner {
         }
 
         let mut cases = Vec::with_capacity(plan.cases.len());
-        let mut orphans: Vec<(&str, &str, u32)> = Vec::new();
+        let mut orphans: Vec<(&AdapterName, &str, u32)> = Vec::new();
         for case in &plan.cases {
             if self.executor(&case.adapter).is_some() {
                 cases.push(case.clone());
                 continue;
             }
             log.summary.not_run.push(case.id.clone());
-            if let Some(orphan) = orphans.iter_mut().find(|o| o.0 == case.adapter) {
+            if let Some(orphan) = orphans.iter_mut().find(|o| *o.0 == case.adapter) {
                 orphan.2 += 1;
             } else {
-                orphans.push((&case.adapter, case.id.path(), 1));
+                orphans.push((&case.adapter, case.id.path().as_str(), 1));
             }
         }
         for (adapter, path, count) in orphans {
@@ -512,8 +383,8 @@ impl Runner {
                 None,
                 Event::Diagnostic(Diagnostic {
                     severity: Severity::Error,
-                    code: "no-executor".into(),
-                    path: path.into(),
+                    code: DiagnosticCode::NoExecutor,
+                    path: DiagnosticPath::as_written(path),
                     span: None,
                     message: format!(
                         "no executor for the {adapter} adapter; {count} test{} not run",
@@ -529,12 +400,12 @@ impl Runner {
 
         // Batches of executors that list the session keep plan order on
         // each lane, as each pytest-xdist worker runs its tests in order.
-        let ordered: HashSet<&str> = self
+        let ordered: HashSet<&AdapterName> = self
             .options
             .executors
             .iter()
             .filter(|e| e.lists_session)
-            .map(|e| e.adapter)
+            .map(|e| &e.adapter)
             .collect();
         let batches = schedule::plan(
             &cases,
@@ -551,13 +422,13 @@ impl Runner {
             .workers
             .max(1)
             .min(u32::try_from(batches.len()).unwrap_or(u32::MAX));
-        let adapters: HashSet<&str> = batches.iter().map(|b| b.adapter.as_str()).collect();
+        let adapters: HashSet<&AdapterName> = batches.iter().map(|b| &b.adapter).collect();
         let executors = self
             .options
             .executors
             .iter()
-            .filter(|e| adapters.contains(e.adapter))
-            .copied()
+            .filter(|e| adapters.contains(&e.adapter))
+            .cloned()
             .collect();
         let mut spec = self.spec(executors);
         spec.echo = (!policy.capture).then_some(self.options.echo);
@@ -565,7 +436,7 @@ impl Runner {
         // The worker kept from refinement is the first lane's, if the run
         // needs its adapter and gives that lane the environment it has.
         let warm = match lock(&self.warm).take() {
-            Some(warm) if adapters.contains(warm.adapter.as_str()) && warm.lanes == lanes => {
+            Some(warm) if adapters.contains(&warm.adapter) && warm.lanes == lanes => {
                 warm.worker.set_echo(spec.echo);
                 Some(warm)
             }
@@ -582,7 +453,7 @@ impl Runner {
                 Some(warm) => Some(warm.adapter.clone()),
                 None => batches
                     .iter()
-                    .map(|batch| batch.adapter.as_str())
+                    .map(|batch| &batch.adapter)
                     .find(|adapter| {
                         self.executor(adapter).is_some_and(|e| e.lists_session)
                             && plan
@@ -590,11 +461,11 @@ impl Runner {
                                 .get(*adapter)
                                 .is_some_and(|f| !f.is_empty())
                     })
-                    .map(str::to_string),
+                    .cloned(),
             })
             .flatten();
-        let early = reference.as_deref().map_or(0, |reference| {
-            let of = batches.iter().filter(|b| b.adapter == reference).count();
+        let early = reference.as_ref().map_or(0, |reference| {
+            let of = batches.iter().filter(|b| b.adapter == *reference).count();
             lanes.min(u32::try_from(of).unwrap_or(u32::MAX))
         });
         // The workers started for the other lanes during refinement, if the
@@ -603,7 +474,7 @@ impl Runner {
         let (prelisted, unused): (Vec<Prelisting>, Vec<Prelisting>) =
             std::mem::take(&mut *lock(&self.prelisting))
                 .into_iter()
-                .partition(|p| adapters.contains(p.adapter.as_str()) && p.lanes == lanes);
+                .partition(|p| adapters.contains(&p.adapter) && p.lanes == lanes);
         let queue = Queue::new(batches);
         if reference.is_some() {
             queue.expect_pins(lanes);
@@ -618,7 +489,7 @@ impl Runner {
             policy: &policy,
             contexts: &plan.contexts,
             sessions: &plan.session_files,
-            listings: Listings::new(reference.as_deref()),
+            listings: Listings::new(reference.as_ref()),
             reference,
             early,
             warm: Mutex::new(warm),
@@ -629,7 +500,7 @@ impl Runner {
         let (tx, rx) = mpsc::channel();
         thread::scope(|scope| {
             scope.spawn(move || shut_down(unused, false));
-            for lane in 0..lanes {
+            for lane in (0..lanes).map(WorkerIndex::from_u32) {
                 let tx = tx.clone();
                 let shared = &shared;
                 scope.spawn(move || shared.lane(lane, &tx));
@@ -666,12 +537,12 @@ impl Runner {
         log.summary
     }
 
-    fn executor(&self, adapter: &str) -> Option<Executor> {
+    fn executor(&self, adapter: &AdapterName) -> Option<Executor> {
         self.options
             .executors
             .iter()
-            .find(|e| e.adapter == adapter)
-            .copied()
+            .find(|e| e.adapter == *adapter)
+            .cloned()
     }
 
     fn spec(&self, executors: Vec<Executor>) -> WorkerSpec {
@@ -687,7 +558,7 @@ impl Runner {
     /// refines them: started in the background, with its lane's
     /// environment, or the one started for an earlier refinement of the
     /// adapter. Those started for another adapter or other lanes shut down.
-    fn prelist(&self, executor: Executor, request: &RefineRequest, lanes: u32) {
+    fn prelist(&self, executor: &Executor, request: &RefineRequest, lanes: u32) {
         let mut prelisting = lock(&self.prelisting);
         let (mut kept, other): (Vec<Prelisting>, Vec<Prelisting>) =
             std::mem::take(&mut *prelisting)
@@ -698,7 +569,7 @@ impl Runner {
             digests_only: true,
             ..request.clone()
         };
-        for lane in 1..lanes {
+        for lane in (1..lanes).map(WorkerIndex::from_u32) {
             let listing = listing.clone();
             // A worker that died shows up as the end of its stream when its
             // answer is read.
@@ -713,7 +584,7 @@ impl Runner {
                 });
                 (listed, earlier.pending + 1)
             } else {
-                let mut spec = self.spec(vec![executor]);
+                let mut spec = self.spec(vec![executor.clone()]);
                 spec.env.extend(lane_env(lane, lanes));
                 let listed = thread::spawn(move || {
                     let mut worker = spawn(&spec).map_err(|e| e.to_string())?;
@@ -763,7 +634,7 @@ impl Refiner for Runner {
         }
         let lanes = self.options.workers.max(1);
         if !self.options.collect_only {
-            self.prelist(executor, request, lanes);
+            self.prelist(&executor, request, lanes);
         }
         let mut warm = lock(&self.warm);
         let mut kept = match warm.take() {
@@ -773,7 +644,7 @@ impl Refiner for Runner {
                     other.worker.shutdown();
                 }
                 let mut spec = self.spec(vec![executor]);
-                spec.env.extend(lane_env(0, lanes));
+                spec.env.extend(lane_env(WorkerIndex::FIRST, lanes));
                 Warm {
                     adapter: request.adapter.clone(),
                     worker: spawn(&spec).map_err(|e| RefineError(e.to_string()))?,
@@ -870,12 +741,12 @@ fn refined_by(worker: &Worker, stopped: &dyn Fn() -> bool) -> Result<Refined, Un
 /// The environment variables of lane `lane`'s workers among `lanes`:
 /// `AYE_WORKER`, and with several lanes pytest-xdist's, so that per-worker
 /// resources are reused.
-fn lane_env(lane: WorkerId, lanes: u32) -> Vec<(OsString, OsString)> {
+fn lane_env(lane: WorkerIndex, lanes: u32) -> Vec<(OsString, OsString)> {
     let mut env = vec![(EnvVars::AYE_WORKER.into(), lane.to_string().into())];
     if lanes > 1 {
         env.push((
             EnvVars::PYTEST_XDIST_WORKER.into(),
-            format!("gw{lane}").into(),
+            lane.xdist_name().into(),
         ));
         env.push((
             EnvVars::PYTEST_XDIST_WORKER_COUNT.into(),
@@ -888,9 +759,9 @@ fn lane_env(lane: WorkerId, lanes: u32) -> Vec<(OsString, OsString)> {
 /// The lanes' listings of the session: the first lane's, by adapter, which
 /// the others compare theirs with, and the files already warned about.
 struct Listings {
-    reference: Mutex<HashMap<String, Reference>>,
+    reference: Mutex<HashMap<AdapterName, Reference>>,
     published: Condvar,
-    warned: Mutex<HashSet<String>>,
+    warned: Mutex<HashSet<ProjectPath>>,
 }
 
 enum Reference {
@@ -903,11 +774,11 @@ enum Reference {
 }
 
 impl Listings {
-    fn new(reference: Option<&str>) -> Self {
+    fn new(reference: Option<&AdapterName>) -> Self {
         Self {
             reference: Mutex::new(
                 reference
-                    .map(|adapter| (adapter.to_string(), Reference::Pending))
+                    .map(|adapter| (adapter.clone(), Reference::Pending))
                     .into_iter()
                     .collect(),
             ),
@@ -916,7 +787,7 @@ impl Listings {
         }
     }
 
-    fn publish(&self, adapter: &str, digests: Option<Digests>) {
+    fn publish(&self, adapter: &AdapterName, digests: Option<Digests>) {
         let mut reference = lock(&self.reference);
         if let Some(slot) = reference.get_mut(adapter) {
             *slot = digests.map_or(Reference::Missing, Reference::Ready);
@@ -926,7 +797,7 @@ impl Listings {
 
     /// The first lane's listing of `adapter`'s session, once it is known;
     /// `None` without one, or once `stopping`.
-    fn reference(&self, adapter: &str, stopping: &dyn Fn() -> bool) -> Option<Digests> {
+    fn reference(&self, adapter: &AdapterName, stopping: &dyn Fn() -> bool) -> Option<Digests> {
         let mut reference = lock(&self.reference);
         loop {
             match reference.get(adapter)? {
@@ -948,20 +819,20 @@ impl Listings {
 #[derive(Debug)]
 enum Message {
     WorkerStarted {
-        worker: WorkerId,
+        worker: WorkerIndex,
         pid: u32,
         python: String,
         version: String,
     },
     /// A worker could not start.
     WorkerFailed {
-        worker: WorkerId,
+        worker: WorkerIndex,
         error: String,
     },
     BatchStarted {
-        worker: WorkerId,
-        batch: BatchId,
-        adapter: String,
+        worker: WorkerIndex,
+        batch: BatchIndex,
+        adapter: AdapterName,
         cases: u32,
         /// The batch's share of `maxfail`.
         maxfail: Option<u32>,
@@ -971,22 +842,22 @@ enum Message {
     /// Something the worker sent that breaks the protocol, or an adapter
     /// that raised outside any test.
     Problem {
-        worker: WorkerId,
-        batch: BatchId,
-        code: &'static str,
-        path: String,
+        worker: WorkerIndex,
+        batch: BatchIndex,
+        code: DiagnosticCode,
+        path: DiagnosticPath,
         message: String,
     },
     Crashed(Crash),
     /// A warning outside any batch (a lane's `listing-differs`).
     Warning {
-        worker: WorkerId,
+        worker: WorkerIndex,
         diagnostic: Diagnostic,
     },
     BatchFinished {
-        worker: WorkerId,
-        batch: BatchId,
-        status: Option<i32>,
+        worker: WorkerIndex,
+        batch: BatchIndex,
+        status: Option<FrameworkStatus>,
         end: BatchEnd,
         /// What the framework's end of the batch means for the run.
         verdict: Verdict,
@@ -995,7 +866,7 @@ enum Message {
         not_run: Vec<TestId>,
     },
     WorkerFinished {
-        worker: WorkerId,
+        worker: WorkerIndex,
         exit_status: Option<i32>,
         error: Option<String>,
     },
@@ -1008,7 +879,7 @@ struct Log<'a> {
     on_record: &'a mut dyn FnMut(Record),
     summary: RunSummary,
     /// Each batch between its started and finished.
-    running: HashMap<BatchId, Running>,
+    running: HashMap<BatchIndex, Running>,
     /// The run stopped (`maxfail`, the stop handle): workers' records are
     /// dropped.
     halted: bool,
@@ -1022,7 +893,7 @@ struct Log<'a> {
 /// A batch the log has seen start.
 #[derive(Debug, Default)]
 struct Running {
-    adapter: String,
+    adapter: AdapterName,
     cases: u32,
     /// Its share of `maxfail`, and the bad outcomes it reported.
     maxfail: Option<u32>,
@@ -1047,7 +918,7 @@ impl Running {
 }
 
 impl Log<'_> {
-    fn deliver(&mut self, worker: Option<WorkerId>, batch: Option<BatchId>, event: Event) {
+    fn deliver(&mut self, worker: Option<WorkerIndex>, batch: Option<BatchIndex>, event: Event) {
         let mut record = Record::new(event);
         record.envelope.worker = worker;
         record.envelope.batch = batch;
@@ -1188,7 +1059,7 @@ impl Log<'_> {
                     Some(batch),
                     Event::Diagnostic(Diagnostic {
                         severity: Severity::Error,
-                        code: code.into(),
+                        code,
                         path,
                         span: None,
                         message,
@@ -1253,7 +1124,7 @@ impl Log<'_> {
 struct Shared<'a> {
     queue: Queue,
     /// Workers in a handshake or a batch, to stop when the run stops.
-    busy: Mutex<HashMap<WorkerId, Busy>>,
+    busy: Mutex<HashMap<WorkerIndex, Busy>>,
     /// Bad outcomes the lanes have passed on so far. The run stops on its
     /// own count; lanes read this one to stop taking batches without
     /// waiting for it, and to size each batch's `maxfail`.
@@ -1264,13 +1135,13 @@ struct Shared<'a> {
     spec: WorkerSpec,
     /// The plan's, with `maxfail` 0 made `None`.
     policy: &'a Policy,
-    contexts: &'a HashMap<String, serde_json::Value>,
+    contexts: &'a HashMap<AdapterName, serde_json::Value>,
     /// The plan's session files, by adapter.
-    sessions: &'a BTreeMap<String, Vec<String>>,
+    sessions: &'a BTreeMap<AdapterName, Vec<ProjectPath>>,
     listings: Listings,
     /// The adapter whose session the first lane lists first, for the others
     /// to compare theirs with (several lanes only).
-    reference: Option<String>,
+    reference: Option<AdapterName>,
     /// How many lanes start with a worker of that adapter, before they take
     /// a batch: one per batch of it, at most every lane.
     early: u32,
@@ -1278,13 +1149,13 @@ struct Shared<'a> {
     warm: Mutex<Option<Warm>>,
     /// By lane, the worker started for it during refinement, until the
     /// lane takes it ([`Shared::start`]) or ends.
-    prelisted: Mutex<HashMap<WorkerId, Prelisting>>,
+    prelisted: Mutex<HashMap<WorkerIndex, Prelisting>>,
     lanes: u32,
     stop: &'a StopHandle,
 }
 
 /// Tells the queue a lane is done taking batches, however it ends.
-struct LaneDone<'q>(&'q Queue, WorkerId);
+struct LaneDone<'q>(&'q Queue, WorkerIndex);
 
 impl Drop for LaneDone<'_> {
     fn drop(&mut self) {
@@ -1313,7 +1184,7 @@ enum Stopping {
 enum End {
     /// `batch_done`, with the framework's status.
     Done {
-        status: Option<i32>,
+        status: Option<FrameworkStatus>,
         track: Track,
     },
     Failed(String, Track),
@@ -1371,7 +1242,7 @@ impl Shared<'_> {
 
     /// Mark a worker busy; false if the run has stopped, in which case it
     /// must not start anything.
-    fn busy(&self, lane: WorkerId, killer: Killer) -> bool {
+    fn busy(&self, lane: WorkerIndex, killer: Killer) -> bool {
         let busy = Busy {
             killer,
             stopping: Stopping::No,
@@ -1383,7 +1254,7 @@ impl Shared<'_> {
     /// The lane's batch reached its own `maxfail`: its framework ends it,
     /// so the run doesn't interrupt it. Marked before the bad outcome is
     /// passed on, so before the run can stop for it.
-    fn ends_by_itself(&self, lane: WorkerId) {
+    fn ends_by_itself(&self, lane: WorkerIndex) {
         if let Some(busy) = lock(&self.busy).get_mut(&lane)
             && busy.stopping == Stopping::No
         {
@@ -1397,7 +1268,7 @@ impl Shared<'_> {
     }
 
     /// Mark a worker idle; whether the run interrupted it.
-    fn idle(&self, lane: WorkerId) -> bool {
+    fn idle(&self, lane: WorkerIndex) -> bool {
         lock(&self.busy)
             .remove(&lane)
             .is_some_and(|busy| busy.stopping == Stopping::Interrupted)
@@ -1450,24 +1321,24 @@ impl Shared<'_> {
     /// ([`Shared::early_start`]). A lane other than the first leaves the
     /// tests of the files it lists otherwise to the first lane
     /// ([`Queue::pin`]).
-    fn lane(&self, lane: WorkerId, tx: &Sender<Message>) {
+    fn lane(&self, lane: WorkerIndex, tx: &Sender<Message>) {
         let send = |message| {
             let _ = tx.send(message);
         };
         let _done = LaneDone(&self.queue, lane);
         let mut worker: Option<Worker> = None;
         // The adapter of the lane's last batch: its worker's.
-        let mut adapter: Option<String> = None;
+        let mut adapter: Option<AdapterName> = None;
         // The worker's session ended with its last batch: it runs no other.
         let mut ended = false;
         // With one lane: whether the worker was announced, and the worker
         // that listed the session, waiting while another adapter's runs.
         let one = self.lanes <= 1;
         let mut announced = true;
-        let mut parked: Option<(Worker, String, bool)> = None;
+        let mut parked: Option<(Worker, AdapterName, bool)> = None;
         // The files whose tests this lane's worker lists otherwise than the
         // first lane's: their ids run on the first lane.
-        let mut pinned: HashSet<String> = HashSet::new();
+        let mut pinned: HashSet<ProjectPath> = HashSet::new();
         match self.early_start(lane) {
             Ok(None) => {}
             Ok(Some((started, of, digests))) => {
@@ -1499,14 +1370,14 @@ impl Shared<'_> {
         while !self.exhausted()
             && let Some(batch) = self
                 .queue
-                .take(lane, if one { None } else { adapter.as_deref() })
+                .take(lane, if one { None } else { adapter.as_ref() })
         {
-            if adapter.as_deref() != Some(batch.adapter.as_str()) || ended {
+            if adapter.as_ref() != Some(&batch.adapter) || ended {
                 let park = one
                     && !ended
                     && parked.is_none()
                     && worker.is_some()
-                    && adapter.as_deref().is_some_and(|of| self.lists_session(of));
+                    && adapter.as_ref().is_some_and(|of| self.lists_session(of));
                 if park {
                     let of = adapter.take().expect("the worker's adapter");
                     parked = Some((worker.take().expect("checked above"), of, announced));
@@ -1569,7 +1440,10 @@ impl Shared<'_> {
             let batch = if pinned.is_empty() {
                 batch
             } else {
-                match self.queue.pin(batch, |id| pinned.contains(id.path())) {
+                match self
+                    .queue
+                    .pin(batch, |id| pinned.contains(id.path().as_str()))
+                {
                     Some(kept) => kept,
                     None => continue,
                 }
@@ -1613,7 +1487,7 @@ impl Shared<'_> {
     /// from `worker` ([`Shared::crashed`]).
     fn execute(
         &self,
-        lane: WorkerId,
+        lane: WorkerIndex,
         worker: &mut Option<Worker>,
         batch: &Assigned,
         send: &dyn Fn(Message),
@@ -1656,7 +1530,7 @@ impl Shared<'_> {
                 send(Message::Problem {
                     worker: lane,
                     batch: batch.id,
-                    code: "batch-failed",
+                    code: DiagnosticCode::BatchFailed,
                     path: first_path(batch),
                     message: format!(
                         "the {} adapter failed outside any test:\n{message}",
@@ -1680,11 +1554,11 @@ impl Shared<'_> {
     }
 
     /// Whether `adapter`'s executor lists the session.
-    fn lists_session(&self, adapter: &str) -> bool {
+    fn lists_session(&self, adapter: &AdapterName) -> bool {
         self.spec
             .executors
             .iter()
-            .any(|e| e.adapter == adapter && e.lists_session)
+            .any(|e| e.adapter == *adapter && e.lists_session)
     }
 
     /// End the session of the lane's `worker`, of `adapter`, whose last
@@ -1696,9 +1570,9 @@ impl Shared<'_> {
     /// does, and the log keeps what it reports as it keeps a halted run's.
     fn end_session(
         &self,
-        lane: WorkerId,
+        lane: WorkerIndex,
         worker: &mut Option<Worker>,
-        adapter: &str,
+        adapter: &AdapterName,
         send: &dyn Fn(Message),
     ) {
         if self.stop.is_stopped() || !self.lists_session(adapter) {
@@ -1722,11 +1596,15 @@ impl Shared<'_> {
     /// has listed the session if its executor lists the session: with its
     /// listing's digests then. The one started for the lane during
     /// refinement, if it is of that adapter ([`Shared::prelisted`]).
-    fn start(&self, lane: WorkerId, adapter: &str) -> Result<(Worker, Option<Digests>), String> {
+    fn start(
+        &self,
+        lane: WorkerIndex,
+        adapter: &AdapterName,
+    ) -> Result<(Worker, Option<Digests>), String> {
         let prelisted = {
             let mut prelisted = lock(&self.prelisted);
             match prelisted.remove(&lane) {
-                Some(p) if p.adapter == adapter => Some(p),
+                Some(p) if p.adapter == *adapter => Some(p),
                 Some(other) => {
                     prelisted.insert(lane, other);
                     None
@@ -1739,7 +1617,7 @@ impl Shared<'_> {
         }
         let mut spec = self.spec.clone();
         spec.executors
-            .retain(|executor| executor.adapter == adapter);
+            .retain(|executor| executor.adapter == *adapter);
         spec.env.extend(lane_env(lane, self.lanes));
         let mut worker = Worker::launch(&spec).map_err(|e| e.to_string())?;
         if !self.busy(lane, worker.killer()) {
@@ -1757,7 +1635,7 @@ impl Shared<'_> {
     /// answered its listings and listed the rest of the session.
     fn take_prelisted(
         &self,
-        lane: WorkerId,
+        lane: WorkerIndex,
         prelisted: Prelisting,
     ) -> Result<(Worker, Option<Digests>), String> {
         let Prelisting {
@@ -1805,11 +1683,11 @@ impl Shared<'_> {
     /// what the others compare theirs with.
     fn early_start(
         &self,
-        lane: WorkerId,
-    ) -> Result<Option<(Worker, String, Option<Digests>)>, String> {
-        if lane != 0 {
+        lane: WorkerIndex,
+    ) -> Result<Option<(Worker, AdapterName, Option<Digests>)>, String> {
+        if !lane.is_first() {
             return match &self.reference {
-                Some(adapter) if lane < self.early => self
+                Some(adapter) if lane.as_u32() < self.early => self
                     .start(lane, adapter)
                     .map(|(worker, digests)| Some((worker, adapter.clone(), digests))),
                 _ => Ok(None),
@@ -1824,17 +1702,17 @@ impl Shared<'_> {
                     digests,
                     ..
                 } = warm;
-                let listed = if self.busy(0, worker.killer()) {
+                let listed = if self.busy(WorkerIndex::FIRST, worker.killer()) {
                     self.list(worker, &adapter, digests)
                 } else {
                     worker.kill();
                     Err("interrupted".into())
                 };
-                self.idle(0);
+                self.idle(WorkerIndex::FIRST);
                 listed.map(|(worker, digests)| (worker, adapter, digests))
             }
             (None, Some(adapter)) => self
-                .start(0, adapter)
+                .start(WorkerIndex::FIRST, adapter)
                 .map(|(worker, digests)| (worker, adapter.clone(), digests)),
             (None, None) => return Ok(None),
         };
@@ -1855,18 +1733,18 @@ impl Shared<'_> {
     fn list(
         &self,
         mut worker: Worker,
-        adapter: &str,
+        adapter: &AdapterName,
         mut listed: Digests,
     ) -> Result<(Worker, Option<Digests>), String> {
         let lists = self
             .spec
             .executors
             .iter()
-            .any(|e| e.adapter == adapter && e.lists_session);
+            .any(|e| e.adapter == *adapter && e.lists_session);
         let Some(session) = self.sessions.get(adapter).filter(|_| lists) else {
             return Ok((worker, None));
         };
-        let files: Vec<String> = session
+        let files: Vec<ProjectPath> = session
             .iter()
             .filter(|file| !listed.contains_key(*file))
             .cloned()
@@ -1875,7 +1753,7 @@ impl Shared<'_> {
             return Ok((worker, Some(listed)));
         }
         let request = RefineRequest {
-            adapter: adapter.to_string(),
+            adapter: adapter.clone(),
             files,
             context: self.contexts.get(adapter).cloned().unwrap_or_default(),
             digests_only: true,
@@ -1902,18 +1780,18 @@ impl Shared<'_> {
     /// both listings.
     fn compare(
         &self,
-        lane: WorkerId,
-        adapter: &str,
+        lane: WorkerIndex,
+        adapter: &AdapterName,
         digests: Option<&Digests>,
         send: &dyn Fn(Message),
-    ) -> HashSet<String> {
-        let Some(digests) = digests.filter(|_| lane != 0) else {
+    ) -> HashSet<ProjectPath> {
+        let Some(digests) = digests.filter(|_| !lane.is_first()) else {
             return HashSet::new();
         };
         let Some(reference) = self.listings.reference(adapter, &|| self.stopping()) else {
             return HashSet::new();
         };
-        let differ: Vec<&String> = self
+        let differ: Vec<&ProjectPath> = self
             .sessions
             .get(adapter)
             .into_iter()
@@ -1927,8 +1805,8 @@ impl Shared<'_> {
                     worker: lane,
                     diagnostic: Diagnostic {
                         severity: Severity::Warning,
-                        code: LISTING_DIFFERS.into(),
-                        path: (*file).clone(),
+                        code: DiagnosticCode::ListingDiffers,
+                        path: (*file).clone().into(),
                         span: None,
                         message: format!(
                             "worker {lane} lists other tests in this file than worker 0 \
@@ -1945,7 +1823,7 @@ impl Shared<'_> {
     /// Run `batch` on `worker`, with `maxfail` its share of the run's.
     fn run_batch(
         &self,
-        lane: WorkerId,
+        lane: WorkerIndex,
         worker: &mut Worker,
         batch: &Assigned,
         maxfail: Option<u32>,
@@ -1982,7 +1860,7 @@ impl Shared<'_> {
         let problem = |message: String| Message::Problem {
             worker: lane,
             batch: batch.id,
-            code: "protocol-error",
+            code: DiagnosticCode::ProtocolError,
             path: first_path(batch),
             message,
         };
@@ -2048,7 +1926,7 @@ impl Shared<'_> {
     /// that the adapter runs only the rest, and none twice.
     fn crashed(
         &self,
-        lane: WorkerId,
+        lane: WorkerIndex,
         dead: Worker,
         batch: &Assigned,
         track: Track,
@@ -2140,7 +2018,12 @@ impl Shared<'_> {
 /// Send lane `lane`'s `worker_started` for `worker`, unless `announced`
 /// says it was (with one lane, a worker that listed the session is
 /// announced when it is first used).
-fn announce(lane: WorkerId, worker: Option<&Worker>, announced: &mut bool, send: &dyn Fn(Message)) {
+fn announce(
+    lane: WorkerIndex,
+    worker: Option<&Worker>,
+    announced: &mut bool,
+    send: &dyn Fn(Message),
+) {
     if let Some(worker) = worker
         && !*announced
     {
@@ -2167,8 +2050,10 @@ struct Track {
     /// The tests that started, in order, each once, and as a set.
     ran: Vec<TestId>,
     started: HashSet<TestId>,
-    /// The adapter said the framework stopped the batch: a `batch-stopped`
-    /// error diagnostic.
+    /// The adapter said the framework stopped the batch before running all
+    /// of it, where it would have ended its whole session (pytest's
+    /// `pytest.exit`, a `KeyboardInterrupt`, an internal error): a
+    /// `batch-stopped` error diagnostic.
     stopped: bool,
     /// The batch reported an error diagnostic.
     errors: bool,
@@ -2197,7 +2082,7 @@ impl Track {
             }
             Event::Diagnostic(diagnostic) => {
                 let error = diagnostic.severity == Severity::Error;
-                self.stopped |= error && diagnostic.code == BATCH_STOPPED;
+                self.stopped |= error && diagnostic.code == DiagnosticCode::BatchStopped;
                 self.errors |= error;
             }
             _ => {}
@@ -2205,11 +2090,9 @@ impl Track {
     }
 
     fn cover(&mut self, id: &TestId) {
-        let text = id.as_str();
-        self.covered.insert(text.to_string());
-        self.covered.insert(id.without_params().to_string());
-        for (at, _) in text.match_indices("::") {
-            self.covered.insert(text[..at].to_string());
+        self.covered.insert(id.as_str().to_string());
+        for ancestor in id.ancestors() {
+            self.covered.insert(ancestor.to_string());
         }
     }
 
@@ -2259,11 +2142,11 @@ impl Verdict {
     /// says it alone. Usage errors are the binary's to find, from their
     /// diagnostics. Status 1 from a `clean` batch (no bad outcome, no error)
     /// fails the run.
-    fn of(status: Option<i32>, stopped: bool, clean: bool) -> Self {
+    fn of(status: Option<FrameworkStatus>, stopped: bool, clean: bool) -> Self {
         Self {
-            stop: stopped || status == Some(STATUS_INTERRUPTED),
-            internal_error: status == Some(STATUS_INTERNAL_ERROR),
-            failed: clean && status == Some(STATUS_TESTS_FAILED),
+            stop: stopped || status == Some(FrameworkStatus::INTERRUPTED),
+            internal_error: status == Some(FrameworkStatus::INTERNAL_ERROR),
+            failed: clean && status == Some(FrameworkStatus::TESTS_FAILED),
         }
     }
 }
@@ -2273,12 +2156,10 @@ fn is_interrupt(failure: Option<&Failure>) -> bool {
     failure.is_some_and(|failure| failure.exception.as_deref() == Some("KeyboardInterrupt"))
 }
 
-fn first_path(batch: &Assigned) -> String {
-    batch
-        .ids
-        .first()
-        .map(|id| id.path().to_string())
-        .unwrap_or_default()
+fn first_path(batch: &Assigned) -> DiagnosticPath {
+    batch.ids.first().map_or(DiagnosticPath::Nowhere, |id| {
+        DiagnosticPath::as_written(id.path().as_str())
+    })
 }
 
 fn shorten(line: &str) -> String {
@@ -2296,39 +2177,6 @@ fn shorten(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn stamps_run_seq_and_time_and_keeps_worker_and_batch() {
-        let mut stamper = Stamper::with_run("r1").environment("py313");
-        let mut record = Record::new(Event::CollectionStarted);
-        record.envelope.worker = Some(2);
-        record.envelope.batch = Some(5);
-        record.envelope.seq = Some(99);
-        record.envelope.t_ms = Some(123_456.0);
-        let first = stamper.stamp(record);
-        let second = stamper.stamp(Record::new(Event::CollectionStarted));
-        assert_eq!(first.envelope.run.as_deref(), Some("r1"));
-        assert_eq!(first.envelope.environment.as_deref(), Some("py313"));
-        assert_eq!(
-            (first.envelope.worker, first.envelope.batch),
-            (Some(2), Some(5))
-        );
-        assert_eq!(
-            (first.envelope.seq, second.envelope.seq),
-            (Some(0), Some(1))
-        );
-        assert!(first.envelope.t_ms.unwrap() < 1000.0);
-        assert!(second.envelope.t_ms >= first.envelope.t_ms);
-        assert_eq!(stamper.next_seq(), 2);
-    }
-
-    #[test]
-    fn run_ids_differ() {
-        let a = new_run_id();
-        assert_eq!(a.len(), 16);
-        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
-        assert_ne!(a, new_run_id());
-    }
 
     #[test]
     fn track_knows_what_started() {
@@ -2355,7 +2203,11 @@ mod tests {
         .into_iter()
         .map(TestId::new)
         .collect();
-        let remaining: Vec<String> = track.remaining(&ids).into_iter().map(|id| id.0).collect();
+        let remaining: Vec<String> = track
+            .remaining(&ids)
+            .into_iter()
+            .map(TestId::into_string)
+            .collect();
         assert_eq!(remaining, ["b.py::v", "a.py::C::tt"]);
     }
 
@@ -2390,32 +2242,36 @@ mod tests {
     }
 
     #[test]
-    fn stop_reasons_are_spelled_as_run_finished_spells_them() {
-        let names: Vec<&str> = [
-            StopReason::Maxfail,
-            StopReason::Interrupted,
-            StopReason::Framework,
-        ]
-        .into_iter()
-        .map(StopReason::as_str)
-        .collect();
-        assert_eq!(names, ["maxfail", "interrupted", "framework"]);
-        assert_eq!(StopReason::Framework.to_string(), "framework");
-    }
-
-    #[test]
     fn the_framework_stops_the_run_by_a_batch_stopped_error_or_status_2() {
         let stop = Verdict {
             stop: true,
             ..Verdict::default()
         };
-        assert_eq!(Verdict::of(Some(2), false, false), stop);
+        assert_eq!(
+            Verdict::of(Some(FrameworkStatus::new(2)), false, false),
+            stop
+        );
         // `pytest.exit(returncode=…)`, whatever the code: 4 is no usage error.
-        for status in [Some(0), Some(2), Some(4), Some(5), Some(7), None] {
+        for status in [
+            Some(FrameworkStatus::new(0)),
+            Some(FrameworkStatus::new(2)),
+            Some(FrameworkStatus::new(4)),
+            Some(FrameworkStatus::new(5)),
+            Some(FrameworkStatus::new(7)),
+            None,
+        ] {
             assert_eq!(Verdict::of(status, true, false), stop, "{status:?}");
         }
         // A status alone says nothing about the tests left, but 2.
-        for status in [Some(0), Some(1), Some(4), Some(5), Some(7), Some(-1), None] {
+        for status in [
+            Some(FrameworkStatus::new(0)),
+            Some(FrameworkStatus::new(1)),
+            Some(FrameworkStatus::new(4)),
+            Some(FrameworkStatus::new(5)),
+            Some(FrameworkStatus::new(7)),
+            Some(FrameworkStatus::new(-1)),
+            None,
+        ] {
             assert_eq!(
                 Verdict::of(status, false, false),
                 Verdict::default(),
@@ -2427,7 +2283,7 @@ mod tests {
     #[test]
     fn status_3_is_an_internal_error_and_stops_the_run_only_when_the_batch_was_stopped() {
         assert_eq!(
-            Verdict::of(Some(3), true, false),
+            Verdict::of(Some(FrameworkStatus::new(3)), true, false),
             Verdict {
                 stop: true,
                 internal_error: true,
@@ -2436,7 +2292,7 @@ mod tests {
         );
         // pytest's INTERNALERROR in `pytest_sessionfinish`: every test ran.
         assert_eq!(
-            Verdict::of(Some(3), false, true),
+            Verdict::of(Some(FrameworkStatus::new(3)), false, true),
             Verdict {
                 stop: false,
                 internal_error: true,
@@ -2448,10 +2304,14 @@ mod tests {
     #[test]
     fn status_1_from_a_batch_where_nothing_failed_fails_the_run() {
         // A conftest's `session.exitstatus = 1`, `--cov-fail-under`.
-        assert!(Verdict::of(Some(1), false, true).failed);
+        assert!(Verdict::of(Some(FrameworkStatus::new(1)), false, true).failed);
         // A bad test or an error diagnostic explains it.
-        assert!(!Verdict::of(Some(1), false, false).failed);
-        for status in [Some(0), Some(5), None] {
+        assert!(!Verdict::of(Some(FrameworkStatus::new(1)), false, false).failed);
+        for status in [
+            Some(FrameworkStatus::new(0)),
+            Some(FrameworkStatus::new(5)),
+            None,
+        ] {
             assert!(!Verdict::of(status, false, true).failed, "{status:?}");
         }
     }
@@ -2462,8 +2322,8 @@ mod tests {
         assert!(track.clean());
         track.see(&Event::Diagnostic(Diagnostic {
             severity: Severity::Warning,
-            code: "session-failed".into(),
-            path: String::new(),
+            code: DiagnosticCode::SessionFailed,
+            path: DiagnosticPath::Nowhere,
             span: None,
             message: String::new(),
         }));
@@ -2476,7 +2336,7 @@ mod tests {
         assert!(!failed.clean());
         track.see(&Event::Diagnostic(Diagnostic {
             severity: Severity::Error,
-            code: "collection-error".into(),
+            code: DiagnosticCode::CollectionError,
             path: "b.py".into(),
             span: None,
             message: String::new(),
@@ -2496,7 +2356,7 @@ mod tests {
             .into_iter()
             .map(TestId::new)
             .collect();
-        let names = |ids: Vec<TestId>| ids.into_iter().map(|id| id.0).collect::<Vec<_>>();
+        let names = |ids: Vec<TestId>| ids.into_iter().map(TestId::into_string).collect::<Vec<_>>();
         // What none of whose tests started, for `not_run`.
         assert_eq!(names(track.remaining(&ids)), ["b.py::u[old]", "b.py::v"]);
         // What may not have run in full, for the retry.
@@ -2516,7 +2376,7 @@ mod tests {
             Event::Diagnostic(Diagnostic {
                 severity,
                 code: code.into(),
-                path: String::new(),
+                path: DiagnosticPath::Nowhere,
                 span: None,
                 message: "pytest stopped the session".into(),
             })
@@ -2556,7 +2416,7 @@ mod tests {
         let Event::Diagnostic(diagnostic) = &records[0].event else {
             panic!("expected a diagnostic");
         };
-        assert_eq!(diagnostic.code, "no-executor");
+        assert_eq!(diagnostic.code, DiagnosticCode::NoExecutor);
         assert_eq!(diagnostic.path, "t.py");
         assert!(
             diagnostic.message.contains("2 tests not run"),
