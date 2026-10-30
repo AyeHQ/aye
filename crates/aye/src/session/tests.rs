@@ -1887,3 +1887,173 @@ fn with_dotted_names_the_session_is_what_the_run_starts_from() {
     assert_eq!(files["pytest"], ["tests/test_a.py", "tests/sub/test_s.py"]);
     assert_eq!(files["doctest"], ["lib.py"]);
 }
+
+/// What a run's exit code is decided on, at the end of collection or of
+/// the run ([`EXIT_CODES`]).
+#[derive(Debug, Clone, Copy, Default)]
+struct Facts {
+    /// Collection was interrupted, or the run was (the runner's summary).
+    interrupted: bool,
+    /// An internal error: a diagnostic in collection, the runner's
+    /// summary in the run.
+    internal: bool,
+    /// A usage error diagnostic (a `not-found` in collection).
+    usage: bool,
+    /// An error diagnostic: collection's in collection; collection's or
+    /// the run's in the run.
+    errors: bool,
+    framework_failed: bool,
+    /// Cases selected when collection ends.
+    selected: u32,
+    /// Bad outcomes, and outcomes, of the tests that ran.
+    bad: u32,
+    total: u32,
+    collect_only: bool,
+    continuing: bool,
+}
+
+/// Where a run's exit code is decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    /// When collection ends: an exit code, or `None` when the run goes on.
+    Collection,
+    /// When the run ends.
+    Run,
+}
+
+/// No fact holds.
+const F: Facts = Facts {
+    interrupted: false,
+    internal: false,
+    usage: false,
+    errors: false,
+    framework_failed: false,
+    selected: 0,
+    bad: 0,
+    total: 0,
+    collect_only: false,
+    continuing: false,
+};
+
+/// Every way a run's exit code was decided in aye 0.0.1, at each stage, by
+/// which facts hold, as it decided them.
+#[rustfmt::skip]
+const EXIT_CODES: [(&str, Stage, Facts, Option<u8>); 31] = {
+    use Stage::{Collection, Run};
+    [
+        ("an interrupted collection", Collection, Facts { interrupted: true, ..F }, Some(2)),
+        ("interrupted, then internal", Collection, Facts { interrupted: true, internal: true, ..F }, Some(2)),
+        ("an internal error", Collection, Facts { internal: true, selected: 3, ..F }, Some(3)),
+        ("internal, then usage", Collection, Facts { internal: true, usage: true, ..F }, Some(3)),
+        ("a usage error", Collection, Facts { usage: true, selected: 3, ..F }, Some(4)),
+        ("usage, then collection errors", Collection, Facts { usage: true, errors: true, ..F }, Some(4)),
+        ("--co, nothing selected", Collection, Facts { collect_only: true, ..F }, Some(5)),
+        ("--co", Collection, Facts { collect_only: true, selected: 3, ..F }, Some(0)),
+        ("--co, collection errors", Collection, Facts { collect_only: true, errors: true, selected: 3, ..F }, Some(2)),
+        ("--co, collection errors, continuing", Collection, Facts { collect_only: true, errors: true, continuing: true, selected: 3, ..F }, Some(1)),
+        ("--co, collection errors, continuing, nothing selected", Collection, Facts { collect_only: true, errors: true, continuing: true, ..F }, Some(1)),
+        ("--co, an internal error", Collection, Facts { collect_only: true, internal: true, selected: 3, ..F }, Some(3)),
+        ("--co, a usage error", Collection, Facts { collect_only: true, usage: true, selected: 3, ..F }, Some(4)),
+        ("--co, interrupted", Collection, Facts { collect_only: true, interrupted: true, ..F }, Some(2)),
+        ("collection errors", Collection, Facts { errors: true, selected: 3, ..F }, Some(2)),
+        ("collection errors, nothing selected", Collection, Facts { errors: true, ..F }, Some(2)),
+        ("collection errors, continuing, nothing selected", Collection, Facts { errors: true, continuing: true, ..F }, Some(1)),
+        ("collection errors, continuing", Collection, Facts { errors: true, continuing: true, selected: 3, ..F }, None),
+        ("nothing selected", Collection, Facts { continuing: true, ..F }, Some(5)),
+        ("cases to run", Collection, Facts { selected: 3, ..F }, None),
+        ("an interrupted run", Run, Facts { interrupted: true, internal: true, usage: true, errors: true, framework_failed: true, bad: 1, total: 2, ..F }, Some(2)),
+        ("internal, then usage", Run, Facts { internal: true, usage: true, errors: true, bad: 1, total: 2, ..F }, Some(3)),
+        ("a usage error", Run, Facts { usage: true, errors: true, bad: 1, total: 2, ..F }, Some(4)),
+        ("a usage error, continuing, nothing ran", Run, Facts { usage: true, errors: true, continuing: true, ..F }, Some(4)),
+        ("usage, then a failed framework", Run, Facts { usage: true, errors: true, framework_failed: true, total: 2, ..F }, Some(4)),
+        ("errors", Run, Facts { errors: true, total: 3, ..F }, Some(2)),
+        ("errors, continuing, nothing ran", Run, Facts { errors: true, continuing: true, ..F }, Some(1)),
+        ("bad outcomes", Run, Facts { bad: 1, total: 4, ..F }, Some(1)),
+        ("a framework that failed a clean batch", Run, Facts { framework_failed: true, total: 3, ..F }, Some(1)),
+        ("nothing ran", Run, F, Some(5)),
+        ("every test passed", Run, Facts { total: 3, ..F }, Some(0)),
+    ]
+};
+
+/// aye 0.0.1's decision when collection ends, as `Session::run` made it.
+fn decided_after_collection(facts: Facts) -> Option<ExitCode> {
+    let Facts {
+        interrupted,
+        internal: internal_error,
+        usage: usage_error,
+        errors: collection_errors,
+        selected,
+        collect_only,
+        continuing,
+        ..
+    } = facts;
+    if interrupted {
+        return Some(ExitCode::Interrupted);
+    }
+    if internal_error {
+        return Some(ExitCode::InternalError);
+    }
+    if usage_error {
+        return Some(ExitCode::UsageError);
+    }
+    if collect_only {
+        let code = if collection_errors && !continuing {
+            ExitCode::Interrupted
+        } else if collection_errors {
+            ExitCode::TestsFailed
+        } else if selected == 0 {
+            ExitCode::NoTests
+        } else {
+            ExitCode::Ok
+        };
+        return Some(code);
+    }
+    if collection_errors && !continuing {
+        return Some(ExitCode::Interrupted);
+    }
+    if selected == 0 {
+        let code = if collection_errors {
+            ExitCode::TestsFailed
+        } else {
+            ExitCode::NoTests
+        };
+        return Some(code);
+    }
+    None
+}
+
+/// aye 0.0.1's decision when the run ends ([`run_exit_code`]).
+fn decided_after_the_run(facts: Facts) -> ExitCode {
+    let summary = aye_runner::RunSummary {
+        interrupted: facts.interrupted,
+        internal_error: facts.internal,
+        framework_failed: facts.framework_failed,
+        ..aye_runner::RunSummary::default()
+    };
+    let errors = Errors {
+        any: facts.errors,
+        usage: facts.usage,
+        internal: false,
+    };
+    let counts = Counts {
+        failed: facts.bad,
+        passed: facts.total - facts.bad,
+        ..Counts::default()
+    };
+    run_exit_code(&summary, errors, &counts, facts.continuing)
+}
+
+/// The exit code is decided as aye 0.0.1 decided it, in every case of
+/// [`EXIT_CODES`]: when collection ends (an interruption, then an internal
+/// error, then a usage error, then collection errors, `--co`, nothing
+/// selected) and when the run ends.
+#[test]
+fn the_exit_code_is_decided_as_before_at_both_stages() {
+    for (case, stage, facts, expected) in EXIT_CODES {
+        let decided = match stage {
+            Stage::Collection => decided_after_collection(facts),
+            Stage::Run => Some(decided_after_the_run(facts)),
+        };
+        assert_eq!(decided.map(u8::from), expected, "{stage:?}: {case}");
+    }
+}

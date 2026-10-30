@@ -3133,3 +3133,263 @@ fn a_run_of_pytests_tests_cant_do_without_refinement() {
     let output = aye(&python, dir.path(), &["--no-refine"]);
     assert_eq!(code(&output), 5, "{}", stdout(&output));
 }
+
+/// aye in `cwd` with only the environment given: `PATH` an empty
+/// directory and `HOME` as given, so that no interpreter is found unless
+/// one is asked for, and the home directory is the one the test chose.
+#[cfg(unix)]
+fn aye_alone(cwd: &Path, home: &Path, args: &[&str]) -> Output {
+    let path = tempfile::tempdir().unwrap();
+    Command::new(env!("CARGO_BIN_EXE_aye"))
+        .args(args)
+        .current_dir(cwd)
+        .env_clear()
+        .env("PATH", path.path())
+        .env("HOME", home)
+        .env(NO_AUTOLOAD.0, NO_AUTOLOAD.1)
+        .output()
+        .unwrap()
+}
+
+/// When a command line and a project have several things wrong, the one
+/// found first in the order aye resolves a run's settings is the one
+/// reported: the command line's own values, `[tool.aye]`, the interpreter,
+/// the whole-home rule, the adapters' names, the tables of those that don't
+/// run, `--no-refine` without `--co`, the configuration of those that do,
+/// then the command line's `-k` and `-m`. Each pair below has both, and
+/// `aye config` resolves as a run does. `aye show` checks its own flags,
+/// then `[tool.aye]`, then that a run is stored, before its expressions.
+#[cfg(unix)]
+#[test]
+fn the_first_usage_error_in_resolution_order_wins() {
+    let python = "/nonexistent/bin/python";
+    let bad_table = "[tool.aye.unittest]\nbogus = \"x\"\n";
+    let cases: [(&str, &[&str], &str, &str); 12] = [
+        (
+            "a -k value that is a flag, before [tool.aye]",
+            &["-k", "-x"],
+            "[tool.aye]\noutput = \"xml\"\n",
+            "aye: error: argument -k: expected one argument",
+        ),
+        (
+            "arguments after -- that replace the run, before [tool.aye]",
+            &["--", "--co"],
+            "[tool.aye]\noutput = \"xml\"\n",
+            "aye: error: `-- --co` would make pytest collect the tests without running them; \
+             use `aye --co`",
+        ),
+        (
+            "[tool.aye], before the interpreter",
+            &[],
+            "[tool.aye]\noutput = \"xml\"\n",
+            "aye: error: invalid [tool.aye] in <root>/pyproject.toml: output = \"xml\": \
+             expected text or json",
+        ),
+        (
+            "the interpreter, before the whole-home rule",
+            &[],
+            "",
+            "aye: error: no Python interpreter found: pass --python, or set [tool.aye] python",
+        ),
+        (
+            "the whole-home rule, before the adapters' names",
+            &["--python", python],
+            "[tool.aye]\nadapters = [\"nose\"]\n",
+            "aye: error: with no path given, aye would collect your whole home directory \
+             (<root>). Run aye inside a project, or name what to test (aye tests/)",
+        ),
+        (
+            "an unknown adapter, before the table of one that doesn't run",
+            &["--python", python, "."],
+            &format!("[tool.aye]\nadapters = [\"nose\"]\n\n{bad_table}"),
+            "aye: error: [tool.aye] adapters: unknown adapter \"nose\" (known: pytest, \
+             unittest, doctest)",
+        ),
+        (
+            "the table of an adapter that doesn't run, before --no-refine",
+            &["--python", python, "--no-refine", "."],
+            &format!("[tool.aye]\nadapters = [\"pytest\"]\n\n{bad_table}"),
+            "aye: error: invalid unittest configuration: invalid [tool.aye.unittest] in \
+             <root>/pyproject.toml: unknown key \"bogus\" (expected start-directory, pattern \
+             or top-level-directory)",
+        ),
+        (
+            "--no-refine without --co, before preparing the adapters",
+            &["--python", python, "--no-refine", "."],
+            &format!("[tool.aye]\nadapters = [\"pytest\", \"unittest\"]\n\n{bad_table}"),
+            "aye: error: --no-refine lists tests without importing them, with --co; a run of \
+             pytest's tests imports every file it runs (aye's pytest front-end reads each \
+             one), so it can't do without",
+        ),
+        (
+            "an adapter's configuration, before the command line's expressions",
+            &["--python", python, "-k", "not (", "."],
+            &format!("[tool.aye]\nadapters = [\"unittest\"]\n\n{bad_table}"),
+            "aye: error: invalid unittest configuration: invalid [tool.aye.unittest] in \
+             <root>/pyproject.toml: unknown key \"bogus\" (expected start-directory, pattern \
+             or top-level-directory)",
+        ),
+        (
+            "aye config, in the same order",
+            &["config", "--python", python, "-k", "not (", "."],
+            &format!("[tool.aye]\nadapters = [\"unittest\"]\n\n{bad_table}"),
+            "aye: error: invalid unittest configuration: invalid [tool.aye.unittest] in \
+             <root>/pyproject.toml: unknown key \"bogus\" (expected start-directory, pattern \
+             or top-level-directory)",
+        ),
+        (
+            "aye show's flags, before [tool.aye]",
+            &["show", "-m", "-x"],
+            "[tool.aye]\noutput = \"xml\"\n",
+            "aye: error: argument -m: expected one argument",
+        ),
+        (
+            "aye show's [tool.aye]",
+            &["show", "-k", "not ("],
+            "[tool.aye]\noutput = \"xml\"\n",
+            "aye: error: invalid [tool.aye] in <root>/pyproject.toml: output = \"xml\": \
+             expected text or json",
+        ),
+    ];
+    for (case, args, table, error) in cases {
+        let pyproject = format!("[project]\nname = \"p\"\nversion = \"0\"\n\n{table}");
+        let dir = project(&[("pyproject.toml", &pyproject)]);
+        let root = fs::canonicalize(dir.path()).unwrap();
+        // The home directory is the project only where the whole-home rule
+        // is meant to apply.
+        let other = tempfile::tempdir().unwrap();
+        let home = if args.contains(&".") || args.first() == Some(&"show") {
+            other.path()
+        } else {
+            &root
+        };
+        let output = aye_alone(&root, home, args);
+        let stderr =
+            String::from_utf8_lossy(&output.stderr).replace(root.to_str().unwrap(), "<root>");
+        assert_eq!((code(&output), stderr.trim_end()), (4, error), "{case}");
+    }
+    // The last of them alone; and `aye show`'s expressions come after it
+    // finds no run.
+    let dir = project(&[]);
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let output = aye_alone(&root, &root, &["--python", python, "-k", "not (", "."]);
+    assert_eq!(
+        (
+            code(&output),
+            String::from_utf8_lossy(&output.stderr).trim_end()
+        ),
+        (
+            4,
+            "aye: error: wrong expression passed to '-k': not (: at column 6: expected not OR \
+             left parenthesis OR identifier; got end of input"
+        )
+    );
+    let output = aye_alone(&root, &root, &["show", "-k", "not ("]);
+    let stderr = String::from_utf8_lossy(&output.stderr).replace(root.to_str().unwrap(), "<root>");
+    assert_eq!(
+        (code(&output), stderr.trim_end()),
+        (
+            5,
+            "aye: no run is stored in <root>/.aye/runs yet: run aye first"
+        )
+    );
+}
+
+/// `aye config` says where the interpreter came from: the one asked for by
+/// `--python`, `$AYE_PYTHON` or `[tool.aye] python`, in that order, else
+/// the one an active `$VIRTUAL_ENV`, the project's `.venv` or `PATH`
+/// offers. None of them is started.
+#[cfg(unix)]
+#[test]
+fn aye_config_says_where_the_interpreter_came_from() {
+    // The arguments, the variables, `[tool.aye]`, whether the project has a
+    // `.venv`, and the line.
+    type Case<'a> = (
+        &'a [&'a str],
+        &'a [(&'a str, &'a Path)],
+        &'a str,
+        bool,
+        String,
+    );
+    let fake = |path: &Path| {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "").unwrap();
+    };
+    let elsewhere = tempfile::tempdir().unwrap();
+    let elsewhere = fs::canonicalize(elsewhere.path()).unwrap();
+    let venv = elsewhere.join("venv");
+    fake(&venv.join("bin/python"));
+    let bin = elsewhere.join("bin");
+    fake(&bin.join("python3"));
+    let cases: [Case<'_>; 6] = [
+        (
+            &["--python", "/x/flag/python"],
+            &[("AYE_PYTHON", Path::new("/x/env/python"))],
+            "python = \"/x/cfg/python\"\n",
+            true,
+            "/x/flag/python  (--python)".to_string(),
+        ),
+        (
+            &[],
+            &[("AYE_PYTHON", Path::new("/x/env/python"))],
+            "python = \"/x/cfg/python\"\n",
+            true,
+            "/x/env/python  ($AYE_PYTHON)".to_string(),
+        ),
+        (
+            &[],
+            &[("VIRTUAL_ENV", &venv)],
+            "python = \"/x/cfg/python\"\n",
+            true,
+            "/x/cfg/python  ([tool.aye] python)".to_string(),
+        ),
+        (
+            &[],
+            &[("VIRTUAL_ENV", &venv)],
+            "",
+            true,
+            format!("{}  ($VIRTUAL_ENV)", venv.join("bin/python").display()),
+        ),
+        (
+            &[],
+            &[("PATH", &bin)],
+            "",
+            true,
+            "<root>/.venv/bin/python  (.venv)".to_string(),
+        ),
+        (
+            &[],
+            &[("PATH", &bin)],
+            "",
+            false,
+            format!("{}  (PATH)", bin.join("python3").display()),
+        ),
+    ];
+    for (args, vars, table, project_venv, shown) in cases {
+        let pyproject = format!("[project]\nname = \"p\"\nversion = \"0\"\n\n[tool.aye]\n{table}");
+        let dir = project(&[("pyproject.toml", &pyproject)]);
+        let root = fs::canonicalize(dir.path()).unwrap();
+        if project_venv {
+            fake(&root.join(".venv/bin/python"));
+        }
+        let mut command = Command::new(env!("CARGO_BIN_EXE_aye"));
+        command
+            .arg("config")
+            .args(args)
+            .current_dir(&root)
+            .env_clear()
+            .env("PATH", &elsewhere)
+            .env("HOME", &elsewhere);
+        for (name, value) in vars {
+            command.env(name, value);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(code(&output), 0, "{shown}: {}", stdout(&output));
+        let line = stdout(&output)
+            .lines()
+            .find_map(|line| line.strip_prefix("python   "))
+            .unwrap()
+            .replace(root.to_str().unwrap(), "<root>");
+        assert_eq!(line, shown);
+    }
+}
