@@ -5,6 +5,8 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use aye_static::EnvVars;
+
 /// Where the interpreter came from, for diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PythonSource {
@@ -72,7 +74,7 @@ impl System<'_> {
     }
 
     fn which(&self, name: &str) -> Option<PathBuf> {
-        let path = self.var("PATH")?;
+        let path = self.var(EnvVars::PATH)?;
         env::split_paths(&path)
             .map(|dir| dir.join(exe_name(name)))
             .find(|candidate| candidate.is_file())
@@ -99,13 +101,13 @@ fn find(
     if let Some(path) = flag {
         return Some((system.resolve(path, cwd), PythonSource::Flag));
     }
-    if let Some(path) = system.var("AYE_PYTHON") {
+    if let Some(path) = system.var(EnvVars::AYE_PYTHON) {
         return Some((system.resolve(Path::new(&path), cwd), PythonSource::Env));
     }
     if let Some(path) = config.filter(|path| !path.is_empty()) {
         return Some((system.resolve(Path::new(path), root), PythonSource::Config));
     }
-    if let Some(venv) = system.var("VIRTUAL_ENV")
+    if let Some(venv) = system.var(EnvVars::VIRTUAL_ENV)
         && let Some(python) = venv_python(Path::new(&venv))
     {
         return Some((python, PythonSource::VirtualEnv));

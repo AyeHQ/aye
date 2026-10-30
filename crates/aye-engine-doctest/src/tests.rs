@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use aye_engine::{Adapter, Claim, LineIndex, Project, Recognition, Recognizer, SourceFile};
-use aye_events::Certainty;
+use aye_events::{Certainty, DiagnosticCode};
 
 use super::*;
 use crate::parser::{clean_doc, docstring, expand_tabs, parse};
@@ -50,7 +50,7 @@ impl Parsed {
 
     fn file(&self) -> SourceFile<'_> {
         SourceFile {
-            rel: &self.rel,
+            rel: aye_events::ProjectPathRef::as_written(&self.rel),
             abs: &self.abs,
             source: &self.source,
             module: self.ast.syntax(),
@@ -73,6 +73,11 @@ fn project<'a>(root: &'a Path, args: &'a [PathBuf], framework_args: &'a [String]
         config_file: None,
         framework_args,
     }
+}
+
+/// The adapters a run uses, by name.
+fn adapters(names: &[&'static str]) -> Vec<AdapterName> {
+    names.iter().copied().map(AdapterName::from).collect()
 }
 
 fn recognizer(root: &Path) -> DoctestRecognizer {
@@ -141,7 +146,7 @@ fn names(source: &str) -> (Vec<String>, bool) {
     let names = recognition
         .cases
         .iter()
-        .map(|c| c.id.0.trim_start_matches("pkg/mod.py::").to_string())
+        .map(|c| c.id.as_str().trim_start_matches("pkg/mod.py::").to_string())
         .collect();
     (names, recognition.refine.is_some())
 }
@@ -156,7 +161,7 @@ fn exact(source: &str) -> Vec<String> {
     recognition
         .cases
         .iter()
-        .map(|c| c.id.0.trim_start_matches("pkg/mod.py::").to_string())
+        .map(|c| c.id.as_str().trim_start_matches("pkg/mod.py::").to_string())
         .collect()
 }
 
@@ -868,7 +873,7 @@ fn carriage_returns_fold_unless_an_escape_may_make_one() {
 fn cases_carry_keywords_affinity_and_a_span() {
     let recognition = recognize("def f():\n    \"\"\"\n    >>> 1\n    1\n    \"\"\"\n");
     let case = &recognition.cases[0];
-    assert_eq!(case.id.0, "pkg/mod.py::pkg.mod.f");
+    assert_eq!(case.id.as_str(), "pkg/mod.py::pkg.mod.f");
     assert_eq!(case.adapter, "doctest");
     assert_eq!(case.keywords, ["pkg", "mod.py", "pkg.mod.f"]);
     assert_eq!(case.affinity, ["import:pkg.mod", "pkg/mod.py"]);
@@ -931,9 +936,9 @@ fn beside_pytest_test_txt_files_need_no_pytest_configuration() {
     write(root, "pyproject.toml", "[project]\nname = 'x'\n");
     write(root, "docs/test_guide.txt", "Guide.\n\n>>> 1 + 1\n2\n");
     write(root, "docs/test_prose.txt", "Only prose.\n");
-    let among = |adapters: &[&str], args: &[String]| {
+    let among = |names: &[&'static str], args: &[String]| {
         Doctest
-            .prepare_among(&project(root, &[], args), adapters)
+            .prepare_among(&project(root, &[], args), &adapters(names))
             .unwrap()
     };
     assert!(among(&["doctest"], &[]).is_none());
@@ -974,7 +979,7 @@ fn beside_pytest_test_txt_files_need_no_pytest_configuration() {
                 let file = Parsed::read(root, rel);
                 let recognition = recognizer.recognize(&file.file(), &[]);
                 assert!(recognition.refine.is_none());
-                recognition.cases.into_iter().map(|c| c.id.0)
+                recognition.cases.into_iter().map(|c| c.id.into_string())
             })
             .collect();
         assert_eq!(found, theirs.ids);
@@ -1244,7 +1249,7 @@ fn text_files_are_one_case_when_they_have_examples() {
     assert!(recognition.refine.is_none());
     assert_eq!(recognition.cases.len(), 1);
     let case = &recognition.cases[0];
-    assert_eq!(case.id.0, "docs/test_a.txt::test_a.txt");
+    assert_eq!(case.id.as_str(), "docs/test_a.txt::test_a.txt");
     assert_eq!(case.keywords, ["docs", "test_a.txt"]);
     assert_eq!(case.affinity, ["docs/test_a.txt"]);
     assert_eq!(
@@ -1312,7 +1317,7 @@ fn modules_without_a_visible_doctest_are_refined() {
     write(dir.path(), "tests/conftest.py", "import os\n");
     let beside = DoctestRecognizer::with_env_among(
         &project(dir.path(), &[], &[]),
-        &["pytest", "doctest"],
+        &adapters(&["pytest", "doctest"]),
         None,
         None,
     )
@@ -1948,9 +1953,9 @@ fn a_named_text_file_is_a_doctest_with_nothing_enabled() {
     write(root, "guide.rst", ">>> 1 + 1\n3\n");
     assert!(Doctest.prepare(&project(root, &[], &[])).unwrap().is_none());
     let args = [PathBuf::from("guide.rst")];
-    for adapters in [&["doctest"][..], &["doctest", "unittest"]] {
+    for names in [&["doctest"][..], &["doctest", "unittest"]] {
         let recognizer = Doctest
-            .prepare_among(&project(root, &args, &[]), adapters)
+            .prepare_among(&project(root, &args, &[]), &adapters(names))
             .unwrap()
             .expect("a recognizer for the named file");
         assert_eq!(recognizer.claim("guide.rst", true), Claim::Tests);
@@ -2276,7 +2281,7 @@ fn a_conftest_another_one_replaced_is_an_import_file_mismatch() {
     let [error] = mismatched.diagnostics.as_slice() else {
         panic!("{mismatched:?}");
     };
-    assert_eq!(error.code, "collection-error");
+    assert_eq!(error.code, DiagnosticCode::CollectionError);
     assert!(error.message.starts_with("import file mismatch"));
     assert!(
         error

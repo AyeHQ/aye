@@ -7,13 +7,13 @@ use aye_config::{Origin, Sourced};
 use aye_engine::{AdapterError, Setting};
 
 /// The table's keys.
-pub const START_DIRECTORY: &str = "start-directory";
-pub const PATTERN: &str = "pattern";
-pub const TOP_LEVEL_DIRECTORY: &str = "top-level-directory";
+pub(crate) const START_DIRECTORY: &str = "start-directory";
+pub(crate) const PATTERN: &str = "pattern";
+pub(crate) const TOP_LEVEL_DIRECTORY: &str = "top-level-directory";
 
 /// unittest's defaults.
-pub const DEFAULT_START: &str = ".";
-pub const DEFAULT_PATTERN: &str = "test*.py";
+pub(crate) const DEFAULT_START: &str = ".";
+pub(crate) const DEFAULT_PATTERN: &str = "test*.py";
 
 /// The unittest adapter's settings, resolved against the project root.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,10 +76,10 @@ impl UnittestConfig {
                 shown()
             )));
         }
-        let start = aye_config::absolute(root, Path::new(&start_directory.value));
+        let start = aye_fs::absolute(root, Path::new(&start_directory.value));
         let top = top_level_directory.value.as_deref().map_or_else(
             || start.clone(),
-            |top| aye_config::absolute(root, Path::new(top)),
+            |top| aye_fs::absolute(root, Path::new(top)),
         );
         for (key, dir) in [(START_DIRECTORY, &start), (TOP_LEVEL_DIRECTORY, &top)] {
             if !dir.is_dir() {

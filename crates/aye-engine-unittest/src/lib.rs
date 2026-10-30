@@ -23,8 +23,8 @@
 //!   the same tests, except that before 3.11 an imported
 //!   `unittest.FunctionTestCase` makes a test of its own, which aye doesn't
 //!   predict. Besides the contract, the crate depends on `aye-config` (for
-//!   `[tool.aye]`), `ruff_python_parser` (to read the project modules a test
-//!   module imports from) and `serde_json`.
+//!   `[tool.aye]`), `aye-fs` (for paths), `ruff_python_parser` (to read the
+//!   project modules a test module imports from) and `serde_json`.
 //! - **Configuration** is `[tool.aye.unittest]` in the project root's
 //!   `pyproject.toml`: `start-directory` (default `.`), `pattern` (default
 //!   `test*.py`) and `top-level-directory` (default: the start directory),
@@ -280,14 +280,15 @@ mod module;
 mod tests;
 
 use std::collections::HashMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use aye_engine::{
     Adapter, AdapterError, Claim, EmbeddedModule, Executor, Project, Recognition, Recognizer,
     Setting, SourceFile,
 };
-use aye_events::{Case, Certainty, Span};
+use aye_events::{AdapterName, AffinityKey, Case, Certainty, ProjectPath, ProjectPathRef, Span};
+use aye_fs::normalize_absolute;
 
 pub use config::UnittestConfig;
 pub use fnmatch::{fnmatch, valid_module_name};
@@ -302,7 +303,7 @@ pub const MODULE: EmbeddedModule = EmbeddedModule {
 };
 
 /// The adapter's name, in cases, batches and the registry.
-pub const NAME: &str = "unittest";
+pub const NAME: AdapterName = AdapterName::new_static("unittest");
 
 /// Why a test module with no test aye can see is refined.
 const NO_STATIC_TESTS: &str = "no test is visible statically; discovery imports the module to tell";
@@ -312,7 +313,7 @@ const NO_STATIC_TESTS: &str = "no test is visible statically; discovery imports 
 pub struct Unittest;
 
 impl Adapter for Unittest {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> AdapterName {
         NAME
     }
 
@@ -330,21 +331,6 @@ impl Adapter for Unittest {
             lists_session: false,
         }
     }
-}
-
-/// `os.path.abspath` without touching the file system.
-fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 fn is_package(dir: &Path) -> bool {
@@ -371,13 +357,13 @@ pub struct UnittestRecognizer {
 
 impl UnittestRecognizer {
     pub fn new(project: &Project<'_>) -> Result<Self, AdapterError> {
-        let root = normalize(project.root);
+        let root = normalize_absolute(project.root);
         let config = UnittestConfig::load(&root)?;
-        let start = normalize(&config.start);
-        let top = normalize(&config.top);
+        let start = normalize_absolute(&config.start);
+        let top = normalize_absolute(&config.top);
         let mut starts = vec![(start.clone(), top.clone())];
         for arg in project.args {
-            let path = normalize(&project.cwd.join(arg));
+            let path = normalize_absolute(&project.cwd.join(arg));
             // A directory holding the start directory walks it; one inside
             // it narrows discovery from it.
             if !path.is_dir() || start.starts_with(&path) || path.starts_with(&start) {
@@ -398,7 +384,7 @@ impl UnittestRecognizer {
         let named = project
             .args
             .iter()
-            .map(|arg| normalize(&project.cwd.join(arg)))
+            .map(|arg| normalize_absolute(&project.cwd.join(arg)))
             .filter(|path| path.is_file() && path.extension().is_some_and(|e| e == "py"))
             .collect();
         Ok(Self {
@@ -534,16 +520,11 @@ impl UnittestRecognizer {
         &self,
         file: &SourceFile<'_>,
         loaded: &[module::Loaded],
-        package: Option<&str>,
+        package: Option<ProjectPathRef<'_>>,
         certainty: Certainty,
     ) -> Vec<Case> {
         let mut cases = Vec::new();
-        let parts: Vec<String> = file
-            .rel
-            .split('/')
-            .filter(|p| !p.is_empty())
-            .map(str::to_string)
-            .collect();
+        let parts: Vec<String> = file.rel.components().map(str::to_string).collect();
         for class in loaded {
             // The name the loader found the class under, as pytest names it.
             let class_names = [class.name.as_str()];
@@ -551,7 +532,7 @@ impl UnittestRecognizer {
             for method in &class.methods {
                 let mut case = Case::new(format!("{class_id}::{}", method.name), NAME);
                 case.span = Some(Span {
-                    path: self.relative(&method.file),
+                    path: ProjectPath::as_written(self.relative(&method.file)),
                     start: method.range.start().to_u32(),
                     end: method.range.end().to_u32(),
                     line: Some(method.line),
@@ -563,9 +544,12 @@ impl UnittestRecognizer {
                 keywords.retain(|k| seen.insert(k.clone()));
                 case.keywords = keywords;
                 case.affinity = package
-                    .map(|p| format!("package:{p}"))
+                    .map(AffinityKey::package)
                     .into_iter()
-                    .chain([file.rel.to_string(), class_id.clone()])
+                    .chain([
+                        AffinityKey::file(file.rel),
+                        AffinityKey::file_class(file.rel, &class_names),
+                    ])
                     .collect();
                 case.certainty = certainty;
                 cases.push(case);
@@ -591,7 +575,7 @@ impl Recognizer for UnittestRecognizer {
     /// Towards a start directory, and below one only into packages, as
     /// discovery recurses.
     fn descend(&self, dir: &Path) -> bool {
-        let dir = normalize(dir);
+        let dir = normalize_absolute(dir);
         let mut inside = false;
         for (start, _) in &self.starts {
             if start.starts_with(&dir) {
@@ -613,7 +597,7 @@ impl Recognizer for UnittestRecognizer {
         if explicit {
             return Claim::Tests;
         }
-        let abs = normalize(&self.root.join(rel));
+        let abs = normalize_absolute(&self.root.join(rel));
         let Some((start, top)) = self.start_for(&abs) else {
             return Claim::Ignore;
         };
@@ -639,7 +623,7 @@ impl Recognizer for UnittestRecognizer {
     }
 
     fn recognize(&self, file: &SourceFile<'_>, _support: &[SourceFile<'_>]) -> Recognition {
-        let abs = normalize(file.abs);
+        let abs = normalize_absolute(file.abs);
         if let Some(package) = self.unimportable(&abs) {
             // Its `__init__.py` is refined, to report the import error.
             let refine = (abs == package.join("__init__.py")).then(|| {
@@ -686,7 +670,12 @@ impl Recognizer for UnittestRecognizer {
         } else {
             Certainty::Exact
         };
-        let cases = self.cases(file, &loaded, package_rel.as_deref(), certainty);
+        let cases = self.cases(
+            file,
+            &loaded,
+            package_rel.as_deref().map(ProjectPathRef::as_written),
+            certainty,
+        );
         if cases.is_empty() && refine.is_none() {
             // Nothing to run statically, but discovery imports the module
             // all the same: its import error is unittest's error to report.

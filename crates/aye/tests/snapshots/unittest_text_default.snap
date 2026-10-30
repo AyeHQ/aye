@@ -1,0 +1,21 @@
+---
+source: crates/aye/tests/snapshots.rs
+info:
+  program: aye
+  args:
+    - "--python"
+    - "[PYTHON]"
+  env:
+    COLUMNS: "120"
+    NO_COLOR: "1"
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+---
+success: true
+exit_code: 0
+----- stdout -----
+aye · unittest · python [VERSION] · 24 tests · 1 worker
+
+skipped  fails on purpose: set AYE_EXAMPLE_FAIL=1 to see a failure (1) · gift cards aren't supported yet (1)
+✓ 21 passed · 2 skipped · 1 expected failure   [TIME]
+
+----- stderr -----

@@ -201,7 +201,7 @@ fn recognize_text(recognizer: &PytestRecognizer, root: &Path, rel: &str) -> Reco
     let empty = ruff_python_parser::parse_module("").unwrap();
     let lines = LineIndex::from_source_text(&source);
     let file = SourceFile {
-        rel,
+        rel: aye_events::ProjectPathRef::as_written(rel),
         abs: &abs,
         source: &source,
         module: empty.syntax(),
@@ -224,7 +224,7 @@ fn the_adapter_prepares_pytests_doctests_only_without_the_doctest_adapter() {
     };
     let args = |recognizer: &dyn Recognizer| recognizer.context()["native"]["args"].clone();
     let alone = Pytest::default()
-        .prepare_among(&project, &["pytest"])
+        .prepare_among(&project, &[crate::NAME])
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -233,7 +233,7 @@ fn the_adapter_prepares_pytests_doctests_only_without_the_doctest_adapter() {
     );
     assert!(alone.claim("m.py", false).has_tests());
     let beside = Pytest::default()
-        .prepare_among(&project, &["doctest", "pytest"])
+        .prepare_among(&project, &["doctest".into(), crate::NAME])
         .unwrap()
         .unwrap();
     assert_eq!(args(&*beside), serde_json::json!(["-ra"]));

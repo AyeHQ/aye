@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use aye_events::{Counts, Envelope, ExitCode, Failure};
+use aye_events::{Counts, Envelope, ExitCode, Failure, OutcomeTrail, RunId, RunNumber};
 
 use super::*;
 
@@ -80,7 +80,7 @@ fn first_duration_is_taken_as_is() {
     assert!(close(stats.last_ms, 10.0));
     assert_eq!(stats.count, 1);
     assert_eq!(stats.last_outcome, Outcome::Passed);
-    assert_eq!(stats.last_run.as_deref(), Some("r1"));
+    assert_eq!(stats.last_run.as_ref().map(RunId::as_str), Some("r1"));
     assert_eq!(stats.flips, 0);
 }
 
@@ -97,7 +97,7 @@ fn later_durations_are_averaged_with_alpha_0_3() {
     assert!(close(stats.last_ms, 5.0));
     assert_eq!(stats.count, 3);
     assert_eq!(stats.last_outcome, Outcome::Passed);
-    assert_eq!(stats.last_run.as_deref(), Some("r3"));
+    assert_eq!(stats.last_run.as_ref().map(RunId::as_str), Some("r3"));
     assert_eq!(
         history.duration(&id("t.py::test_a")),
         Some(Duration::from_secs_f64(0.0106))
@@ -119,7 +119,8 @@ fn the_envelope_run_wins_over_the_run_started() {
             .stats(&id("t.py::test_a"))
             .unwrap()
             .last_run
-            .as_deref(),
+            .as_ref()
+            .map(RunId::as_str),
         Some("r9")
     );
     assert_eq!(
@@ -127,7 +128,8 @@ fn the_envelope_run_wins_over_the_run_started() {
             .stats(&id("t.py::test_b"))
             .unwrap()
             .last_run
-            .as_deref(),
+            .as_ref()
+            .map(RunId::as_str),
         Some("r1")
     );
 }
@@ -372,10 +374,10 @@ fn a_test_that_finishes_without_starting_did_not_run() {
     history.record(&run_finished());
     let a = history.stats(&id("t.py::test_a")).unwrap();
     assert_eq!(a.last_outcome, Outcome::Failed);
-    assert_eq!(a.last_run.as_deref(), Some("r1"));
+    assert_eq!(a.last_run.as_ref().map(RunId::as_str), Some("r1"));
     let b = history.stats(&id("t.py::test_b")).unwrap();
     assert_eq!(b.last_outcome, Outcome::Error);
-    assert_eq!(b.last_run.as_deref(), Some("r2"));
+    assert_eq!(b.last_run.as_ref().map(RunId::as_str), Some("r2"));
     assert_eq!(b.count, 1);
     assert!(close(b.ewma_ms, 50.0));
     assert_eq!(
@@ -436,7 +438,7 @@ fn durations_by_group_sums_per_group() {
             ("b.py::test_3", Outcome::Passed, 5),
         ],
     );
-    let by_file = history.durations_by_group(|id| id.path().to_owned());
+    let by_file = history.durations_by_group(|id| id.path().to_project_path());
     assert_eq!(by_file.len(), 2);
     assert_eq!(by_file["a.py"], Duration::from_millis(40));
     assert_eq!(by_file["b.py"], Duration::from_millis(5));
@@ -584,7 +586,7 @@ fn numbered_run(
 ) {
     let mut opening = run_started(run, false);
     if let Event::RunStarted { run, .. } = &mut opening.event {
-        *run = number;
+        *run = number.and_then(RunNumber::new);
     }
     history.record(&opening);
     for &(name, outcome, ms) in tests {
@@ -596,7 +598,10 @@ fn numbered_run(
 
 fn recent(history: &History, name: &str) -> (String, Option<u64>) {
     let stats = history.stats(&id(name)).unwrap();
-    (stats.recent.clone(), stats.bad_since)
+    (
+        stats.recent.as_str().to_owned(),
+        stats.bad_since.map(RunNumber::get),
+    )
 }
 
 #[test]
@@ -622,7 +627,10 @@ fn recent_has_a_letter_per_run_oldest_first_the_last_20() {
             &[("t.py::test_a", Outcome::Passed, 1)],
         );
     }
-    assert_eq!(recent(&history, "t.py::test_a").0, "p".repeat(RECENT));
+    assert_eq!(
+        recent(&history, "t.py::test_a").0,
+        "p".repeat(OutcomeTrail::MAX)
+    );
     numbered_run(
         &mut history,
         "x",
@@ -631,7 +639,7 @@ fn recent_has_a_letter_per_run_oldest_first_the_last_20() {
     );
     assert_eq!(
         recent(&history, "t.py::test_a").0,
-        format!("{}f", "p".repeat(RECENT - 1))
+        format!("{}f", "p".repeat(OutcomeTrail::MAX - 1))
     );
     // A test that didn't run gets no letter; one a lifetime kept from
     // running, a bad one.
@@ -695,7 +703,7 @@ fn previous_is_what_history_knew_before_the_run() {
         history.previous(&id("t.py::test_a")),
         Some(Previous {
             outcomes: "pf".into(),
-            since: Some(2)
+            since: RunNumber::new(2)
         })
     );
     // During one, the same once this run recorded it, whatever it was in
@@ -703,7 +711,7 @@ fn previous_is_what_history_knew_before_the_run() {
     // last result's.
     let mut opening = run_started("y", false);
     if let Event::RunStarted { run, .. } = &mut opening.event {
-        *run = Some(3);
+        *run = RunNumber::new(3);
     }
     history.record(&opening);
     history.record(&started("t.py::test_a"));
@@ -712,7 +720,7 @@ fn previous_is_what_history_knew_before_the_run() {
         history.previous(&id("t.py::test_a")),
         Some(Previous {
             outcomes: "pf".into(),
-            since: Some(2)
+            since: RunNumber::new(2)
         })
     );
     assert_eq!(recent(&history, "t.py::test_a"), ("pfp".into(), None));

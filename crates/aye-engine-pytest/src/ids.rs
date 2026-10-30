@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 
 /// A statically known parameter value, as far as ids are concerned.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Value {
+pub(crate) enum Value {
     Str(String),
     Bytes(Vec<u8>),
     /// Decimal digits, with a leading `-` when negative.
@@ -31,7 +31,7 @@ pub enum Value {
 
 /// One parameter set (`pytest.param(...)` or a plain value).
 #[derive(Debug, Clone, PartialEq)]
-pub struct ParamSet {
+pub(crate) struct ParamSet {
     pub values: Vec<Value>,
     /// `pytest.param(..., id=...)`.
     pub id: Option<IdItem>,
@@ -42,7 +42,7 @@ pub struct ParamSet {
 
 /// An explicit id: a value to turn into an id, or `pytest.HIDDEN_PARAM`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum IdItem {
+pub(crate) enum IdItem {
     /// From `pytest.param(id=...)`: a string used as is (escaped).
     Text(String),
     /// From an `ids=[...]` list: any supported value.
@@ -52,7 +52,7 @@ pub enum IdItem {
 
 /// Settings that change ids.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct IdOptions {
+pub(crate) struct IdOptions {
     /// `disable_test_id_escaping_and_forfeit_all_rights_to_community_support`.
     pub no_escaping: bool,
     /// `strict_parametrization_ids` (or `strict`).
@@ -61,7 +61,7 @@ pub struct IdOptions {
 
 /// Why pytest would refuse a parametrization (a collection error).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IdError {
+pub(crate) enum IdError {
     /// An id depends on a value only known at runtime.
     UnknownValue(usize),
     Duplicates(Vec<String>),
@@ -97,7 +97,7 @@ impl std::fmt::Display for IdError {
 
 /// `make_unique_parameterset_ids`: one id per parameter set, `None` for a
 /// hidden one.
-pub fn parameterset_ids(
+pub(crate) fn parameterset_ids(
     argnames: &[String],
     sets: &[ParamSet],
     ids: Option<&[Option<IdItem>]>,
@@ -276,7 +276,10 @@ const NUMERIC_NOT_DIGITS: &[(u32, u32)] = &[
 ];
 
 /// `_idval_from_value`: the id a value makes on its own, if it makes one.
-pub fn idval_from_value(value: &Value, options: IdOptions) -> Result<Option<String>, IdError> {
+pub(crate) fn idval_from_value(
+    value: &Value,
+    options: IdOptions,
+) -> Result<Option<String>, IdError> {
     Ok(match value {
         Value::Str(_) | Value::Bytes(_) => Some(escaped_by_config(value, options)?),
         Value::None => Some("None".to_string()),
@@ -306,7 +309,7 @@ fn escaped_by_config(value: &Value, options: IdOptions) -> Result<String, IdErro
 
 /// `ascii_escaped(str)`: `str.encode("unicode_escape")`, then the
 /// non-printable translation table (which has nothing left to do).
-pub fn ascii_escaped_str(s: &str) -> String {
+pub(crate) fn ascii_escaped_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         let code = u32::from(c);
@@ -332,7 +335,7 @@ pub fn ascii_escaped_str(s: &str) -> String {
 
 /// `ascii_escaped(bytes)`: `bytes.decode("ascii", "backslashreplace")`,
 /// then the non-printable translation table.
-pub fn ascii_escaped_bytes(bytes: &[u8]) -> String {
+pub(crate) fn ascii_escaped_bytes(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len());
     for &b in bytes {
         match b {
@@ -349,12 +352,12 @@ pub fn ascii_escaped_bytes(bytes: &[u8]) -> String {
 }
 
 /// `repr(float)`.
-pub fn float_repr(f: f64) -> String {
+pub(crate) fn float_repr(f: f64) -> String {
     format_float(f, true, false)
 }
 
 /// `repr(complex)`.
-pub fn complex_repr(re: f64, im: f64) -> String {
+pub(crate) fn complex_repr(re: f64, im: f64) -> String {
     if re == 0.0 && re.is_sign_positive() {
         format!("{}j", format_float(im, false, false))
     } else {
@@ -420,7 +423,7 @@ fn format_float(f: f64, add_dot_0: bool, always_sign: bool) -> String {
 }
 
 /// The decimal spelling of a Python integer literal (`0x_ff`, `1_000`).
-pub fn int_literal_decimal(token: &str) -> Option<String> {
+pub(crate) fn int_literal_decimal(token: &str) -> Option<String> {
     let token: String = token.chars().filter(|c| *c != '_').collect();
     let lower = token.to_ascii_lowercase();
     let (radix, digits) = if let Some(rest) = lower.strip_prefix("0x") {

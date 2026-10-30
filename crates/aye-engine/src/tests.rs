@@ -18,18 +18,18 @@ fn requests_round_trip() {
         },
         Request::Refine(RefineRequest {
             adapter: "pytest".into(),
-            files: vec!["tests/test_dynamic.py".into()],
+            files: vec![ProjectPath::new("tests/test_dynamic.py").unwrap()],
             context: serde_json::json!({"rootdir": "/repo"}),
             digests_only: false,
         }),
         Request::Refine(RefineRequest {
             adapter: "pytest".into(),
-            files: vec!["tests/test_dynamic.py".into()],
+            files: vec![ProjectPath::new("tests/test_dynamic.py").unwrap()],
             context: serde_json::Value::Null,
             digests_only: true,
         }),
         Request::Run(Batch {
-            id: 3,
+            id: BatchIndex::from_u32(3),
             adapter: "pytest".into(),
             ids: vec![TestId::new("tests/t.py::test_x")],
             policy: Policy {
@@ -42,7 +42,7 @@ fn requests_round_trip() {
             ends_session: false,
         }),
         Request::Run(Batch {
-            id: 4,
+            id: BatchIndex::from_u32(4),
             adapter: "pytest".into(),
             ids: Vec::new(),
             policy: Policy::default(),
@@ -73,7 +73,7 @@ fn worker_lines_are_replies_or_records() {
     let WorkerLine::Record(record) = serde_json::from_str::<WorkerLine>(event).unwrap() else {
         panic!("expected a record");
     };
-    assert_eq!(record.envelope.batch, Some(0));
+    assert_eq!(record.envelope.batch, Some(BatchIndex::from_u32(0)));
     let Event::TestFinished(result) = record.event else {
         panic!("expected test_finished");
     };
@@ -82,9 +82,9 @@ fn worker_lines_are_replies_or_records() {
     assert!(matches!(
         serde_json::from_str::<WorkerLine>(done).unwrap(),
         WorkerLine::Reply(Reply::BatchDone {
-            batch: 0,
-            status: Some(1)
-        })
+            batch,
+            status: Some(status)
+        }) if batch == BatchIndex::from_u32(0) && status == FrameworkStatus::TESTS_FAILED
     ));
 }
 
@@ -92,7 +92,7 @@ fn worker_lines_are_replies_or_records() {
 fn session_listing_fields_are_left_out_when_unused_and_default_to_off() {
     let request = RefineRequest {
         adapter: "pytest".into(),
-        files: vec!["t.py".into()],
+        files: vec![ProjectPath::new("t.py").unwrap()],
         context: serde_json::Value::Null,
         digests_only: false,
     };
@@ -127,7 +127,7 @@ fn session_listing_fields_are_left_out_when_unused_and_default_to_off() {
     };
     let digests = refined.digests.unwrap();
     assert_eq!(digests.keys().collect::<Vec<_>>(), ["a.py", "b.py"]);
-    assert_eq!(digests["a.py"], "da39");
+    assert_eq!(digests["a.py"].as_str(), "da39");
 }
 
 #[test]
@@ -145,7 +145,7 @@ fn source_files_turn_ranges_into_spans() {
     let lines = LineIndex::from_source_text(source);
     let path = Path::new("/repo/t.py");
     let file = SourceFile {
-        rel: "t.py",
+        rel: ProjectPathRef::as_written("t.py"),
         abs: path,
         source,
         module: parsed.syntax(),
@@ -174,7 +174,7 @@ fn the_engine_module_is_embedded() {
 #[test]
 fn a_batch_ends_the_session_only_when_it_says_so() {
     let batch = Batch {
-        id: 1,
+        id: BatchIndex::from_u32(1),
         adapter: "pytest".into(),
         ids: vec![TestId::new("t.py::test_x")],
         policy: Policy::default(),

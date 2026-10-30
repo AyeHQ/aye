@@ -15,6 +15,7 @@ use aye_engine::{
     REWRITE_MODULE, Recognizer,
 };
 use aye_engine_pytest::native::SHIM_MODULE;
+use aye_events::AdapterName;
 
 /// Every adapter the binary links, in priority order: the pytest adapter
 /// (for a static listing, `aye --co --no-refine`, the one that predicts
@@ -71,7 +72,7 @@ struct WithAyePytest<A> {
 }
 
 impl<A: Adapter> Adapter for WithAyePytest<A> {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> AdapterName {
         self.inner.name()
     }
 
@@ -82,7 +83,7 @@ impl<A: Adapter> Adapter for WithAyePytest<A> {
     fn prepare_among(
         &self,
         project: &Project<'_>,
-        adapters: &[&str],
+        adapters: &[AdapterName],
     ) -> Result<Option<Box<dyn Recognizer>>, AdapterError> {
         self.inner.prepare_among(project, adapters)
     }
@@ -101,34 +102,34 @@ impl<A: Adapter> Adapter for WithAyePytest<A> {
 /// to import is then one collection error, however many of these adapters
 /// load it. The doctest adapter's tests are pytest's `DoctestModule`,
 /// another collector, whose error pytest reports as well.
-pub fn collects_in_one_module(adapter: &str) -> bool {
-    adapter == aye_engine_pytest::NAME || adapter == aye_engine_unittest::NAME
+pub(crate) fn collects_in_one_module(adapter: &AdapterName) -> bool {
+    *adapter == aye_engine_pytest::NAME || *adapter == aye_engine_unittest::NAME
 }
 
 /// Whether a diagnostic's path (relative to the root, `/` separators) is a
 /// pytest conftest, which pytest loads once per session however many
 /// adapters load it (the doctest adapter imports the conftests pytest
 /// would): its failure to load is one error.
-pub fn is_conftest(path: &str) -> bool {
+pub(crate) fn is_conftest(path: &str) -> bool {
     path.rsplit('/').next() == Some("conftest.py")
 }
 
 /// The adapters a run uses, in priority order, and why.
-pub struct Chosen {
+pub(crate) struct Chosen {
     pub adapters: Vec<Box<dyn Adapter>>,
     pub why: Why,
 }
 
 impl Chosen {
     #[cfg(test)]
-    pub fn names(&self) -> Vec<&'static str> {
+    pub(crate) fn names(&self) -> Vec<AdapterName> {
         self.adapters.iter().map(|a| a.name()).collect()
     }
 }
 
 /// Why a run uses the adapters it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Why {
+pub(crate) enum Why {
     /// `[tool.aye] adapters` lists them.
     Configured,
     /// The default: doctest then pytest.
@@ -155,7 +156,7 @@ impl fmt::Display for Why {
 /// its cases without importing. The tables of adapters that don't run
 /// (`[tool.aye.unittest]`) are checked all the same: a bad value is an
 /// error whichever adapters run.
-pub fn choose(
+pub(crate) fn choose(
     settings: &AyeSettings,
     project: &Project<'_>,
     static_listing: bool,
@@ -164,7 +165,7 @@ pub fn choose(
         Some(names) => (names.clone(), Why::Configured),
         None => (
             vec![
-                aye_engine_doctest::Doctest.name().to_string(),
+                aye_engine_doctest::NAME.to_string(),
                 aye_engine_pytest::NAME.to_string(),
             ],
             Why::Default,
@@ -178,16 +179,16 @@ pub fn choose(
         .join(", ");
     let mut adapters: Vec<Box<dyn Adapter>> = Vec::new();
     for name in &names {
-        if adapters.iter().any(|a| a.name() == name) {
+        if adapters.iter().any(|a| a.name() == name.as_str()) {
             bail!("[tool.aye] adapters: {name:?} is listed twice");
         }
-        let Some(at) = known.iter().position(|a| a.name() == name) else {
+        let Some(at) = known.iter().position(|a| a.name() == name.as_str()) else {
             bail!("[tool.aye] adapters: unknown adapter {name:?} (known: {all})");
         };
         adapters.push(known.remove(at));
     }
     for adapter in &known {
-        if settings.adapter_table(adapter.name()).is_some() {
+        if settings.adapter_table(adapter.name().as_str()).is_some() {
             adapter
                 .prepare(project)
                 .with_context(|| format!("invalid {} configuration", adapter.name()))?;
@@ -198,8 +199,11 @@ pub fn choose(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    use aye_static::EnvVars;
 
     use super::*;
 
@@ -219,7 +223,7 @@ mod tests {
         }
     }
 
-    fn names(chosen: Option<&[&str]>) -> Result<Vec<&'static str>> {
+    fn names(chosen: Option<&[&str]>) -> Result<Vec<AdapterName>> {
         let dir = tempfile::tempdir().unwrap();
         let settings = AyeSettings {
             adapters: chosen.map(|names| names.iter().map(ToString::to_string).collect()),
@@ -266,7 +270,10 @@ mod tests {
             let chosen = choose(&settings, &project(root, args), false).unwrap();
             (chosen.names(), chosen.why)
         };
-        let default = (vec!["doctest", "pytest"], Why::Default);
+        let default = (
+            vec![aye_engine_doctest::NAME, aye_engine_pytest::NAME],
+            Why::Default,
+        );
         assert_eq!(chosen(&[]), default);
         assert_eq!(chosen(&[PathBuf::from("tests")]), default);
         write(root, "tests/conftest.py", "");
@@ -342,6 +349,51 @@ mod tests {
         assert_eq!(
             choose(&good, &project(root, &[]), false).unwrap().names(),
             ["pytest"]
+        );
+    }
+
+    /// The Python every worker runs names environment variables itself (it
+    /// imports only the standard library): each one it reads or sets by
+    /// name is in aye's catalogue.
+    #[test]
+    fn the_python_sent_to_workers_names_only_catalogued_variables() {
+        let mut sources = vec![("aye_worker", aye_runner::WORKER_SOURCE)];
+        for adapter in known(false) {
+            sources.extend(
+                adapter
+                    .executor()
+                    .modules
+                    .iter()
+                    .map(|m| (m.name, m.source)),
+            );
+        }
+        let mut named = BTreeSet::new();
+        for (module, source) in sources {
+            let lines = source
+                .lines()
+                .filter(|line| line.contains("environ") || line.contains("_env="));
+            for name in lines.flat_map(|line| line.split('"').skip(1).step_by(2)) {
+                if name.len() > 1
+                    && name
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+                {
+                    named.insert((name, module));
+                }
+            }
+        }
+        let missing: Vec<_> = named
+            .iter()
+            .filter(|(name, _)| !EnvVars::ALL.contains(name))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "not in aye_static::EnvVars: {missing:?}"
+        );
+        assert!(
+            named
+                .iter()
+                .any(|(name, _)| *name == EnvVars::PYTEST_CURRENT_TEST)
         );
     }
 }

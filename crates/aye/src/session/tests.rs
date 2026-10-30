@@ -1,5 +1,7 @@
 use std::sync::atomic::AtomicU32;
 
+use aye_events::{BatchIndex, RunNumber};
+
 use super::*;
 
 fn selector(cwd: &Path, root: &Path, arg: &str) -> String {
@@ -23,13 +25,8 @@ fn selectors_are_made_relative_to_the_root() {
 fn paths_outside_the_root_climb_out_instead_of_doubling_the_slash() {
     let root = Path::new("/repo/sub");
     assert_eq!(selector(root, root, "../x/test_a.py"), "../x/test_a.py");
-    assert_eq!(relative(Path::new("/repo/x"), root), "../x");
-    assert_eq!(relative(Path::new("/repo/sub/a/b"), root), "a/b");
-    assert_eq!(relative(root, root), "");
-    assert_eq!(
-        relative(Path::new("/elsewhere"), Path::new("/")),
-        "elsewhere"
-    );
+    assert_eq!(relative_below_root(Path::new("/repo/x"), root), "../x");
+    assert_eq!(relative_below_root(Path::new("/repo/sub/a/b"), root), "a/b");
 }
 
 #[test]
@@ -80,8 +77,8 @@ fn a_root_reached_through_dot_dot_is_normalized() {
             "tests/test_b.py::t",
         ),
     ] {
-        let given = [normalize(&cwd.join(path_part(arg)))];
-        let found = normalize(&aye_config::project_root(&cwd, &given));
+        let given = [normalize_absolute(&cwd.join(path_part(arg)))];
+        let found = normalize_absolute(&aye_config::project_root(&cwd, &given));
         assert_eq!(found, root, "{arg} from {}", cwd.display());
         assert_eq!(selector(&cwd, &found, arg), want);
     }
@@ -231,7 +228,7 @@ fn the_run_store_keeps_every_record_of_the_stream() {
         BTreeMap::from([("teardown_error".to_owned(), 1)])
     );
     let kinds: Vec<&str> = store
-        .log(&meta.run)
+        .log(&meta.run.to_string())
         .unwrap()
         .iter()
         .map(|record| record.event.kind())
@@ -281,7 +278,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
                 root: dir.path().display().to_string(),
                 collect_only: false,
                 workers: 1,
-                run: Some(number),
+                run: RunNumber::new(number),
             },
             Event::TestStarted {
                 id: TestId::new("t.py::test_x"),
@@ -304,7 +301,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut writer = RunWriter::new(&runs, 10);
     let number = writer.claim();
-    assert_eq!(number, Some(1));
+    assert_eq!(number, RunNumber::new(1));
     let mut stream = Stream {
         reporters: Tee::new().with(Keeping(Arc::clone(&seen))),
         history: Some(Remember {
@@ -346,7 +343,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     };
     let x = Previous {
         outcomes: "pf".into(),
-        since: Some(2),
+        since: RunNumber::new(2),
     };
     let y = Previous {
         outcomes: "pp".into(),
@@ -364,7 +361,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     let log = store.log("r1").unwrap();
     assert_eq!(said(&log), expected);
     assert!(
-        matches!(log[0].event, Event::RunStarted { run: Some(1), .. }),
+        matches!(log[0].event, Event::RunStarted { run, .. } if run == RunNumber::new(1)),
         "{:?}",
         log[0]
     );
@@ -373,7 +370,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     let saved = History::load(&state);
     let kept = |name: &str| {
         let test = saved.stats(&TestId::new(name)).unwrap();
-        (test.recent.clone(), test.bad_since)
+        (test.recent.clone(), test.bad_since.map(RunNumber::get))
     };
     assert_eq!(kept("t.py::test_x"), ("pfe".into(), Some(2)));
     assert_eq!(kept("t.py::test_y"), ("ppe".into(), Some(1)));
@@ -407,24 +404,109 @@ fn diagnostic_codes_choose_the_exit_code() {
     let diagnostic = |severity, code: &str| Diagnostic {
         severity,
         code: code.into(),
-        path: String::new(),
+        path: DiagnosticPath::Nowhere,
         span: None,
         message: String::new(),
     };
+    let before = DiagnosticOrigin::BeforeBatches;
     let mut errors = Errors::default();
-    errors.see(&diagnostic(Severity::Warning, "usage-error"));
+    errors.see(&diagnostic(Severity::Warning, "usage-error"), before);
     assert!(!errors.any && !errors.usage);
-    errors.see(&diagnostic(Severity::Error, "collection-error"));
+    errors.see(&diagnostic(Severity::Error, "collection-error"), before);
     assert!(errors.any && !errors.usage && !errors.internal);
-    errors.see(&diagnostic(Severity::Error, "usage-error"));
+    errors.see(&diagnostic(Severity::Error, "usage-error"), before);
     assert!(errors.usage);
-    errors.see(&diagnostic(Severity::Error, "internal-error"));
+    errors.see(&diagnostic(Severity::Error, "internal-error"), before);
     assert!(errors.internal);
     let mut errors = Errors::default();
-    errors.see(&diagnostic(Severity::Error, "unclaimed"));
+    errors.see(&diagnostic(Severity::Error, "unclaimed"), before);
     assert!(errors.usage);
-    errors.see(&diagnostic(Severity::Error, "not-found"));
-    assert!(errors.not_found);
+    let mut errors = Errors::default();
+    errors.see(&diagnostic(Severity::Error, "not-found"), before);
+    assert!(errors.usage);
+    let mut errors = Errors::default();
+    errors.see(
+        &diagnostic(Severity::Error, "not-found"),
+        DiagnosticOrigin::Batch(BatchIndex::from_u32(0)),
+    );
+    assert!(errors.any && !errors.usage);
+}
+
+/// Every diagnostic code aye 0.0.1 knows, and one it doesn't, with what an
+/// error with it decides of the exit code, as 0.0.1 decides it, before any
+/// batch and from one: `usage` (4), `internal` (3), or `error`, which fails
+/// the run as the rest of it says (2, or 1). Collection's diagnostics come
+/// before any batch.
+const EXIT: [(&str, &str, &str); 26] = [
+    ("syntax-error", "error", "error"),
+    ("unreadable", "error", "error"),
+    ("not-found", "usage", "error"),
+    ("unclaimed", "usage", "usage"),
+    ("duplicate-id", "error", "error"),
+    ("no-tests", "error", "error"),
+    ("not-refined", "error", "error"),
+    ("refine-failed", "error", "error"),
+    ("class-has-init", "error", "error"),
+    ("duplicate-definition", "error", "error"),
+    ("collection-error", "error", "error"),
+    ("usage-error", "usage", "usage"),
+    ("unknown-option", "error", "error"),
+    ("plugin-not-loaded", "error", "error"),
+    ("internal-error", "internal", "internal"),
+    ("skipped", "error", "error"),
+    ("ignored", "error", "error"),
+    ("batch-stopped", "error", "error"),
+    ("session-failed", "error", "error"),
+    ("protocol-error", "error", "error"),
+    ("batch-failed", "error", "error"),
+    ("no-executor", "error", "error"),
+    ("listing-differs", "error", "error"),
+    ("stand-in", "error", "error"),
+    ("adapter-error", "error", "error"),
+    ("some-other-code", "error", "error"),
+];
+
+/// An error diagnostic with each code decides the exit code as in 0.0.1:
+/// collection's (before any batch, where a `not-found` names what the
+/// command line asked for) as `run` decides on them before the run, and
+/// a batch's as `run_exit_code` does after it.
+#[test]
+fn every_code_decides_the_exit_code_as_before() {
+    let known: Vec<&str> = EXIT[..25].iter().map(|(code, ..)| *code).collect();
+    let all: Vec<&str> = DiagnosticCode::ALL
+        .iter()
+        .map(DiagnosticCode::as_str)
+        .collect();
+    assert_eq!(known, all);
+    let decides = |code: &str, origin| {
+        let mut errors = Errors::default();
+        let diagnostic = Diagnostic {
+            severity: Severity::Error,
+            code: code.into(),
+            path: DiagnosticPath::Nowhere,
+            span: None,
+            message: String::new(),
+        };
+        errors.see(&diagnostic, origin);
+        assert!(errors.any, "{code}");
+        if errors.internal {
+            "internal"
+        } else if errors.usage {
+            "usage"
+        } else {
+            "error"
+        }
+    };
+    for (code, before, from_batch) in EXIT {
+        assert_eq!(
+            (
+                decides(code, DiagnosticOrigin::BeforeBatches),
+                decides(code, DiagnosticOrigin::Batch(BatchIndex::from_u32(0)))
+            ),
+            (before, from_batch),
+            "{code}"
+        );
+    }
 }
 
 /// A recognizer that collects nothing and hands out `context`.
@@ -464,7 +546,7 @@ fn prepared(contexts: &[serde_json::Value]) -> Vec<Prepared> {
         .zip(["pytest", "doctest", "unittest"])
         .map(|(context, name)| {
             let recognizer: Box<dyn aye_engine::Recognizer> = Box::new(Context(context.clone()));
-            (name, recognizer)
+            (name.into(), recognizer)
         })
         .collect()
 }
@@ -647,48 +729,11 @@ fn the_junit_report_can_come_from_the_framework() {
     assert_eq!(junit_prefix(&context("x.xml")), "");
 }
 
-/// The home directory `~` stands for, as [`expand_path`] finds it.
+/// The home directory `~` stands for, as [`aye_fs::expand_path`] finds it.
 fn home() -> Option<String> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()
-}
-
-#[test]
-fn report_paths_expand_as_pytest_expands_them() {
-    // A variable this process has, whatever the platform.
-    let (name, value) = std::env::vars()
-        .find(|(name, value)| {
-            !name.is_empty()
-                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                && !value.contains(['$', '~'])
-        })
-        .unwrap();
-    for (given, want) in [
-        ("out.xml".to_string(), "out.xml".to_string()),
-        (format!("${name}/a.xml"), format!("{value}/a.xml")),
-        (format!("${{{name}}}/a.xml"), format!("{value}/a.xml")),
-        (format!("x${{{name}}}.xml"), format!("x{value}.xml")),
-        // Unset variables, and what isn't a reference, stay as written.
-        (
-            "$AYE_UNSET_FOR_TESTS_7/a${AYE_UNSET_FOR_TESTS_7}".into(),
-            "$AYE_UNSET_FOR_TESTS_7/a${AYE_UNSET_FOR_TESTS_7}".into(),
-        ),
-        ("a$/b$".into(), "a$/b$".into()),
-        ("${unclosed/a".into(), "${unclosed/a".into()),
-        ("${}x".into(), "${}x".into()),
-        ("~someone/a.xml".into(), "~someone/a.xml".into()),
-        ("a/~/b".into(), "a/~/b".into()),
-    ] {
-        assert_eq!(expand_path(&given), PathBuf::from(&want), "{given}");
-    }
-    let Some(home) = home() else { return };
-    let home = home.trim_end_matches(['/', std::path::MAIN_SEPARATOR]);
-    assert_eq!(expand_path("~"), PathBuf::from(home));
-    assert_eq!(
-        expand_path("~/r/a.xml"),
-        PathBuf::from(format!("{home}/r/a.xml"))
-    );
 }
 
 #[cfg(unix)]
@@ -1042,18 +1087,19 @@ fn reruns_name_the_test_from_where_aye_runs() {
         rerun_args: &[],
     };
     assert_eq!(
-        here.local_id("tests/test_a.py::test_x[1]").as_deref(),
+        here.local_id(&TestId::new("tests/test_a.py::test_x[1]"))
+            .as_deref(),
         Some("test_a.py::test_x[1]")
     );
     // No other file of that name here: the id reruns as it is.
-    assert_eq!(here.local_id("tests/test_b.py::test_x"), None);
+    assert_eq!(here.local_id(&TestId::new("tests/test_b.py::test_x")), None);
     assert_eq!(
         Here {
             cwd: root,
             root,
             rerun_args: &[],
         }
-        .local_id("tests/test_a.py::test_x"),
+        .local_id(&TestId::new("tests/test_a.py::test_x")),
         None
     );
 
@@ -1242,14 +1288,14 @@ fn unreadable_framework_args_leave_every_adapter_the_command_lines() {
 fn a_file_two_adapters_load_in_one_module_is_one_collection_error() {
     let batch = |batch: u32, event: Event| {
         let mut record = Record::new(event);
-        record.envelope.batch = Some(batch);
+        record.envelope.batch = Some(BatchIndex::from_u32(batch));
         record
     };
-    let started = |id: u32, adapter: &str| {
+    let started = |id: u32, adapter: &'static str| {
         batch(
             id,
             Event::BatchStarted {
-                adapter: adapter.to_string(),
+                adapter: adapter.into(),
                 cases: 1,
             },
         )
@@ -1259,8 +1305,8 @@ fn a_file_two_adapters_load_in_one_module_is_one_collection_error() {
             id,
             Event::Diagnostic(Diagnostic {
                 severity: Severity::Error,
-                code: codes::COLLECTION_ERROR.to_string(),
-                path: path.to_string(),
+                code: DiagnosticCode::CollectionError,
+                path: path.into(),
                 span: None,
                 message: format!("cannot import {path}"),
             }),
@@ -1318,31 +1364,31 @@ fn a_file_two_adapters_load_in_one_module_is_one_collection_error() {
 fn a_collection_error_from_refinement_counts_as_the_pytest_adapters() {
     let error = |path: &str| Diagnostic {
         severity: Severity::Error,
-        code: codes::COLLECTION_ERROR.to_string(),
-        path: path.to_string(),
+        code: DiagnosticCode::CollectionError,
+        path: path.into(),
         span: None,
         message: format!("cannot import {path}"),
     };
     let mut once = OneModuleErrors::default();
-    once.refined("pytest", &error("test_imp.py"));
+    once.refined(&aye_engine_pytest::NAME, &error("test_imp.py"));
     // A conftest's, or anything but an error, is another matter.
-    once.refined("pytest", &error("conftest.py"));
+    once.refined(&aye_engine_pytest::NAME, &error("conftest.py"));
     once.refined(
-        "pytest",
+        &aye_engine_pytest::NAME,
         &Diagnostic {
             severity: Severity::Warning,
             ..error("test_warn.py")
         },
     );
     let mut started = Record::new(Event::BatchStarted {
-        adapter: "unittest".to_string(),
+        adapter: "unittest".into(),
         cases: 1,
     });
-    started.envelope.batch = Some(3);
+    started.envelope.batch = Some(BatchIndex::from_u32(3));
     once.see(&mut started);
     let severity = |path: &str, once: &mut OneModuleErrors| {
         let mut record = Record::new(Event::Diagnostic(error(path)));
-        record.envelope.batch = Some(3);
+        record.envelope.batch = Some(BatchIndex::from_u32(3));
         once.see(&mut record);
         match record.event {
             Event::Diagnostic(d) => (d.severity, d.message),
@@ -1389,15 +1435,15 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
     .iter()
     .map(|id| Case::new(*id, "pytest"))
     .collect();
-    let diagnostic = |severity, code: &str, path: &str| Diagnostic {
+    let diagnostic = |severity, code: DiagnosticCode, path: &str| Diagnostic {
         severity,
-        code: code.to_string(),
-        path: path.to_string(),
+        code,
+        path: path.into(),
         span: None,
         message: "m".to_string(),
     };
-    let skipped = |path: &str| diagnostic(Severity::Info, codes::SKIPPED, path);
-    let usage = |path: &str| diagnostic(Severity::Error, codes::USAGE_ERROR, path);
+    let skipped = |path: &str| diagnostic(Severity::Info, DiagnosticCode::Skipped, path);
+    let usage = |path: &str| diagnostic(Severity::Error, DiagnosticCode::UsageError, path);
 
     // No argument, or only paths: collection walked only what the run
     // reaches, and everything is the run's.
@@ -1426,11 +1472,11 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
     assert!(reach.keeps(root, &usage("")));
     let error = diagnostic(
         Severity::Error,
-        codes::COLLECTION_ERROR,
+        DiagnosticCode::CollectionError,
         "testing/test_g.py",
     );
     assert!(reach.keeps(root, &error));
-    let info = diagnostic(Severity::Info, "no-tests", "testing/test_g.py");
+    let info = diagnostic(Severity::Info, DiagnosticCode::NoTests, "testing/test_g.py");
     assert!(reach.keeps(root, &info));
     // When an argument named nothing, an error elsewhere may be why.
     let lost = Reach {
@@ -1447,7 +1493,7 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
 
     // Paths beside them: what a path holds is reached, in the order of the
     // arguments; a key resolves like a dotted name.
-    let key = cases[3].id.key().0;
+    let key = cases[3].id.key().to_string();
     let reach = Reach::of(
         &positionals(&["tests", &key, "tests.test_a", "testing/test_g.py::test_g"]),
         root,
@@ -1488,20 +1534,24 @@ fn what_dotted_names_reach_decides_what_collection_reports() {
 /// worded apart. It is one error, whatever the words.
 #[test]
 fn a_conftest_two_adapters_fail_to_load_is_one_error() {
-    let diagnostic = |code: &str, path: &str, message: &str| Diagnostic {
+    let diagnostic = |code: DiagnosticCode, path: &str, message: &str| Diagnostic {
         severity: Severity::Error,
-        code: code.to_string(),
-        path: path.to_string(),
+        code,
+        path: path.into(),
         span: None,
         message: message.to_string(),
     };
     let mut once = OneConftestError::default();
     // In refinement, each adapter reports it once.
-    let mut first = diagnostic(codes::USAGE_ERROR, "tests/conftest.py", "Skipped while …");
+    let mut first = diagnostic(
+        DiagnosticCode::UsageError,
+        "tests/conftest.py",
+        "Skipped while …",
+    );
     once.see(None, &mut first);
     assert_eq!(first.severity, Severity::Error);
     let mut again = diagnostic(
-        codes::USAGE_ERROR,
+        DiagnosticCode::UsageError,
         "tests/conftest.py",
         "ImportError while …",
     );
@@ -1515,14 +1565,14 @@ fn a_conftest_two_adapters_fail_to_load_is_one_error() {
     // Another code, another file, or a file that isn't a conftest, is
     // another error.
     for (code, path) in [
-        (codes::COLLECTION_ERROR, "tests/conftest.py"),
-        (codes::USAGE_ERROR, "other/conftest.py"),
-        (codes::COLLECTION_ERROR, "tests/test_imp.py"),
-        (codes::COLLECTION_ERROR, "tests/test_imp.py"),
-        (codes::USAGE_ERROR, ""),
-        (codes::USAGE_ERROR, ""),
+        (DiagnosticCode::CollectionError, "tests/conftest.py"),
+        (DiagnosticCode::UsageError, "other/conftest.py"),
+        (DiagnosticCode::CollectionError, "tests/test_imp.py"),
+        (DiagnosticCode::CollectionError, "tests/test_imp.py"),
+        (DiagnosticCode::UsageError, ""),
+        (DiagnosticCode::UsageError, ""),
     ] {
-        let mut other = diagnostic(code, path, "x");
+        let mut other = diagnostic(code.clone(), path, "x");
         once.see(None, &mut other);
         assert_eq!(other.severity, Severity::Error, "{code} {path}");
     }
@@ -1531,7 +1581,7 @@ fn a_conftest_two_adapters_fail_to_load_is_one_error() {
     // another adapter's is an info.
     let batch = |batch: u32, event: Event| {
         let mut record = Record::new(event);
-        record.envelope.batch = Some(batch);
+        record.envelope.batch = Some(BatchIndex::from_u32(batch));
         record
     };
     let mut once = OneConftestError::default();
@@ -1539,7 +1589,7 @@ fn a_conftest_two_adapters_fail_to_load_is_one_error() {
         once.see_record(&mut batch(
             id,
             Event::BatchStarted {
-                adapter: adapter.to_string(),
+                adapter: adapter.into(),
                 cases: 1,
             },
         ));
@@ -1548,7 +1598,7 @@ fn a_conftest_two_adapters_fail_to_load_is_one_error() {
         let mut record = batch(
             id,
             Event::Diagnostic(diagnostic(
-                codes::COLLECTION_ERROR,
+                DiagnosticCode::CollectionError,
                 "sub/conftest.py",
                 message,
             )),
@@ -1608,30 +1658,45 @@ fn a_dotted_name_reaches_the_skips_of_what_it_names() {
 /// error, where pytest reports the error alone).
 #[test]
 fn a_file_below_a_broken_conftest_gets_no_no_tests_note() {
-    let diagnostic = |severity: Severity, code: &str, path: &str| Diagnostic {
+    let diagnostic = |severity: Severity, code: DiagnosticCode, path: &str| Diagnostic {
         severity,
-        code: code.to_string(),
-        path: path.to_string(),
+        code,
+        path: path.into(),
         span: None,
         message: String::new(),
     };
-    let no_tests = aye_collect::codes::NO_TESTS;
     let collected = [
-        diagnostic(Severity::Error, codes::USAGE_ERROR, "tests/conftest.py"),
         diagnostic(
             Severity::Error,
-            codes::COLLECTION_ERROR,
+            DiagnosticCode::UsageError,
+            "tests/conftest.py",
+        ),
+        diagnostic(
+            Severity::Error,
+            DiagnosticCode::CollectionError,
             "sub/deep/conftest.py",
         ),
         // Not a conftest's: no directory is explained by it.
-        diagnostic(Severity::Error, codes::COLLECTION_ERROR, "other/test_x.py"),
+        diagnostic(
+            Severity::Error,
+            DiagnosticCode::CollectionError,
+            "other/test_x.py",
+        ),
         // A conftest's info explains nothing either.
-        diagnostic(Severity::Info, codes::USAGE_ERROR, "more/conftest.py"),
+        diagnostic(
+            Severity::Info,
+            DiagnosticCode::UsageError,
+            "more/conftest.py",
+        ),
     ];
     let broken = broken_conftest_dirs(&collected);
     assert_eq!(broken, ["tests/", "sub/deep/"]);
-    let explained =
-        |path: &str| explained_by_a_conftest(&broken, &diagnostic(Severity::Info, no_tests, path));
+    let explained = |path: &str| {
+        explained_by_a_conftest(
+            &broken,
+            &diagnostic(Severity::Info, DiagnosticCode::NoTests, path),
+        )
+    };
     assert!(explained("tests/test_t.py"));
     assert!(explained("tests/pkg/test_p.py"));
     assert!(explained("sub/deep/test_d.py"));
@@ -1642,18 +1707,22 @@ fn a_file_below_a_broken_conftest_gets_no_no_tests_note() {
     // Only the `no-tests` info.
     assert!(!explained_by_a_conftest(
         &broken,
-        &diagnostic(Severity::Error, codes::COLLECTION_ERROR, "tests/test_t.py")
+        &diagnostic(
+            Severity::Error,
+            DiagnosticCode::CollectionError,
+            "tests/test_t.py"
+        )
     ));
     // A root conftest's failure explains every file.
     let root = [diagnostic(
         Severity::Error,
-        codes::USAGE_ERROR,
+        DiagnosticCode::UsageError,
         "conftest.py",
     )];
     let broken = broken_conftest_dirs(&root);
     assert!(explained_by_a_conftest(
         &broken,
-        &diagnostic(Severity::Info, no_tests, "test_top.py")
+        &diagnostic(Severity::Info, DiagnosticCode::NoTests, "test_top.py")
     ));
 }
 

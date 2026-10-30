@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{self, IsTerminal as _};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -13,41 +13,24 @@ use anyhow::{Context as _, Result};
 use aye_collect::{Collector, Environment, Options, Prepared};
 use aye_config::AyeConfig;
 use aye_engine::{Adapter, Policy, Project, Refiner};
-use aye_events::{Case, Counts, Diagnostic, Event, ExitCode, Record, SCHEMA_VERSION, Severity};
-use aye_history::{History, RunWriter};
+use aye_events::{
+    AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event,
+    ExitCode, ProjectPath, Record, RerunCommand, RunId, SCHEMA_VERSION, Severity, Stamper,
+    StopReason, TestId,
+};
+use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
+use aye_history::{History, RunWriter, StoredRunId};
 use aye_render::{
     ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
     JunitOptions, Reporter, Tally, Tee, Text, TextOptions,
 };
-use aye_runner::{Echo, Plan, Runner, RunnerOptions, Stamper, new_run_id};
+use aye_runner::{Echo, Plan, Runner, RunnerOptions};
 use aye_select::Selection;
+use aye_static::EnvVars;
 
 use crate::args::{Args, Color, Maxfail, Output, Passed, Workers, passed, passed_maxfail};
 use crate::busy::Busy;
 use crate::registry;
-
-/// Where aye keeps history and caches, under the project root.
-pub const STATE_DIR: &str = ".aye";
-
-/// What pytest-xdist's `testrun_uid` fixture reads in a worker.
-const TESTRUN_UID: &str = "PYTEST_XDIST_TESTRUNUID";
-
-/// Diagnostic codes the binary acts on. Collection's are in
-/// `aye_collect::codes`; the rest come from adapters and the runner.
-mod codes {
-    /// An explicit path doesn't exist, or an id matches no test.
-    pub const NOT_FOUND: &str = "not-found";
-    /// No adapter collects an explicit file (pytest's "found no collectors").
-    pub const UNCLAIMED: &str = "unclaimed";
-    /// The framework rejected its arguments.
-    pub const USAGE_ERROR: &str = "usage-error";
-    /// The framework's own internal error (pytest's `INTERNALERROR`).
-    pub const INTERNAL_ERROR: &str = "internal-error";
-    /// The framework failed to collect a file.
-    pub const COLLECTION_ERROR: &str = "collection-error";
-    /// The framework skipped a module or a directory while collecting it.
-    pub const SKIPPED: &str = "skipped";
-}
 
 /// Keys of an adapter's context the binary reads or adds.
 mod keys {
@@ -55,16 +38,16 @@ mod keys {
     /// (`path::test[x]`), relative to the root, so the framework reports
     /// one it can't find instead of running its test's other parameters in
     /// its place.
-    pub const REQUESTED_IDS: &str = "requested_ids";
+    pub(super) const REQUESTED_IDS: &str = "requested_ids";
     /// Added by the binary: aye's own options that shape the run (`-c
     /// FILE`), as given, which a test's rerun command repeats before its id
     /// (`aye -c FILE <id>`), so that it reruns from where aye ran as aye ran
     /// it.
-    pub const RERUN_ARGS: &str = "rerun_args";
+    pub(super) const RERUN_ARGS: &str = "rerun_args";
     /// Set by an adapter whose framework drops the tests whose ids start
     /// with one of these (pytest's `--deselect`, relative to the root):
     /// selection drops that adapter's cases and counts them as deselected.
-    pub const DESELECT: &str = "deselect";
+    pub(super) const DESELECT: &str = "deselect";
     /// Added by the binary when a positional argument isn't a path (a
     /// dotted name, a test key): the paths the user's run starts from,
     /// absolute, in the order of the arguments, each once: each path
@@ -74,13 +57,13 @@ mod keys {
     /// framework's default), so an adapter whose framework starts from the
     /// paths it is given (pytest's start-up conftests and initial paths)
     /// starts from these instead.
-    pub const SELECTED_PATHS: &str = "selected_paths";
+    pub(super) const SELECTED_PATHS: &str = "selected_paths";
 }
 
 /// A run's inputs, resolved: everything wrong with the command line or the
 /// configuration fails here, before anything is reported. Selectors that
 /// match nothing are found after collection, and reported in the stream.
-pub struct Session {
+pub(crate) struct Session {
     args: Args,
     cwd: PathBuf,
     root: PathBuf,
@@ -121,7 +104,7 @@ impl Positional {
 }
 
 impl Session {
-    pub fn new(args: Args) -> Result<Self> {
+    pub(crate) fn new(args: Args) -> Result<Self> {
         let cwd = std::env::current_dir().context("cannot read the current directory")?;
         // `.` and `..` are resolved lexically, as pytest's `os.path.abspath`
         // does, before the root is searched for.
@@ -130,9 +113,9 @@ impl Session {
             .iter()
             .map(|test| path_part(test))
             .filter(|path| is_path_like(&cwd, path))
-            .map(|path| normalize(&cwd.join(path)))
+            .map(|path| normalize_absolute(&cwd.join(path)))
             .collect();
-        let root = normalize(&aye_config::project_root(&cwd, &given));
+        let root = normalize_absolute(&aye_config::project_root(&cwd, &given));
         let positionals: Vec<Positional> = args
             .tests
             .iter()
@@ -146,7 +129,7 @@ impl Session {
                 continue;
             };
             let as_given = path_part(test);
-            if normalize(&cwd.join(as_given)) == *path {
+            if normalize_absolute(&cwd.join(as_given)) == *path {
                 paths.push(PathBuf::from(as_given));
             } else {
                 paths.push(path.clone());
@@ -243,41 +226,44 @@ impl Session {
         })
     }
 
-    pub fn root(&self) -> &Path {
+    pub(crate) fn root(&self) -> &Path {
         &self.root
     }
 
-    pub fn python(&self) -> &Path {
+    pub(crate) fn python(&self) -> &Path {
         &self.python
     }
 
-    pub const fn python_source(&self) -> aye_runner::PythonSource {
+    pub(crate) const fn python_source(&self) -> aye_runner::PythonSource {
         self.python_source
     }
 
-    pub const fn workers(&self) -> u32 {
+    pub(crate) const fn workers(&self) -> u32 {
         self.workers
     }
 
-    pub const fn config(&self) -> &AyeConfig {
+    pub(crate) const fn config(&self) -> &AyeConfig {
         &self.config
     }
 
-    pub fn prepared(&self) -> &[Prepared] {
+    pub(crate) fn prepared(&self) -> &[Prepared] {
         &self.prepared
     }
 
     /// The names of the adapters the run uses, in priority order, and why
     /// those.
-    pub fn adapters(&self) -> (Vec<&'static str>, registry::Why) {
+    pub(crate) fn adapters(&self) -> (Vec<AdapterName>, registry::Why) {
         (
             self.adapters.iter().map(|a| a.name()).collect(),
             self.adapters_why,
         )
     }
 
-    #[allow(clippy::too_many_lines)] // one run, top to bottom
-    pub fn run(mut self) -> ExitCode {
+    #[expect(
+        clippy::print_stderr,
+        reason = "aye's own messages, outside the event stream"
+    )]
+    pub(crate) fn run(mut self) -> ExitCode {
         let started = Instant::now();
         // A report that can't be written fails before anything runs, not
         // after the whole suite.
@@ -291,8 +277,8 @@ impl Session {
             );
             return ExitCode::UsageError;
         }
-        let state = self.root.join(STATE_DIR);
-        let mut history = History::load(&state);
+        let state = StateDir::for_root(&self.root);
+        let mut history = History::load(state.path());
         let durations = history.durations();
         let last_failed = history.last_failed();
         let mut selection = std::mem::take(&mut self.selection);
@@ -300,7 +286,7 @@ impl Session {
             selection = selection.with_last_failed(last_failed.iter().cloned());
         }
 
-        let run_id = new_run_id();
+        let run_id = RunId::random();
         let runner = Runner::new(RunnerOptions {
             python: self.python.clone(),
             root: self.root.clone(),
@@ -309,7 +295,10 @@ impl Session {
             executors: self.adapters.iter().map(|a| a.executor()).collect(),
             // pytest-xdist's `testrun_uid`, which its workers share: one per
             // run, the run's id.
-            env: vec![(TESTRUN_UID.into(), run_id.clone().into())],
+            env: vec![(
+                EnvVars::PYTEST_XDIST_TESTRUNUID.into(),
+                run_id.as_str().into(),
+            )],
             // `-s` output stays off a machine-readable stdout.
             echo: match self.output() {
                 Output::Text => Echo::Stdout,
@@ -331,7 +320,7 @@ impl Session {
         // The run's number in the store (`r81`), which `run_started` says,
         // when the run will be stored.
         let mut writer = RunWriter::new(
-            state.join(aye_history::runs::DIR),
+            state.bucket(StateBucket::Runs),
             self.config.settings.keep_runs(),
         );
         let number = if self.args.collect_only {
@@ -343,7 +332,7 @@ impl Session {
             reporters: self.reporters(junit, &file_failed),
             history: Some(Remember {
                 history: &mut history,
-                dir: state.clone(),
+                dir: state.path().to_path_buf(),
             }),
             store: Keep::new(writer),
             stamper: Stamper::with_run(run_id),
@@ -372,14 +361,14 @@ impl Session {
         };
         // The refinement cache is keyed on what refining depends on: the
         // interpreter and its packages, the arguments after `--`, and the
-        // environment workers inherit (aye's own; `TESTRUN_UID` changes
-        // every run and refinement has no use for it).
+        // environment workers inherit (aye's own; `PYTEST_XDIST_TESTRUNUID`
+        // changes every run and refinement has no use for it).
         let collector = Collector::new(
             project,
             &self.prepared,
             Options {
                 strict: self.args.strict,
-                cache_dir: Some(state.join("cache")),
+                cache_dir: Some(state.bucket(StateBucket::Cache)),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
         )
@@ -433,11 +422,10 @@ impl Session {
                 refined_files: 0,
                 duration: collect_started.elapsed(),
             });
-            let stopped = aye_runner::StopReason::Interrupted.as_str();
             return out.finish(
                 ExitCode::Interrupted,
                 Counts::default(),
-                Some(stopped),
+                Some(StopReason::Interrupted),
                 &file_failed,
             );
         }
@@ -462,7 +450,9 @@ impl Session {
         let skips: Vec<&str> = collection
             .diagnostics
             .iter()
-            .filter(|d| d.code == codes::SKIPPED && d.severity == Severity::Info && kept(d))
+            .filter(|d| {
+                d.code == DiagnosticCode::Skipped && d.severity == Severity::Info && kept(d)
+            })
             .map(|d| d.path.as_str())
             .collect();
         // Selectors that match nothing, as pytest's `not found:`: a missing
@@ -503,14 +493,14 @@ impl Session {
                 continue;
             }
             let mut diagnostic = diagnostic.clone();
-            if diagnostic.code == aye_collect::codes::REFINE_FAILED {
+            if diagnostic.code == DiagnosticCode::RefineFailed {
                 // aye's pytest front-end is the only source of pytest's
                 // tests: without it there are none, which is no result.
                 diagnostic.severity = Severity::Error;
             }
             conftests.see(None, &mut diagnostic);
             if pytest_runs {
-                once.refined(aye_engine_pytest::NAME, &diagnostic);
+                once.refined(&aye_engine_pytest::NAME, &diagnostic);
             }
             collection_errors |= diagnostic.severity == Severity::Error;
             out.emit(Event::Diagnostic(diagnostic));
@@ -520,7 +510,7 @@ impl Session {
         let reported: HashSet<&str> = collection
             .diagnostics
             .iter()
-            .filter(|d| d.code == codes::NOT_FOUND)
+            .filter(|d| d.code == DiagnosticCode::NotFound)
             .map(|d| d.path.as_str())
             .collect();
         let mut not_found = Vec::new();
@@ -535,8 +525,8 @@ impl Session {
             }
             not_found.push(Diagnostic {
                 severity: Severity::Error,
-                code: codes::NOT_FOUND.to_string(),
-                path,
+                code: DiagnosticCode::NotFound,
+                path: DiagnosticPath::as_written(path),
                 span: None,
                 message: not_found_message(selector),
             });
@@ -545,7 +535,7 @@ impl Session {
             out.emit(Event::Diagnostic(diagnostic));
         }
         // pytest refuses to run when an explicit argument names nothing.
-        let usage_error = out.errors.not_found || out.errors.usage;
+        let usage_error = out.errors.usage;
         // A hook that failed while pytest collected (aye's pytest front-end
         // runs the collection hooks in refinement) is pytest's
         // `INTERNALERROR`: the session ends there, status 3, `--co` too.
@@ -625,7 +615,7 @@ impl Session {
                 .map(|(name, r)| {
                     let context = with_requested(r.context(), &requested);
                     let context = with_selected_paths(context, &selected_paths);
-                    ((*name).to_string(), with_rerun_args(context, &rerun_args))
+                    (name.clone(), with_rerun_args(context, &rerun_args))
                 })
                 .collect(),
             durations,
@@ -662,7 +652,7 @@ impl Session {
             deselected: selected.deselected,
             ..summary.counts
         };
-        let stopped = summary.stopped.map(aye_runner::StopReason::as_str);
+        let stopped = summary.stopped.clone();
         let mut errors = out.errors;
         // Collection's errors, which `--continue-on-collection-errors` let
         // the run go past, still fail it.
@@ -707,7 +697,7 @@ impl Session {
 
     /// The output format, at its verbosity (`-v` and `-q`), and where the
     /// format came from, for `aye config`.
-    pub fn output_shown(&self) -> (String, &'static str) {
+    pub(crate) fn output_shown(&self) -> (String, &'static str) {
         let (format, origin) = output(&self.args, &self.config);
         let verbosity = self.args.verbosity();
         let flags = match verbosity {
@@ -737,7 +727,7 @@ impl Session {
                     },
                 )));
                 if aye_render::github_actions_enabled() {
-                    let workspace = std::env::var_os("GITHUB_WORKSPACE").map(PathBuf::from);
+                    let workspace = std::env::var_os(EnvVars::GITHUB_WORKSPACE).map(PathBuf::from);
                     let prefix = repository_prefix(&self.root, workspace.as_deref());
                     tee.push(Stdout::new(
                         GithubAnnotations::new(io::stdout()).with_path_prefix(prefix),
@@ -781,29 +771,24 @@ impl Here<'_> {
         if result.reproduce.is_none() && !result.outcome.is_bad() {
             return;
         }
-        let Some(local) = self.local_id(result.id.as_str()) else {
+        let Some(local) = self.local_id(&result.id) else {
             return;
         };
         match &mut result.reproduce {
             Some(reproduce) => {
-                // `aye [aye's options] <id> [-- <the framework's>]`.
-                let command = &mut reproduce.command;
-                let options = command.iter().position(|arg| arg == "--");
-                let id = command[..options.unwrap_or(command.len())]
-                    .iter()
-                    .position(|arg| arg == result.id.as_str());
-                if command.first().is_some_and(|aye| aye == "aye")
-                    && let Some(at) = id.filter(|at| *at > 0)
-                {
-                    command[at] = local;
+                if let Some(mut rerun) = RerunCommand::parse(&reproduce.command, &result.id) {
+                    rerun.target = local;
+                    reproduce.command = rerun.to_command();
                 }
             }
             None if result.outcome.is_bad() => {
-                let mut command = vec!["aye".to_string()];
-                command.extend(self.rerun_args.iter().cloned());
-                command.push(local);
+                let rerun = RerunCommand {
+                    options: self.rerun_args.to_vec(),
+                    target: local,
+                    framework_args: Vec::new(),
+                };
                 result.reproduce = Some(aye_events::Reproduce {
-                    command,
+                    command: rerun.to_command(),
                     ..aye_events::Reproduce::default()
                 });
             }
@@ -813,23 +798,19 @@ impl Here<'_> {
 
     /// `id` spelled from the current directory, when spelled from the root
     /// it would name another file from here; see [`Self::rerun_from_here`].
-    fn local_id(&self, id: &str) -> Option<String> {
+    fn local_id(&self, id: &TestId) -> Option<String> {
         if self.cwd == self.root {
             return None;
         }
-        let (path, rest) = id
-            .split_once("::")
-            .map_or((id, None), |(p, r)| (p, Some(r)));
-        let from_cwd = normalize(&self.cwd.join(path));
-        let from_root = normalize(&self.root.join(path));
+        let path = id.path().as_str();
+        let from_cwd = normalize_absolute(&self.cwd.join(path));
+        let from_root = normalize_absolute(&self.root.join(path));
         if from_cwd == from_root || !from_cwd.exists() {
             return None;
         }
-        let mut local = relative(&from_root, self.cwd);
-        if let Some(rest) = rest {
-            local.push_str("::");
-            local.push_str(rest);
-        }
+        // The names, from their `::` on, follow the file as they are.
+        let mut local = relative_below_root(&from_root, self.cwd);
+        local.push_str(&id.as_str()[path.len()..]);
         Some(local)
     }
 }
@@ -848,10 +829,10 @@ impl Here<'_> {
 #[derive(Debug, Default)]
 struct OneModuleErrors {
     /// Each batch's adapter, from its `batch_started`.
-    adapters: HashMap<aye_events::BatchId, String>,
+    adapters: HashMap<aye_events::BatchIndex, AdapterName>,
     /// By file, how many collection errors each adapter reported for it,
     /// in the order the adapters first did.
-    reported: HashMap<String, Vec<(String, usize)>>,
+    reported: HashMap<String, Vec<(AdapterName, usize)>>,
 }
 
 impl OneModuleErrors {
@@ -861,18 +842,21 @@ impl OneModuleErrors {
     /// adapter's errors, which pytest counts apart, then count as its too,
     /// so another adapter's batch error beyond them still becomes an info).
     /// A conftest's is [`OneConftestError`]'s.
-    fn refined(&mut self, adapter: &str, diagnostic: &Diagnostic) {
+    fn refined(&mut self, adapter: &AdapterName, diagnostic: &Diagnostic) {
         if diagnostic.severity != Severity::Error
-            || diagnostic.code != codes::COLLECTION_ERROR
-            || diagnostic.path.is_empty()
-            || registry::is_conftest(&diagnostic.path)
+            || diagnostic.code != DiagnosticCode::CollectionError
+            || diagnostic.path.is_nowhere()
+            || registry::is_conftest(diagnostic.path.as_str())
         {
             return;
         }
-        let counts = self.reported.entry(diagnostic.path.clone()).or_default();
+        let counts = self
+            .reported
+            .entry(diagnostic.path.to_string())
+            .or_default();
         match counts.iter_mut().find(|(by, _)| by == adapter) {
             Some((_, count)) => *count += 1,
-            None => counts.push((adapter.to_string(), 1)),
+            None => counts.push((adapter.clone(), 1)),
         }
     }
 
@@ -886,8 +870,8 @@ impl OneModuleErrors {
             }
             Event::Diagnostic(diagnostic)
                 if diagnostic.severity == Severity::Error
-                    && diagnostic.code == codes::COLLECTION_ERROR
-                    && !diagnostic.path.is_empty() =>
+                    && diagnostic.code == DiagnosticCode::CollectionError
+                    && !diagnostic.path.is_nowhere() =>
             {
                 let Some(adapter) = batch.and_then(|batch| self.adapters.get(&batch)) else {
                     return;
@@ -895,7 +879,10 @@ impl OneModuleErrors {
                 if !registry::collects_in_one_module(adapter) {
                     return;
                 }
-                let counts = self.reported.entry(diagnostic.path.clone()).or_default();
+                let counts = self
+                    .reported
+                    .entry(diagnostic.path.to_string())
+                    .or_default();
                 let mine = if let Some((_, count)) = counts.iter_mut().find(|(by, _)| by == adapter)
                 {
                     *count += 1;
@@ -938,10 +925,10 @@ impl OneModuleErrors {
 #[derive(Debug, Default)]
 struct OneConftestError {
     /// Each batch's adapter, from its `batch_started`.
-    adapters: HashMap<aye_events::BatchId, String>,
+    adapters: HashMap<aye_events::BatchIndex, AdapterName>,
     /// By code and path, who reported the error first (an adapter, or
     /// `None` for refinement), and its message.
-    first: HashMap<(String, String), (Option<String>, String)>,
+    first: HashMap<(DiagnosticCode, String), (Option<AdapterName>, String)>,
 }
 
 impl OneConftestError {
@@ -957,7 +944,7 @@ impl OneConftestError {
             Event::Diagnostic(diagnostic) => {
                 let adapter = batch.and_then(|batch| self.adapters.get(&batch)).cloned();
                 if adapter.is_some() {
-                    self.see(adapter.as_deref(), diagnostic);
+                    self.see(adapter.as_ref(), diagnostic);
                 }
             }
             _ => {}
@@ -965,22 +952,24 @@ impl OneConftestError {
     }
 
     /// A diagnostic `adapter` reported, or refinement (`None`).
-    fn see(&mut self, adapter: Option<&str>, diagnostic: &mut Diagnostic) {
-        let kind = match diagnostic.code.as_str() {
-            codes::USAGE_ERROR => "usage error",
-            codes::COLLECTION_ERROR => "collection error",
+    fn see(&mut self, adapter: Option<&AdapterName>, diagnostic: &mut Diagnostic) {
+        let kind = match diagnostic.code {
+            DiagnosticCode::UsageError => "usage error",
+            DiagnosticCode::CollectionError => "collection error",
             _ => return,
         };
-        if diagnostic.severity != Severity::Error || !registry::is_conftest(&diagnostic.path) {
+        if diagnostic.severity != Severity::Error
+            || !registry::is_conftest(diagnostic.path.as_str())
+        {
             return;
         }
-        let key = (diagnostic.code.clone(), diagnostic.path.clone());
+        let key = (diagnostic.code.clone(), diagnostic.path.to_string());
         let Some((first, message)) = self.first.get(&key) else {
-            let first = (adapter.map(str::to_string), diagnostic.message.clone());
+            let first = (adapter.cloned(), diagnostic.message.clone());
             self.first.insert(key, first);
             return;
         };
-        if first.is_some() && first.as_deref() == adapter {
+        if first.is_some() && first.as_ref() == adapter {
             return;
         }
         let by = adapter.map_or_else(
@@ -1027,7 +1016,7 @@ impl Reach {
         if positionals.iter().all(|p| p.path.is_some()) {
             return None;
         }
-        let at_root = |relative: &str| normalize(&root.join(relative));
+        let at_root = |relative: &str| normalize_absolute(&root.join(relative));
         let mut paths = Vec::new();
         let mut words = Vec::new();
         let mut selected: Vec<PathBuf> = Vec::new();
@@ -1047,7 +1036,7 @@ impl Reach {
                 if one.truth(case).is_false() {
                     continue;
                 }
-                let file = at_root(case.id.path());
+                let file = at_root(case.id.path().as_str());
                 if seen.insert(file.clone()) {
                     selected.push(file);
                 }
@@ -1071,9 +1060,9 @@ impl Reach {
     /// the run starts from (as `pytest <those paths>` loads it first), or
     /// some argument named nothing. Everything else is the run's.
     fn keeps(&self, root: &Path, diagnostic: &Diagnostic) -> bool {
-        let at = || normalize(&root.join(&diagnostic.path));
-        match (diagnostic.severity, diagnostic.code.as_str()) {
-            (Severity::Info, codes::SKIPPED) => {
+        let at = || normalize_absolute(&root.join(diagnostic.path.as_str()));
+        match (diagnostic.severity, &diagnostic.code) {
+            (Severity::Info, DiagnosticCode::Skipped) => {
                 let at = at();
                 self.paths
                     .iter()
@@ -1081,9 +1070,9 @@ impl Reach {
                     || self
                         .words
                         .iter()
-                        .any(|word| dotted_reach(word, &diagnostic.path) != Named::Nothing)
+                        .any(|word| dotted_reach(word, diagnostic.path.as_str()) != Named::Nothing)
             }
-            (Severity::Error, codes::USAGE_ERROR) if !diagnostic.path.is_empty() => {
+            (Severity::Error, DiagnosticCode::UsageError) if !diagnostic.path.is_nowhere() => {
                 if self.unmatched {
                     return true;
                 }
@@ -1107,8 +1096,8 @@ impl Reach {
 fn broken_conftest_dirs(diagnostics: &[Diagnostic]) -> Vec<&str> {
     diagnostics
         .iter()
-        .filter(|d| d.severity == Severity::Error && registry::is_conftest(&d.path))
-        .map(|d| &d.path[..d.path.len() - "conftest.py".len()])
+        .filter(|d| d.severity == Severity::Error && registry::is_conftest(d.path.as_str()))
+        .map(|d| &d.path.as_str()[..d.path.as_str().len() - "conftest.py".len()])
         .collect()
 }
 
@@ -1120,8 +1109,10 @@ fn broken_conftest_dirs(diagnostics: &[Diagnostic]) -> Vec<&str> {
 /// has none, is left out.
 fn explained_by_a_conftest(broken: &[&str], diagnostic: &Diagnostic) -> bool {
     diagnostic.severity == Severity::Info
-        && diagnostic.code == aye_collect::codes::NO_TESTS
-        && broken.iter().any(|dir| diagnostic.path.starts_with(dir))
+        && diagnostic.code == DiagnosticCode::NoTests
+        && broken
+            .iter()
+            .any(|dir| diagnostic.path.as_str().starts_with(dir))
 }
 
 /// What a dotted name names of a path collection reported skipped.
@@ -1172,25 +1163,24 @@ fn dotted_reach(word: &str, path: &str) -> Named {
     named
 }
 
-/// Error diagnostics seen in the stream, by what they mean for the exit code.
+/// Error diagnostics seen in the stream, by what they mean for the exit code
+/// ([`aye_events::ErrorClass::exit_code`]).
 #[derive(Debug, Clone, Copy, Default)]
 struct Errors {
     any: bool,
-    not_found: bool,
     usage: bool,
     internal: bool,
 }
 
 impl Errors {
-    fn see(&mut self, diagnostic: &Diagnostic) {
-        if diagnostic.severity != Severity::Error {
+    fn see(&mut self, diagnostic: &Diagnostic, origin: DiagnosticOrigin) {
+        let Some(class) = diagnostic.error_class(origin) else {
             return;
-        }
+        };
         self.any = true;
-        match diagnostic.code.as_str() {
-            codes::NOT_FOUND => self.not_found = true,
-            codes::UNCLAIMED | codes::USAGE_ERROR => self.usage = true,
-            codes::INTERNAL_ERROR => self.internal = true,
+        match class.exit_code() {
+            Some(ExitCode::UsageError) => self.usage = true,
+            Some(ExitCode::InternalError) => self.internal = true,
             _ => {}
         }
     }
@@ -1227,6 +1217,10 @@ impl Stream<'_> {
     /// this run). Then every reporter gets every record: one that fails
     /// (stdout, a closed pipe) stops writing, and the others carry on.
     /// Then history folds it, and the run store keeps it.
+    #[expect(
+        clippy::print_stderr,
+        reason = "aye's own messages, outside the event stream"
+    )]
     fn deliver_to(
         reporters: &mut Tee<'_>,
         history: &mut Option<Remember<'_>>,
@@ -1238,7 +1232,7 @@ impl Stream<'_> {
             history.tell(record);
         }
         if let Event::Diagnostic(d) = &record.event {
-            errors.see(d);
+            errors.see(d, DiagnosticOrigin::of(&record.envelope));
         }
         if let Err(err) = reporters.report(record)
             && err.kind() != io::ErrorKind::BrokenPipe
@@ -1251,18 +1245,22 @@ impl Stream<'_> {
         store.record(record);
     }
 
+    #[expect(
+        clippy::print_stderr,
+        reason = "aye's own messages, outside the event stream"
+    )]
     fn finish(
         mut self,
         code: ExitCode,
         counts: Counts,
-        stopped: Option<&str>,
+        stopped: Option<StopReason>,
         file_failed: &AtomicBool,
     ) -> ExitCode {
         self.emit(Event::RunFinished {
             exit_code: code,
             counts,
             duration: self.started.elapsed(),
-            stopped: stopped.map(str::to_string),
+            stopped,
         });
         if let Err(err) = self.reporters.finish()
             && err.kind() != io::ErrorKind::BrokenPipe
@@ -1315,7 +1313,7 @@ impl Keep {
         self.writer.dir()
     }
 
-    fn finish(self) -> io::Result<Option<String>> {
+    fn finish(self) -> io::Result<Option<StoredRunId>> {
         self.writer.finish(self.tally.extra().named())
     }
 }
@@ -1367,6 +1365,10 @@ impl<R: Reporter> Reporter for File<R> {
         self.inner.report(record)
     }
 
+    #[expect(
+        clippy::print_stderr,
+        reason = "aye's own messages, outside the event stream"
+    )]
     fn finish(&mut self) -> io::Result<()> {
         if let Err(err) = self.inner.finish() {
             eprintln!("aye: error: {err}");
@@ -1396,6 +1398,10 @@ impl Remember<'_> {
         }
     }
 
+    #[expect(
+        clippy::print_stderr,
+        reason = "aye's own messages, outside the event stream"
+    )]
     fn save(&self) {
         if self.history.changed()
             && let Err(err) = self.history.save(&self.dir)
@@ -1486,20 +1492,20 @@ fn run_exit_code(
 fn session_files(
     cases: &[Case],
     within: Option<(&[PathBuf], &Path)>,
-) -> BTreeMap<String, Vec<String>> {
-    let mut files: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut seen: HashSet<(&str, &str)> = HashSet::new();
+) -> BTreeMap<AdapterName, Vec<ProjectPath>> {
+    let mut files: BTreeMap<AdapterName, Vec<ProjectPath>> = BTreeMap::new();
+    let mut seen: HashSet<(&AdapterName, &str)> = HashSet::new();
     for case in cases {
         let path = case.id.path();
         let reached = within.is_none_or(|(paths, root)| {
-            let file = normalize(&root.join(path));
+            let file = normalize_absolute(&root.join(path.as_str()));
             paths.iter().any(|start| file.starts_with(start))
         });
-        if reached && seen.insert((case.adapter.as_str(), path)) {
+        if reached && seen.insert((&case.adapter, path.as_str())) {
             files
                 .entry(case.adapter.clone())
                 .or_default()
-                .push(path.to_string());
+                .push(path.to_project_path());
         }
     }
     files
@@ -1507,7 +1513,7 @@ fn session_files(
 
 /// Prepare each adapter for the project, knowing the others.
 fn prepare(adapters: &[Box<dyn Adapter>], project: &Project<'_>) -> Result<Vec<Prepared>> {
-    let names: Vec<&str> = adapters.iter().map(|adapter| adapter.name()).collect();
+    let names: Vec<AdapterName> = adapters.iter().map(|adapter| adapter.name()).collect();
     let mut prepared: Vec<Prepared> = Vec::new();
     for adapter in adapters {
         if let Some(recognizer) = adapter
@@ -1573,7 +1579,7 @@ fn with_requested(mut context: serde_json::Value, requested: &[String]) -> serde
 /// See [`Session::junit`].
 fn junit_path(cwd: &Path, given: Option<&Path>, prepared: &[Prepared]) -> Option<PathBuf> {
     let path = match given {
-        Some(given) => expand_path(&given.to_string_lossy()),
+        Some(given) => aye_fs::expand_path(&given.to_string_lossy(), |name| std::env::var_os(name)),
         None => context_strings(prepared, "junitxml")
             .into_iter()
             .next()
@@ -1661,7 +1667,7 @@ fn selection<'s>(
             for (name, expr) in unread(given, prepared, "keyword") {
                 selection = selection
                     .clone()
-                    .with_own_keyword(name, &expr)
+                    .with_own_keyword(name.clone(), &expr)
                     .unwrap_or(selection);
             }
         }
@@ -1669,7 +1675,7 @@ fn selection<'s>(
             for (name, expr) in context_strings(prepared, "keyword") {
                 selection = selection
                     .clone()
-                    .with_own_keyword(name, &expr)
+                    .with_own_keyword(name.clone(), &expr)
                     .unwrap_or(selection);
             }
         }
@@ -1683,7 +1689,7 @@ fn selection<'s>(
             for (name, expr) in unread(given, prepared, "tags") {
                 selection = selection
                     .clone()
-                    .with_own_tags(name, &expr)
+                    .with_own_tags(name.clone(), &expr)
                     .unwrap_or(selection);
             }
         }
@@ -1691,7 +1697,7 @@ fn selection<'s>(
             for (name, expr) in context_strings(prepared, "tags") {
                 selection = selection
                     .clone()
-                    .with_own_tags(name, &expr)
+                    .with_own_tags(name.clone(), &expr)
                     .unwrap_or(selection);
             }
         }
@@ -1703,7 +1709,7 @@ fn selection<'s>(
             .and_then(serde_json::Value::as_array)
         {
             selection = selection.with_deselect(
-                name,
+                name.clone(),
                 prefixes
                     .iter()
                     .filter_map(serde_json::Value::as_str)
@@ -1716,7 +1722,7 @@ fn selection<'s>(
 
 /// The adapters' contexts' strings under `key`, by adapter, for those that
 /// give one.
-fn context_strings(prepared: &[Prepared], key: &str) -> Vec<(&'static str, String)> {
+fn context_strings<'p>(prepared: &'p [Prepared], key: &str) -> Vec<(&'p AdapterName, String)> {
     prepared
         .iter()
         .filter_map(|(name, recognizer)| {
@@ -1724,7 +1730,7 @@ fn context_strings(prepared: &[Prepared], key: &str) -> Vec<(&'static str, Strin
                 .context()
                 .get(key)
                 .and_then(serde_json::Value::as_str)
-                .map(|value| (*name, value.to_string()))
+                .map(|value| (name, value.to_string()))
         })
         .collect()
 }
@@ -1736,11 +1742,15 @@ fn context_strings(prepared: &[Prepared], key: &str) -> Vec<(&'static str, Strin
 /// pytest front-end lists every test, and nothing re-reads those
 /// arguments' `-k` or `-m` in a batch), so static selection is the last
 /// word on every case.
-fn unread(given: Option<&str>, prepared: &[Prepared], key: &str) -> Vec<(&'static str, String)> {
+fn unread<'p>(
+    given: Option<&str>,
+    prepared: &'p [Prepared],
+    key: &str,
+) -> Vec<(&'p AdapterName, String)> {
     let own = context_strings(prepared, key);
     prepared
         .iter()
-        .map(|(name, _)| *name)
+        .map(|(name, _)| name)
         .filter_map(|name| {
             let expr = given.map(str::to_string).or_else(|| {
                 own.iter()
@@ -1774,52 +1784,6 @@ fn pick(given: Option<&str>, framework: Passed) -> Pick {
         Passed::Unknown => Pick::Unknown,
         Passed::Unset => given.map_or(Pick::Own, |expr| Pick::Given(expr.to_string())),
     }
-}
-
-/// `os.path.expanduser(os.path.expandvars(path))`, as pytest reads a
-/// report's path: `$NAME` and `${NAME}` become the variable's value when it
-/// is set, then a leading `~` becomes the home directory (`~user` is left
-/// as it is).
-fn expand_path(path: &str) -> PathBuf {
-    let mut out = String::with_capacity(path.len());
-    let mut rest = path;
-    while let Some(at) = rest.find('$') {
-        out.push_str(&rest[..at]);
-        let after = &rest[at + 1..];
-        let word = |s: &str| {
-            s.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .unwrap_or(s.len())
-        };
-        // The name, and how long the reference is after the `$`.
-        let reference = match after.strip_prefix('{') {
-            Some(braced) => braced.find('}').map(|end| (&braced[..end], end + 2)),
-            None => Some(word(after))
-                .filter(|end| *end > 0)
-                .map(|end| (&after[..end], end)),
-        };
-        let Some((name, len)) = reference else {
-            out.push('$');
-            rest = after;
-            continue;
-        };
-        match std::env::var(name) {
-            Ok(value) if !name.is_empty() => out.push_str(&value),
-            _ => out.push_str(&rest[at..=at + len]),
-        }
-        rest = &after[len..];
-    }
-    out.push_str(rest);
-    let separators = ['/', std::path::MAIN_SEPARATOR];
-    if let Some(tail) = out.strip_prefix('~')
-        && (tail.is_empty() || tail.starts_with(separators))
-        && let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
-    {
-        let home = home.to_string_lossy();
-        let home = home.trim_end_matches(separators);
-        let expanded = format!("{home}{tail}");
-        return PathBuf::from(if expanded.is_empty() { "/" } else { &expanded });
-    }
-    PathBuf::from(out)
 }
 
 /// The output format, and where it came from: `--output`, else
@@ -1876,12 +1840,12 @@ pub(crate) fn resolve(cwd: &Path, root: &Path, arg: &str) -> Positional {
         .split_once("::")
         .map_or((arg, None), |(p, r)| (p, Some(r)));
     let from_root = || {
-        let at_root = normalize(&root.join(path));
+        let at_root = normalize_absolute(&root.join(path));
         (Path::new(path).is_relative() && at_root.starts_with(root) && at_root.exists())
             .then_some(at_root)
     };
     let absolute = if is_path_like(cwd, path) {
-        let from_cwd = normalize(&cwd.join(path));
+        let from_cwd = normalize_absolute(&cwd.join(path));
         if from_cwd.exists() {
             from_cwd
         } else {
@@ -1910,69 +1874,6 @@ pub(crate) fn resolve(cwd: &Path, root: &Path, arg: &str) -> Positional {
         path: Some(absolute),
         id: rest.is_some(),
     }
-}
-
-/// Remove `.` and `..` without touching the filesystem.
-pub(crate) fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
-}
-
-/// `path` relative to the root as collection's ids spell it: also when it
-/// is spelled through another name of a directory in the project (macOS's
-/// `/tmp` is `/private/tmp`), by [`aye_config::relative_to`]; else
-/// [`relative`], climbing out with `..`.
-fn root_relative(path: &Path, root: &Path) -> String {
-    aye_config::relative_to(root, path).map_or_else(|| relative(path, root), |rest| slashed(&rest))
-}
-
-/// A relative path's components joined with `/`.
-fn slashed(path: &Path) -> String {
-    path.components()
-        .filter(|c| !matches!(c, Component::RootDir | Component::Prefix(_)))
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-/// `path` relative to `base` with `/` separators, climbing out with `..`
-/// when it lies elsewhere; absolute when they share nothing. Both are
-/// absolute and normalized.
-fn relative(path: &Path, base: &Path) -> String {
-    if let Ok(rest) = path.strip_prefix(base) {
-        return slashed(rest);
-    }
-    let shared = path
-        .components()
-        .zip(base.components())
-        .take_while(|(a, b)| a == b)
-        .count();
-    let anchored = path
-        .components()
-        .take(shared)
-        .any(|c| matches!(c, Component::Normal(_)));
-    if !anchored {
-        return path.to_string_lossy().replace('\\', "/");
-    }
-    let path_parts: Vec<Component> = path.components().collect();
-    let up = base.components().count() - shared;
-    std::iter::repeat_n("..".to_string(), up)
-        .chain(
-            path_parts[shared..]
-                .iter()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned()),
-        )
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 /// Where the project root lies in the repository, for GitHub annotations:
@@ -2072,6 +1973,11 @@ const COLLECTING_GRACE: Duration = Duration::from_millis(1500);
 /// Ctrl-C (or SIGTERM, SIGHUP): before the run, stop collection (`stop` the
 /// collector watches), and exit anyway if that takes too long; during the
 /// run (`running`), stop it cleanly.
+#[expect(clippy::print_stderr, reason = "says why aye stopped")]
+#[expect(
+    clippy::exit,
+    reason = "a second signal, or a collection that doesn't stop in time, ends aye at once"
+)]
 fn install_interrupt(
     stop: aye_runner::StopHandle,
     collecting: Arc<AtomicBool>,

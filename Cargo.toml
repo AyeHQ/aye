@@ -20,11 +20,14 @@ aye-engine-doctest = { path = "crates/aye-engine-doctest", version = "=0.0.1" }
 aye-engine-pytest = { path = "crates/aye-engine-pytest", version = "=0.0.1" }
 aye-engine-unittest = { path = "crates/aye-engine-unittest", version = "=0.0.1" }
 aye-events = { path = "crates/aye-events", version = "=0.0.1" }
+aye-fs = { path = "crates/aye-fs", version = "=0.0.1" }
 aye-history = { path = "crates/aye-history", version = "=0.0.1" }
+aye-index = { path = "crates/aye-index", version = "=0.0.1" }
 aye-provision = { path = "crates/aye-provision", version = "=0.0.1" }
 aye-render = { path = "crates/aye-render", version = "=0.0.1" }
 aye-runner = { path = "crates/aye-runner", version = "=0.0.1" }
 aye-select = { path = "crates/aye-select", version = "=0.0.1" }
+aye-static = { path = "crates/aye-static", version = "=0.0.1" }
 # x-release-please-end
 
 anstream = "0.6"
@@ -36,6 +39,10 @@ divan = "0.1"
 # The gzip of `.aye/runs`, with the default backend: miniz_oxide, pure Rust.
 flate2 = "1.1"
 globset = "0.4"
+# Snapshot tests (dev-dependencies only): `filters` and `redactions` take out
+# what varies between machines and runs.
+insta = { version = "1.49", features = ["filters", "redactions"] }
+insta-cmd = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 shlex = "1"
@@ -57,6 +64,8 @@ ruff_text_size = "=0.0.4"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# `pub` means another crate uses it.
+unreachable_pub = "warn"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
@@ -66,6 +75,19 @@ module_name_repetitions = "allow"
 must_use_candidate = "allow"
 struct_excessive_bools = "allow"
 too_many_lines = "allow"
+# Restriction lints, as ruff and uv set them. Printing and `exit` only where
+# they are the point, each with an `#[expect]` saying why; no iteration over
+# a hash map, whose order would reach output.
+dbg_macro = "warn"
+empty_drop = "warn"
+empty_structs_with_brackets = "warn"
+exit = "warn"
+get_unwrap = "warn"
+iter_over_hash_type = "warn"
+print_stderr = "warn"
+print_stdout = "warn"
+rc_mutex = "warn"
+rest_pat_in_fully_bound_structs = "warn"
 
 [profile.release]
 lto = "fat"

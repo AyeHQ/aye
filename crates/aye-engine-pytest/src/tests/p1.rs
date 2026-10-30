@@ -10,7 +10,7 @@ use aye_events::Certainty;
 use super::suites::Suite;
 use super::{collect, differential, differential_metadata, materialize, python, write};
 
-pub const SUITES: &[Suite] = &[
+pub(super) const SUITES: &[Suite] = &[
     // C0: classes handed to code aye can't follow (a loop over them, a helper, a classmethod, `__set_name__`, `__bases__`, `del K.attr`, `setattr`), and uses that leave members alone
     Suite {
         name: "handed_classes",

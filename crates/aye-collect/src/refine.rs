@@ -6,12 +6,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use aye_engine::{RefineRequest, Refined, Refiner, Setting};
-use aye_events::{Diagnostic, Severity};
+use aye_events::{
+    AdapterName, ContentDigest, Diagnostic, DiagnosticCode, Fnv128, ProjectPath, Severity,
+};
 
 use crate::source::Source;
 use crate::standalone::{self, Scope};
 use crate::tree::Tree;
-use crate::{Collector, Job, Recognized, codes};
+use crate::{Collector, Job, Recognized};
 
 /// The cache's own format, part of every key: entries written under other
 /// rules are never read.
@@ -49,13 +51,13 @@ impl Collector<'_> {
         seen: &Mutex<HashMap<PathBuf, bool>>,
     ) -> Refinement {
         let mut out = Refinement::default();
-        let mut digests: HashMap<usize, u128> = HashMap::new();
+        let mut digests: HashMap<usize, ContentDigest> = HashMap::new();
         // Computed once, when a file first needs it.
         let mut environment: Option<Option<u128>> = None;
         // By support file and recognizer: whether it is standalone.
         let mut supports_standalone: HashMap<(usize, usize), bool> = HashMap::new();
         // By package `__init__.py` and recognizer: its digest when standalone.
-        let mut inits: HashMap<(PathBuf, usize), Option<u128>> = HashMap::new();
+        let mut inits: HashMap<(PathBuf, usize), Option<ContentDigest>> = HashMap::new();
         for (i, (adapter, recognizer)) in self.recognizers.iter().enumerate() {
             let pending: Vec<(&Job, &Recognized, &str)> = jobs
                 .iter()
@@ -69,7 +71,7 @@ impl Collector<'_> {
                 continue;
             }
             let context = recognizer.context();
-            let scope = self.scope(adapter, seen);
+            let scope = self.scope(adapter.as_str(), seen);
             let environment = *environment.get_or_insert_with(|| {
                 self.caching()
                     .then(|| self.environment.digest(self.project.cwd))
@@ -78,7 +80,7 @@ impl Collector<'_> {
             let cache = match (self.options.cache_dir.as_deref(), environment) {
                 (Some(dir), Some(environment)) if !self.loads_by_name(&context, &scope) => {
                     // The arguments after `--`, as adapters were given them.
-                    let mut args = Fnv::new();
+                    let mut args = Fnv128::new();
                     for arg in self.project.framework_args {
                         args.part(arg.as_bytes());
                     }
@@ -126,21 +128,22 @@ impl Collector<'_> {
                 };
                 let key = cache.as_ref().zip(found.digest).zip(packages).map(
                     |((cache, content), packages)| {
-                        let chain: Vec<(String, u128)> = job
+                        let chain: Vec<(ProjectPath, ContentDigest)> = job
                             .chain(i)
                             .iter()
                             .filter_map(|&at| {
                                 let source = support.get(&at)?;
-                                let hash =
-                                    *digests.entry(at).or_insert_with(|| digest(source.bytes()));
-                                Some((tree.entries[at].rel.clone(), hash))
+                                let digest = *digests
+                                    .entry(at)
+                                    .or_insert_with(|| ContentDigest::of(source.bytes()));
+                                Some((tree.entries[at].rel.clone(), digest))
                             })
                             .chain(packages)
                             .collect();
                         cache.key(
-                            &tree.entries[job.at].rel,
+                            tree.entries[job.at].rel.as_str(),
                             content,
-                            chain.iter().map(|(rel, hash)| (rel.as_str(), *hash)),
+                            chain.iter().map(|(rel, digest)| (rel.as_str(), *digest)),
                         )
                     },
                 );
@@ -164,14 +167,19 @@ impl Collector<'_> {
                         "{adapter} must import this file to know its tests ({reason}), \
                          but refinement is off; keeping the static guess"
                     );
-                    let diagnostic =
-                        fallback(Severity::Info, codes::NOT_REFINED, tree, at, message);
+                    let diagnostic = fallback(
+                        Severity::Info,
+                        DiagnosticCode::NotRefined,
+                        tree,
+                        at,
+                        message,
+                    );
                     out.fallbacks.insert((at, i), diagnostic);
                 }
                 continue;
             };
             let request = RefineRequest {
-                adapter: (*adapter).to_string(),
+                adapter: adapter.clone(),
                 files: misses
                     .iter()
                     .map(|(at, _, _)| tree.entries[*at].rel.clone())
@@ -188,7 +196,7 @@ impl Collector<'_> {
                         .collect();
                     let mut stray = Refined::default();
                     for case in reply.cases {
-                        match parts.get_mut(case.id.path()) {
+                        match parts.get_mut(case.id.path().as_str()) {
                             Some(part) => part.cases.push(case),
                             None => stray.cases.push(case),
                         }
@@ -228,8 +236,13 @@ impl Collector<'_> {
                              keeping the static guess",
                             err.0
                         );
-                        let diagnostic =
-                            fallback(Severity::Warning, codes::REFINE_FAILED, tree, at, message);
+                        let diagnostic = fallback(
+                            Severity::Warning,
+                            DiagnosticCode::RefineFailed,
+                            tree,
+                            at,
+                            message,
+                        );
                         out.fallbacks.insert((at, i), diagnostic);
                     }
                 }
@@ -249,8 +262,8 @@ impl Collector<'_> {
         abs: &Path,
         recognizer: usize,
         scope: &Scope<'_>,
-        memo: &mut HashMap<(PathBuf, usize), Option<u128>>,
-    ) -> Option<Vec<(String, u128)>> {
+        memo: &mut HashMap<(PathBuf, usize), Option<ContentDigest>>,
+    ) -> Option<Vec<(ProjectPath, ContentDigest)>> {
         let root = self.project.root;
         let mut out = Vec::new();
         for dir in abs
@@ -262,16 +275,16 @@ impl Collector<'_> {
             if init == abs || !init.is_file() {
                 continue;
             }
-            let rel = crate::tree::relative(&init, root);
-            let hash = *memo.entry((init.clone(), recognizer)).or_insert_with(|| {
+            let rel = ProjectPath::as_written(aye_fs::relative_through_root(&init, root));
+            let digest = *memo.entry((init.clone(), recognizer)).or_insert_with(|| {
                 let (source, _) = crate::source::load(&init, &rel);
                 let source = source.filter(|s| !s.is_lossy())?;
                 let file = source.file(&rel, &init)?;
                 standalone::dependence(file.module, &init, scope)
                     .is_none()
-                    .then(|| digest(source.bytes()))
+                    .then(|| ContentDigest::of(source.bytes()))
             });
-            out.push((rel, hash?));
+            out.push((rel, digest?));
         }
         out.reverse();
         Some(out)
@@ -280,15 +293,15 @@ impl Collector<'_> {
 
 fn fallback(
     severity: Severity,
-    code: &str,
+    code: DiagnosticCode,
     tree: &Tree<'_>,
     at: usize,
     message: String,
 ) -> Diagnostic {
     Diagnostic {
         severity,
-        code: code.to_string(),
-        path: tree.entries[at].rel.clone(),
+        code,
+        path: tree.entries[at].rel.clone().into(),
         span: None,
         message,
     }
@@ -297,7 +310,7 @@ fn fallback(
 /// Refinement results on disk, one JSON file per file and adapter:
 /// `<cache dir>/refine/<adapter>/<key>.json`.
 struct Cache {
-    /// The cache directory, created through `aye_history::prepare_dir` so
+    /// The cache directory, created through `aye_fs::prepare_dir` so
     /// that the state directory holding it is marked as a cache.
     top: PathBuf,
     dir: PathBuf,
@@ -312,15 +325,15 @@ impl Cache {
     fn new(
         cache_dir: &Path,
         parts: &[&[u8]],
-        adapter: &str,
+        adapter: &AdapterName,
         context: &serde_json::Value,
         settings: &[Setting],
     ) -> Self {
-        let mut hash = Fnv::new();
+        let mut hash = Fnv128::new();
         for part in parts {
             hash.part(part);
         }
-        hash.part(adapter.as_bytes());
+        hash.part(adapter.as_str().as_bytes());
         hash.part(context.to_string().as_bytes());
         // The content of the files the context names: pytest's inifile holds
         // options aye doesn't read itself.
@@ -341,7 +354,7 @@ impl Cache {
         }
         Self {
             top: cache_dir.to_path_buf(),
-            dir: cache_dir.join("refine").join(adapter),
+            dir: cache_dir.join(aye_fs::REFINE_CACHE).join(adapter.as_str()),
             base: hash.finish(),
         }
     }
@@ -349,10 +362,10 @@ impl Cache {
     fn key<'a>(
         &self,
         rel: &str,
-        digest: u128,
-        support: impl Iterator<Item = (&'a str, u128)>,
+        digest: ContentDigest,
+        support: impl Iterator<Item = (&'a str, ContentDigest)>,
     ) -> String {
-        let mut hash = Fnv::new();
+        let mut hash = Fnv128::new();
         hash.part(&self.base.to_le_bytes());
         hash.part(rel.as_bytes());
         hash.part(&digest.to_le_bytes());
@@ -391,7 +404,7 @@ impl Cache {
             return;
         };
         let aside = self.dir.join(format!("{key}.{}.tmp", std::process::id()));
-        let written = aye_history::prepare_dir(&self.top)
+        let written = aye_fs::prepare_dir(&self.top)
             .and_then(|()| std::fs::create_dir_all(&self.dir))
             .and_then(|()| std::fs::write(&aside, bytes))
             .and_then(|()| std::fs::rename(&aside, self.path(key)));
@@ -435,39 +448,45 @@ impl Collector<'_> {
     }
 }
 
-/// The content digest of a file.
-pub(crate) fn digest(bytes: &[u8]) -> u128 {
-    let mut hash = Fnv::new();
-    hash.bytes(bytes);
-    hash.finish()
-}
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
 
-/// FNV-1a, 128 bits: stable across builds and platforms, unlike `std`'s
-/// hasher, which is all a cache key needs.
-pub(crate) struct Fnv(u128);
+    use aye_engine::Setting;
+    use aye_events::{AdapterName, ContentDigest};
 
-impl Fnv {
-    const OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
-    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
+    use super::{Cache, FORMAT};
 
-    pub(crate) fn new() -> Self {
-        Self(Self::OFFSET)
-    }
-
-    fn bytes(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.0 = (self.0 ^ u128::from(byte)).wrapping_mul(Self::PRIME);
-        }
-    }
-
-    /// Length-prefixed, so that consecutive parts can't run into each other.
-    pub(crate) fn part(&mut self, bytes: &[u8]) {
-        let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        self.bytes(&len.to_le_bytes());
-        self.bytes(bytes);
-    }
-
-    pub(crate) fn finish(&self) -> u128 {
-        self.0
+    /// A cache entry's key, from the run's inputs, the adapter's, the file
+    /// and its support files, pinned: entries written by another aye of
+    /// the same `FORMAT` must keep answering. Changing what the key holds
+    /// or how it is hashed bumps `FORMAT`.
+    #[test]
+    fn keys_are_pinned() {
+        let settings = [Setting {
+            name: "python_files".into(),
+            value: "test_*.py".into(),
+            origin: "default".into(),
+        }];
+        let cache = Cache::new(
+            Path::new("/cache"),
+            &[
+                FORMAT.as_bytes(),
+                b"0.0.1",
+                b"/root",
+                b"/root",
+                &7u128.to_le_bytes(),
+            ],
+            &AdapterName::from("pytest"),
+            &serde_json::json!({"native": {"rootdir": "relative", "args": ["-x"]}}),
+            &settings,
+        );
+        let file = ContentDigest::of(b"def test_a(): pass\n");
+        let support = [("conftest.py", ContentDigest::of(b"import pytest\n"))];
+        assert_eq!(
+            cache.key("tests/test_a.py", file, support.into_iter()),
+            "2b8d189545df6dd813e51e0ff1f3a71b"
+        );
+        assert_eq!(cache.path("k"), Path::new("/cache/refine/pytest/k.json"));
     }
 }

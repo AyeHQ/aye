@@ -9,9 +9,9 @@
 //! is each engine's recognizer. If a framework's name pattern or id algorithm
 //! appears in this crate, the boundary has leaked.
 //!
-//! Depends on: aye-engine, aye-events, aye-config (path normalization),
-//! aye-history (marking the state directory). Must not depend on any
-//! `aye-engine-*`.
+//! Depends on: aye-engine, aye-events, aye-fs (paths, and marking the state
+//! directory), aye-static (the variables it reads by name). Must not depend
+//! on any `aye-engine-*`.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **Stopping and progress.** [`Collector::with_stop`] takes a flag the
@@ -169,7 +169,7 @@
 //!   hook maps, under a name that is neither its distribution's nor in its
 //!   `top_level.txt`, are not in the key. Entries are never pruned. The
 //!   state directory the cache creates is marked as a cache
-//!   (`aye_history::prepare_dir`).
+//!   (`aye_fs::prepare_dir`).
 //! - **Strict mode** turns every warning into an error, recognizers' and
 //!   workers' included; infos stay infos. [`Collection::has_errors`] is what
 //!   fails the run.
@@ -181,7 +181,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_engine::{Project, Recognition, Recognizer, Refiner, SourceFile};
-use aye_events::{Case, Diagnostic, Severity, TestId};
+use aye_events::{
+    AdapterName, Case, ContentDigest, Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPathRef,
+    Severity, TestId,
+};
 
 mod environment;
 mod parallel;
@@ -196,29 +199,8 @@ use source::Source;
 use standalone::Scope;
 use tree::{Mask, Tree, bits};
 
-/// The diagnostic codes collection emits itself.
-pub mod codes {
-    /// A claimed file doesn't parse.
-    pub const SYNTAX_ERROR: &str = "syntax-error";
-    /// A claimed file or a directory can't be read.
-    pub const UNREADABLE: &str = "unreadable";
-    /// An explicit path doesn't exist.
-    pub const NOT_FOUND: &str = "not-found";
-    /// No recognizer claims an explicit file.
-    pub const UNCLAIMED: &str = "unclaimed";
-    /// Two cases share an id.
-    pub const DUPLICATE_ID: &str = "duplicate-id";
-    /// A test file has no tests.
-    pub const NO_TESTS: &str = "no-tests";
-    /// A file needs refinement, but refinement is off (no refiner was
-    /// given).
-    pub const NOT_REFINED: &str = "not-refined";
-    /// Refinement failed.
-    pub const REFINE_FAILED: &str = "refine-failed";
-}
-
 /// A prepared recognizer and its adapter's name.
-pub type Prepared = (&'static str, Box<dyn Recognizer>);
+pub type Prepared = (AdapterName, Box<dyn Recognizer>);
 
 #[derive(Debug, Clone, Default)]
 pub struct Options {
@@ -304,7 +286,7 @@ pub(crate) struct Recognized {
     /// By recognizer, in priority order.
     by: Vec<(usize, Recognition)>,
     /// The content digest, when the cache needs it.
-    digest: Option<u128>,
+    digest: Option<ContentDigest>,
     /// By recognizer asking for refinement, why the file's refinement may
     /// depend on something the cache's key leaves out (`None`: it can't).
     /// Empty when the cache is off.
@@ -530,7 +512,7 @@ impl<'a> Collector<'a> {
         }
         let all = (0..self.recognizers.len()).fold(0, |all: Mask, i| all | 1 << i);
         for (abs, target) in self.normalize_targets(targets) {
-            let rel = tree::relative(&abs, self.project.root);
+            let rel = aye_fs::relative_through_root(&abs, self.project.root);
             let (code, message) = if abs.is_dir() {
                 if !tree.walk(&abs, all, tick) {
                     return false;
@@ -543,17 +525,17 @@ impl<'a> Collector<'a> {
                     continue;
                 }
                 (
-                    codes::UNCLAIMED,
+                    DiagnosticCode::Unclaimed,
                     "no adapter collects this file".to_string(),
                 )
             } else {
                 let message = format!("file or directory not found: {}", target.display());
-                (codes::NOT_FOUND, message)
+                (DiagnosticCode::NotFound, message)
             };
             tree.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                code: code.to_string(),
-                path: rel,
+                code,
+                path: DiagnosticPath::as_written(rel),
                 span: None,
                 message,
             });
@@ -570,11 +552,11 @@ impl<'a> Collector<'a> {
         let resolved: Vec<(PathBuf, &PathBuf)> = targets
             .iter()
             .map(|target| {
-                let abs = aye_config::absolute(self.project.cwd, target);
+                let abs = aye_fs::absolute(self.project.cwd, target);
                 let abs = if abs.starts_with(root) {
                     abs
                 } else {
-                    aye_config::relative_to(root, &abs).map_or(abs, |rel| root.join(rel))
+                    aye_fs::relative_to(root, &abs).map_or(abs, |rel| root.join(rel))
                 };
                 (abs, target)
             })
@@ -609,7 +591,7 @@ impl<'a> Collector<'a> {
         let mut roots: Vec<(PathBuf, Mask)> = Vec::new();
         for (i, (_, recognizer)) in self.recognizers.iter().enumerate() {
             for root in recognizer.roots(&self.project) {
-                let root = aye_config::absolute(self.project.cwd, &root);
+                let root = aye_fs::absolute(self.project.cwd, &root);
                 match roots.iter_mut().find(|(seen, _)| *seen == root) {
                     Some((_, mask)) => *mask |= 1 << i,
                     None => roots.push((root, 1 << i)),
@@ -664,7 +646,7 @@ impl<'a> Collector<'a> {
         }
         let refine = recognized.by.iter().any(|(_, r)| r.refine.is_some());
         if refine && self.caching() {
-            recognized.digest = Some(refine::digest(source.bytes()));
+            recognized.digest = Some(ContentDigest::of(source.bytes()));
             for (i, recognition) in &recognized.by {
                 if recognition.refine.is_none() {
                     continue;
@@ -672,7 +654,7 @@ impl<'a> Collector<'a> {
                 let why = if source.is_lossy() {
                     Some("it is not valid UTF-8".to_string())
                 } else {
-                    let scope = self.scope(self.recognizers[*i].0, seen);
+                    let scope = self.scope(self.recognizers[*i].0.as_str(), seen);
                     standalone::dependence(file.module, &entry.abs, &scope)
                 };
                 recognized.dependence.push((*i, why));
@@ -705,7 +687,7 @@ impl<'a> Collector<'a> {
         for stray in std::mem::take(&mut refinement.stray) {
             let mut rest = Vec::new();
             for case in stray.refined.cases {
-                match package_anchor(tree, &stray.requested, case.id.path()) {
+                match package_anchor(tree, &stray.requested, case.id.path().as_str()) {
                     Some(at) => anchored
                         .entry(at)
                         .or_default()
@@ -743,7 +725,7 @@ impl<'a> Collector<'a> {
                         recognition
                             .diagnostics
                             .into_iter()
-                            .filter(|d| d.severity != Severity::Error || d.path != *rel),
+                            .filter(|d| d.severity != Severity::Error || d.path != rel.as_str()),
                     );
                     notes.extend(result.diagnostics);
                     result.cases
@@ -762,45 +744,56 @@ impl<'a> Collector<'a> {
             // framework skipped or ignored it, a class it won't collect),
             // or a directory it is in (a conftest skipped it), has had its
             // explanation.
-            let quiet = notes.iter().all(|d| d.path != *rel)
-                && !explained.iter().any(|dir| within(rel, dir));
+            let quiet = notes.iter().all(|d| d.path != rel.as_str())
+                && !explained.iter().any(|dir| {
+                    rel.as_path()
+                        .starts_with_dir(ProjectPathRef::as_written(dir))
+                });
             if found.parsed
                 && quiet
                 && !fell_back
                 && !anchored.contains_key(&job.at)
                 && groups.iter().all(|(_, c)| c.is_empty())
-                && groups
-                    .iter()
-                    .any(|(i, _)| !claims_any_name(&mut probes, &self.recognizers[*i], *i, rel))
+                && groups.iter().any(|(i, _)| {
+                    !claims_any_name(&mut probes, &self.recognizers[*i], *i, rel.as_str())
+                })
             {
-                let names: Vec<&str> = groups.iter().map(|(i, _)| self.recognizers[*i].0).collect();
+                let names: Vec<&str> = groups
+                    .iter()
+                    .map(|(i, _)| self.recognizers[*i].0.as_str())
+                    .collect();
                 notes.push(Diagnostic {
                     severity: Severity::Info,
-                    code: codes::NO_TESTS.to_string(),
-                    path: tree.entries[job.at].rel.clone(),
+                    code: DiagnosticCode::NoTests,
+                    path: rel.clone().into(),
                     span: None,
                     message: format!("claimed for tests by {}, but has none", names.join(", ")),
                 });
             }
             files.push(Merged {
-                rel: rel.clone(),
+                rel: rel.as_str().to_owned(),
                 notes,
                 groups,
             });
         }
         for (anchor, cases) in anchored {
-            let package = &tree.entries[anchor].rel;
+            let package = tree.entries[anchor].rel.as_str();
             let package = &package[..package.len() - INIT.len()];
             // By file, in walk order; by recognizer within each.
             let mut by_file: BTreeMap<WalkKey, Vec<(usize, Vec<Case>)>> = BTreeMap::new();
             for (i, case) in cases {
-                let groups = by_file.entry(WalkKey::new(case.id.path())).or_default();
+                let groups = by_file
+                    .entry(WalkKey::new(case.id.path().as_str()))
+                    .or_default();
                 match groups.iter_mut().find(|(by, _)| *by == i) {
                     Some((_, group)) => group.push(case),
                     None => groups.push((i, vec![case])),
                 }
             }
-            let Some(start) = files.iter().position(|f| f.rel == tree.entries[anchor].rel) else {
+            let Some(start) = files
+                .iter()
+                .position(|f| f.rel == tree.entries[anchor].rel.as_str())
+            else {
                 continue;
             };
             for (key, groups) in by_file {
@@ -878,8 +871,8 @@ impl<'a> Collector<'a> {
         // The framework selects by id, so it runs them all (pytest does).
         Diagnostic {
             severity: Severity::Warning,
-            code: codes::DUPLICATE_ID.to_string(),
-            path: case.id.path().to_string(),
+            code: DiagnosticCode::DuplicateId,
+            path: DiagnosticPath::as_written(case.id.path().as_str()),
             span: case.span.clone(),
             message: format!(
                 "{} collects `{}` more than once; aye lists it once, \
@@ -902,18 +895,12 @@ fn package_anchor(tree: &Tree<'_>, requested: &[usize], path: &str) -> Option<us
     requested
         .iter()
         .filter_map(|&at| {
-            let package = tree.entries[at].rel.strip_suffix(INIT)?;
+            let package = tree.entries[at].rel.as_str().strip_suffix(INIT)?;
             let holds = (package.is_empty() || package.ends_with('/')) && path.starts_with(package);
             holds.then_some((package.len(), at))
         })
         .max_by_key(|(len, _)| *len)
         .map(|(_, at)| at)
-}
-
-/// Whether the file `rel` is `path`, or below the directory `path`.
-fn within(rel: &str, path: &str) -> bool {
-    rel.strip_prefix(path)
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
 /// A path's place in the walk ([`tree::walk_order`] at each level), with

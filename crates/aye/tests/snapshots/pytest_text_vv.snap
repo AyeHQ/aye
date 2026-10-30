@@ -1,0 +1,54 @@
+---
+source: crates/aye/tests/snapshots.rs
+info:
+  program: aye
+  args:
+    - "--python"
+    - "[PYTHON]"
+    - "-vv"
+  env:
+    COLUMNS: "120"
+    NO_COLOR: "1"
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+---
+success: true
+exit_code: 0
+----- stdout -----
+aye · pytest · python [VERSION] · 30 tests · 1 worker
+collected 30 tests (3 files imported) in [TIME]
+
+✓ passed  tests/test_cart.py::test_new_cart_is_empty  [TIME]
+✓ passed  tests/test_cart.py::test_add_and_remove  [TIME]
+✓ passed  tests/test_cart.py::test_cannot_add_more_than_in_stock  [TIME]
+✓ passed  tests/test_cart.py::TestTotals::test_subtotal  [TIME]
+✓ passed  tests/test_cart.py::TestTotals::test_coupon  [TIME]
+✓ passed  tests/test_cart.py::TestTotals::test_tax_applies_after_the_discount  [TIME]
+  expected failure tests/test_cart.py::TestTotals::test_coupons_stack  [TIME] — a cart takes one coupon; stacking isn't built yet
+✓ passed  tests/test_cart.py::test_print_receipt  [TIME]
+  skipped tests/test_cart.py::test_summary_after_coupon  [TIME] — fails on purpose: set AYE_EXAMPLE_FAIL=1 to see a failure
+✓ passed  tests/test_cart.py::TestCheckout::test_charges_the_total_and_takes_the_stock  [TIME]
+✓ passed  tests/test_cart.py::TestCheckout::test_declined_payment_can_be_retried  [TIME]
+✓ passed  tests/test_cart.py::TestCheckout::test_sold_out_items_are_not_charged  [TIME]
+✓ passed  tests/test_cart.py::TestCheckout::test_empty_cart  [TIME]
+  skipped tests/test_cart.py::TestCheckout::test_gift_card  [TIME] — gift cards aren't supported yet
+✓ passed  tests/test_discounts.py::test_amount_off[percent]  [TIME]
+✓ passed  tests/test_discounts.py::test_amount_off[percent-rounds-half-up]  [TIME]
+✓ passed  tests/test_discounts.py::test_amount_off[fixed-amount]  [TIME]
+✓ passed  tests/test_discounts.py::test_amount_off[below-minimum]  [TIME]
+✓ passed  tests/test_discounts.py::test_amount_off[code-ignores-case-and-spaces]  [TIME]
+✓ passed  tests/test_discounts.py::test_fixed_amount_never_exceeds_the_subtotal  [TIME]
+✓ passed  tests/test_discounts.py::test_unknown_coupon  [TIME]
+✓ passed  tests/test_discounts.py::test_staff_coupon  [TIME]
+✓ passed  tests/test_discounts.py::test_staff_coupon_ignores_case  [TIME]
+✓ passed  tests/test_inventory.py::test_take_reduces_stock  [TIME]
+✓ passed  tests/test_inventory.py::test_unknown_sku_has_no_stock  [TIME]
+✓ passed  tests/test_inventory.py::test_cannot_take_more_than_available  [TIME]
+✓ passed  tests/test_inventory.py::test_restock_needs_a_positive_quantity[zero]  [TIME]
+✓ passed  tests/test_inventory.py::test_restock_needs_a_positive_quantity[negative]  [TIME]
+✓ passed  tests/test_inventory.py::test_save_and_load  [TIME]
+✓ passed  tests/test_inventory.py::test_many_small_takes  [TIME]
+
+skipped  fails on purpose: set AYE_EXAMPLE_FAIL=1 to see a failure (1) · gift cards aren't supported yet (1)
+✓ 27 passed · 2 skipped · 1 expected failure   [TIME]
+
+----- stderr -----

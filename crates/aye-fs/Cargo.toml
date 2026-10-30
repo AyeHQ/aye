@@ -1,0 +1,16 @@
+[package]
+name = "aye-fs"
+description = "Paths and aye's state directory: lexical path algebra, relativizing, expansion, the .aye buckets and atomic writes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
