@@ -451,6 +451,21 @@ pub enum ImportMode {
     Importlib,
 }
 
+impl ImportMode {
+    /// The mode `choice` names: one of pytest's three choices, as it spells
+    /// them. `None` for any other text, which pytest's argparse refuses and
+    /// each reader takes its own way: the exact rules as `prepend`, the
+    /// doctest adapter's as a configuration error when it collects.
+    pub fn parse(choice: &str) -> Option<Self> {
+        match choice {
+            "prepend" => Some(Self::Prepend),
+            "append" => Some(Self::Append),
+            "importlib" => Some(Self::Importlib),
+            _ => None,
+        }
+    }
+}
+
 /// Python's `str()` of a TOML scalar, as `[tool.pytest.ini_options]`
 /// stringifies values.
 fn python_str(value: &toml::Value) -> String {
@@ -829,11 +844,11 @@ impl PytestConfig {
         let collect_in_virtualenv = args.iter().any(|a| a == "--collect-in-virtualenv");
         let pyargs = args.iter().any(|a| a == "--pyargs");
         let noconftest = args.iter().any(|a| a == "--noconftest");
-        let import_mode = match option_values(&args, "--import-mode", None).pop().as_deref() {
-            Some("append") => ImportMode::Append,
-            Some("importlib") => ImportMode::Importlib,
-            _ => ImportMode::Prepend,
-        };
+        let import_mode = option_values(&args, "--import-mode", None)
+            .pop()
+            .as_deref()
+            .and_then(ImportMode::parse)
+            .unwrap_or_default();
         let plugins: Vec<String> = option_values(&args, "-p", None)
             .into_iter()
             .map(|name| name.trim().to_string())
@@ -1096,6 +1111,30 @@ mod tests {
         ];
         let written = serde_json::to_string(&modes).unwrap();
         assert_eq!(written, r#"["prepend","append","importlib"]"#);
+    }
+
+    /// Each reader reads `--import-mode` by pytest's three choices, as the
+    /// native context writes them back; nothing else is one.
+    #[test]
+    fn import_modes_are_read_as_pytest_spells_them() {
+        for mode in [
+            ImportMode::Prepend,
+            ImportMode::Append,
+            ImportMode::Importlib,
+        ] {
+            let written = serde_json::to_value(mode).unwrap();
+            assert_eq!(ImportMode::parse(written.as_str().unwrap()), Some(mode));
+        }
+        for other in [
+            "",
+            "Prepend",
+            "IMPORTLIB",
+            " append",
+            "append ",
+            "import-lib",
+        ] {
+            assert_eq!(ImportMode::parse(other), None, "{other:?}");
+        }
     }
 
     fn write(root: &Path, rel: &str, body: &str) {

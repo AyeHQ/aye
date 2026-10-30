@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use aye_adapter::{FrameworkDefaults, JunitDefaults};
 use aye_events::IdPrefix;
 use aye_protocol::MaxFail;
+use aye_pytest::config::ImportMode;
 use aye_pytest::session::deselect_ids;
 use serde::Serialize;
 
@@ -28,7 +29,7 @@ pub(crate) struct DoctestContext {
     encoding: String,
     /// How pytest would import modules: `prepend`, `append` or
     /// `importlib`.
-    import_mode: &'static str,
+    import_mode: ImportMode,
     consider_namespace_packages: bool,
     /// The directories `pythonpath` puts first on `sys.path`, absolute.
     pythonpath: Vec<String>,
@@ -87,7 +88,7 @@ impl DoctestContext {
             inifile: config.inifile.as_deref().map(path),
             optionflags: config.optionflags.value.clone(),
             encoding: config.encoding.value.clone(),
-            import_mode: config.import_mode.as_str(),
+            import_mode: config.import_mode,
             consider_namespace_packages: config.consider_namespace_packages,
             pythonpath: config.pythonpath.iter().map(|dir| path(dir)).collect(),
             report: config.report.clone(),

@@ -5,10 +5,11 @@ use std::path::Path;
 
 use aye_adapter::{Recognition, SourceFile};
 use aye_events::{AffinityKey, Diagnostic, DiagnosticCode, Severity};
+use aye_pytest::config::ImportMode;
 use aye_pytest::pathlib::resolve_pkg_root_and_module_name;
 use aye_python_stdlib::fnmatch;
 
-use crate::{DoctestRecognizer, ImportMode, SETS, finder};
+use crate::{DoctestRecognizer, SETS, finder};
 
 /// Why a module with no doctest aye can see is refined.
 pub(crate) const NO_STATIC_DOCTESTS: &str =

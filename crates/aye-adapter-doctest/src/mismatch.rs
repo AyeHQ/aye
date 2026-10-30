@@ -5,9 +5,10 @@
 use std::path::{Path, PathBuf};
 
 use aye_adapter::Recognizer;
+use aye_pytest::config::ImportMode;
 use aye_pytest::conftest;
 
-use crate::{DoctestRecognizer, ImportMode};
+use crate::DoctestRecognizer;
 
 /// How far pytest's collection gets when [`Walk`] emulates it.
 enum Reached {

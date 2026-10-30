@@ -332,7 +332,7 @@ use aye_python_stdlib::fnmatch::SetTranslation;
 
 pub use aye_pytest::env::DoctestEnv;
 pub use recognizer::DoctestRecognizer;
-pub use settings::{DoctestConfig, ImportMode};
+pub use settings::DoctestConfig;
 
 /// The doctest adapter's executor module.
 pub const MODULE: ModuleSource = ModuleSource::embedded(

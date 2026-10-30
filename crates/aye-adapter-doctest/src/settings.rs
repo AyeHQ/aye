@@ -7,29 +7,12 @@ use std::path::{Path, PathBuf};
 
 use aye_adapter::{AdapterError, Project, Setting};
 use aye_config::{Sourced, ValueSource};
+use aye_pytest::config::ImportMode;
 use aye_pytest::config::approximate::ApproximateConfig;
 use aye_pytest::doctest;
 use aye_python_stdlib::os_path;
 
 use crate::options::aye_doctest;
-
-/// How pytest imports a module (`--import-mode`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImportMode {
-    Prepend,
-    Append,
-    Importlib,
-}
-
-impl ImportMode {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Prepend => "prepend",
-            Self::Append => "append",
-            Self::Importlib => "importlib",
-        }
-    }
-}
 
 /// The doctest adapter's resolved configuration.
 #[derive(Debug, Clone)]
@@ -210,15 +193,16 @@ impl DoctestConfig {
             )));
         }
         let import_mode = match import_mode.as_deref() {
-            None | Some("prepend") => ImportMode::Prepend,
-            Some("append") => ImportMode::Append,
-            Some("importlib") => ImportMode::Importlib,
-            Some(other) if active => {
-                return Err(AdapterError::Config(format!(
-                    "--import-mode: invalid choice {other:?} (choose from prepend, append, importlib)"
-                )));
-            }
-            Some(_) => ImportMode::Prepend,
+            None => ImportMode::Prepend,
+            Some(choice) => match ImportMode::parse(choice) {
+                Some(mode) => mode,
+                None if active => {
+                    return Err(AdapterError::Config(format!(
+                        "--import-mode: invalid choice {choice:?} (choose from prepend, append, importlib)"
+                    )));
+                }
+                None => ImportMode::Prepend,
+            },
         };
         Ok(Self {
             explicit_text,
