@@ -460,13 +460,13 @@
 //! engine's now; their modules say how.
 
 mod adapter;
+mod conftest;
 mod context;
 pub mod embedded;
 mod marks;
 mod module;
 mod options;
 mod recognizer;
-mod support;
 
 #[cfg(test)]
 mod tests;
@@ -501,10 +501,10 @@ pub use aye_pytest::argv::split_xdist;
 pub use aye_pytest::config::PytestConfig;
 pub use aye_pytest::env::PytestEnv;
 
+use crate::conftest::{Summary, Supports};
 use crate::context::PytestContext;
 use crate::marks::EmptyMark;
 use crate::marks::ids::IdOptions;
-use crate::support::{Summary, Supports};
 
 /// How pytest's patterns read `[...]` sets here (`python_files`,
 /// `python_classes`, `python_functions`, `norecursedirs`, the ignore globs,
@@ -573,7 +573,7 @@ pub struct PytestRecognizer {
 /// What walking the project once finds ([`PytestRecognizer::scan`]).
 #[derive(Debug, Default)]
 struct Scan {
-    /// [`support::GLOBAL_HOOKS`] implemented by any conftest of the project,
+    /// [`conftest::GLOBAL_HOOKS`] implemented by any conftest of the project,
     /// each with what implements it first (for messages).
     hooks: BTreeMap<String, String>,
     /// The summaries of test modules that load plugins (kept, since
@@ -585,7 +585,7 @@ struct Scan {
     /// (see [`PytestRecognizer::colliding`]).
     colliding: BTreeSet<String>,
     /// What implements a `pytest_collection_modifyitems` that may add
-    /// tests (its module makes items: [`support::Summary::makes_items`]),
+    /// tests (its module makes items: [`conftest::Summary::makes_items`]),
     /// the first found, for messages.
     adds_items: Option<String>,
 }
@@ -784,7 +784,7 @@ impl PytestRecognizer {
         Ok(recognizer)
     }
 
-    /// [`support::GLOBAL_HOOKS`] implemented by any conftest pytest may
+    /// [`conftest::GLOBAL_HOOKS`] implemented by any conftest pytest may
     /// load in this project (and the plugins they load, or test modules
     /// load through `pytest_plugins`, which hook every module collected
     /// after them), each with what implements it first, for messages.
@@ -885,7 +885,7 @@ impl PytestRecognizer {
                 for (i, expanded) in self.supports.expand(summary, &bases).iter().enumerate() {
                     let exports = self.supports.exports(expanded, &bases);
                     let source = if i == 0 { own } else { loaded };
-                    for hook in support::GLOBAL_HOOKS {
+                    for hook in conftest::GLOBAL_HOOKS {
                         if exports.hooks.contains(hook) {
                             scan.hooks
                                 .entry(hook.to_string())
@@ -1358,7 +1358,7 @@ impl PytestRecognizer {
         let Some(parent) = path.parent() else {
             return Ignored::No;
         };
-        let nearest = |pick: fn(&Summary) -> Option<&support::IgnoreList>| {
+        let nearest = |pick: fn(&Summary) -> Option<&conftest::IgnoreList>| {
             parent
                 .ancestors()
                 .filter(|dir| in_confcutdir(&self.config.confcutdir, dir))
@@ -1726,7 +1726,7 @@ impl Recognizer for PytestRecognizer {
         let own = Summary::of_test_module(dir, file.source, file.module, &namespace);
         // Only names the module may request as fixtures are followed, and
         // those the fixtures found request in turn.
-        let mut requested = support::requested_names(file.module);
+        let mut requested = conftest::requested_names(file.module);
         let exports = loop {
             let exports = self
                 .supports

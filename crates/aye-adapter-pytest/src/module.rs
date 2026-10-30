@@ -21,11 +21,11 @@ use aye_python_semantic::resolve::{Lookup, Resolved};
 use aye_python_stdlib::fnmatch::matches_prefix_or_glob;
 use aye_python_stdlib::unittest::{KNOWN_BASES, RUNTEST_BASES, TESTCASE_ROOTS};
 
-use crate::marks::ids::{IdOptions, parameterset_ids};
-use crate::marks::{self, Decorator, EmptyMark, Mark, MarkList, Scoped, SetTimeout, decorator};
-use crate::support::{
+use crate::conftest::{
     BUILTIN_FIXTURES, FixtureDef, MARKING_HOOKS, REFINING_HOOKS, default_argnames, fixture_of,
 };
+use crate::marks::ids::{IdOptions, parameterset_ids};
+use crate::marks::{self, Decorator, EmptyMark, Mark, MarkList, Scoped, SetTimeout, decorator};
 use crate::{PYTEST, SETS};
 
 /// The configuration recognition depends on.
@@ -49,7 +49,7 @@ pub(crate) struct Settings {
 pub(crate) struct Scope {
     /// Hooks of the conftests in scope (and the plugins they load).
     pub hooks: BTreeSet<String>,
-    /// [`GLOBAL_HOOKS`](crate::support::GLOBAL_HOOKS) implemented by any
+    /// [`GLOBAL_HOOKS`](crate::conftest::GLOBAL_HOOKS) implemented by any
     /// conftest of the project: pytest applies them to every test of the
     /// session once that conftest is loaded.
     pub global_hooks: BTreeSet<String>,
@@ -2236,7 +2236,9 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
         // business; arguments parametrize does not cover are errors.
         if runtime.is_none() {
             let args = match callable {
-                Callable::Def(def) => crate::support::funcargnames(def, is_method && !staticmethod),
+                Callable::Def(def) => {
+                    crate::conftest::funcargnames(def, is_method && !staticmethod)
+                }
                 Callable::Lambda(lambda, _) => lambda_args(lambda, is_method),
             };
             let defaults = match callable {
