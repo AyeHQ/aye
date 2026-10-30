@@ -13,7 +13,7 @@ fn strings(args: &[&str]) -> Vec<String> {
 
 #[test]
 fn doctest_options_are_lifted_out() {
-    let (kept, lifted) = config::split_doctest(&strings(&[
+    let (kept, lifted) = aye_pytest::argv::split_doctest(&strings(&[
         "-ra",
         "--doctest-modules",
         "--doctest-glob=*.rst",
@@ -43,7 +43,8 @@ fn doctest_options_are_lifted_out() {
     );
     // A valued option missing its value is pytest's to reject; pytest takes
     // no abbreviations.
-    let (kept, _) = config::split_doctest(&strings(&["--doctest-glob", "-v", "--doctest-mod"]));
+    let (kept, _) =
+        aye_pytest::argv::split_doctest(&strings(&["--doctest-glob", "-v", "--doctest-mod"]));
     assert_eq!(kept, strings(&["--doctest-glob", "-v", "--doctest-mod"]));
 }
 

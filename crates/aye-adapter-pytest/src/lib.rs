@@ -493,7 +493,8 @@ use aye_python_stdlib::identifier::is_identifier;
 use aye_python_stdlib::os_path::normalize_absolute;
 use aye_python_stdlib::unittest;
 
-pub use aye_pytest::config::{PytestConfig, split_xdist};
+pub use aye_pytest::argv::split_xdist;
+pub use aye_pytest::config::PytestConfig;
 pub use aye_pytest::env::PytestEnv;
 pub use native::{NAME, Pytest};
 
