@@ -7,8 +7,11 @@ use aye_static::{EnvVars, ProcessEnv};
 
 /// The environment aye started in, read once, at the start, and handed
 /// down: the variables the binary reads by name, and the whole of it
-/// (`vars`), for what reads any variable: the adapters (`Project.env`) and
-/// the paths variables are expanded in (`--junitxml`).
+/// (`vars`), for what reads any variable: the adapters (`Project.env`), the
+/// paths variables are expanded in (`--junitxml`) and the refinement
+/// cache's key, which holds the environment workers inherit
+/// (`aye_provision::EnvironmentFingerprint`). Nothing sets a variable in
+/// aye's own process, so that is still the environment they inherit.
 #[derive(Debug, Clone)]
 pub(crate) struct EnvironmentOptions {
     /// `$AYE_PYTHON`: the interpreter, unless `--python` names one. Empty

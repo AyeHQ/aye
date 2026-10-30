@@ -11,6 +11,8 @@ authors.workspace = true
 
 [dependencies]
 aye-events = { workspace = true }
+aye-fs = { workspace = true }
+aye-static = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

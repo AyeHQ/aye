@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use aye_adapter::{Adapter, FrameworkDefaults, Project};
-use aye_collect::{Collector, Environment, Options, Prepared};
+use aye_collect::{Collector, Options, Prepared};
 use aye_config::{AyeSettings, OutputFormat, WorkerCount};
 use aye_events::{
     AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event,
@@ -21,7 +21,9 @@ use aye_events::{
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter, StoredRunId};
 use aye_protocol::{MaxFail, Policy, Refiner};
-use aye_provision::{DiscoveryEnv, Interpreter, PythonRequest, PythonSource, RequestSource};
+use aye_provision::{
+    DiscoveryEnv, EnvironmentFingerprint, Interpreter, PythonRequest, PythonSource, RequestSource,
+};
 use aye_render::{
     ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
     JunitOptions, Reporter, Tally, Tee, Text, TextOptions,
@@ -352,8 +354,9 @@ impl Session {
         };
         // The refinement cache is keyed on what refining depends on: the
         // interpreter and its packages, the arguments after `--`, and the
-        // environment workers inherit (aye's own; `PYTEST_XDIST_TESTRUNUID`
-        // changes every run and refinement has no use for it).
+        // environment workers inherit (aye's own, as it read it; the
+        // `PYTEST_XDIST_TESTRUNUID` the runner adds changes every run and
+        // refinement has no use for it).
         let collector = Collector::new(
             project,
             &self.prepared,
@@ -363,10 +366,10 @@ impl Session {
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
         )
-        .with_environment(Environment {
-            interpreter: Some(self.interpreter.executable.clone()),
+        .with_environment(EnvironmentFingerprint {
+            interpreter: self.interpreter.executable.clone(),
             framework_args: self.args.passthrough.clone(),
-            variables: None,
+            variables: self.env.vars.clone(),
         })
         .with_stop(Arc::clone(&interrupted));
         let targets: Vec<PathBuf> = if self.only_paths {

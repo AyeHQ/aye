@@ -12,8 +12,9 @@
 //! Depends on: aye-adapter (the recognizers it drives, and Ruff's syntax
 //! tree), aye-events, aye-fs (paths, and marking the state directory),
 //! aye-protocol (refinement's messages and the `Refiner` it asks),
-//! aye-static (the variables it reads by name). Must not depend on any
-//! `aye-adapter-*`.
+//! aye-provision (the environment's fingerprint, which the cache's key
+//! holds: collection reads the interpreter only through it). Must not
+//! depend on any `aye-adapter-*`.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **Stopping and progress.** [`Collector::with_stop`] takes a flag the
@@ -100,13 +101,6 @@
 //!   already reported about (a module the framework skipped or ignores, a
 //!   class it won't collect) or, in refinement, about a directory it is
 //!   in (a conftest that skipped the directory), which says why already.
-//! - **Whether the interpreter installs a module** ([`Environment::installs`],
-//!   which the binary asks about pytest to choose the default adapters) is
-//!   read from its `site-packages`, as for the cache's key: `None` when they
-//!   can't be found, and only the venv's own when its `pyvenv.cfg` leaves
-//!   out the system's packages (`include-system-site-packages = false`, the
-//!   default). An installation's own directory is a prefix too, as
-//!   Windows' `python.exe` sits beside `Lib`.
 //! - **Refinement** sends one request per adapter, with all its flagged files
 //!   and its recognizer's `context()`. Refined cases replace that adapter's
 //!   static cases for the file; other adapters' cases stay. The refined
@@ -129,9 +123,10 @@
 //!   It must never answer differently from a fresh import, since a stale
 //!   answer drops tests pytest would run, so it caches only what its key
 //!   covers. The key is a 128-bit FNV-1a hash of the cache's format, aye's
-//!   version, the project root and cwd, the [`Environment`] (the interpreter
-//!   and its installed packages, the environment variables but a few shell
-//!   ones, its framework arguments), the project's `framework_args` (the
+//!   version, the project root and cwd, the environment's digest
+//!   (`aye_provision::EnvironmentFingerprint`: the interpreter and its
+//!   installed packages, the environment variables but a few shell ones,
+//!   its framework arguments), the project's `framework_args` (the
 //!   arguments after `--`, which adapters pass to refinement in their
 //!   context), the adapter's name, its recognizer's `context()` (with the
 //!   content of every existing file the context names, such as pytest's
@@ -187,15 +182,14 @@ use aye_events::{
     Severity, TestId,
 };
 use aye_protocol::Refiner;
+use aye_provision::{EnvironmentFingerprint, InstalledModules};
 
-mod environment;
 mod parallel;
 mod refine;
 mod source;
 mod standalone;
 mod tree;
 
-pub use environment::Environment;
 use refine::Refinement;
 use source::Source;
 use standalone::Scope;
@@ -209,7 +203,7 @@ pub struct Options {
     /// Report every warning as an error.
     pub strict: bool,
     /// Where refinement results are cached. `None` turns the cache off, and
-    /// so does an [`Environment`] without an interpreter (see
+    /// so does a collector without an environment (see
     /// [`Collector::with_environment`]).
     pub cache_dir: Option<PathBuf>,
     /// aye's version, part of every cache key.
@@ -256,10 +250,12 @@ pub struct Collector<'a> {
     project: Project<'a>,
     recognizers: &'a [Prepared],
     options: Options,
-    environment: Environment,
+    /// What refinement depends on outside the project's files; without
+    /// it, no cache.
+    environment: Option<EnvironmentFingerprint>,
     /// The environment's installed modules, listed when the cache first
     /// needs them.
-    installed: OnceLock<HashSet<String>>,
+    installed: OnceLock<InstalledModules>,
     /// Set from another thread (Ctrl-C) to stop collection.
     stop: Option<Arc<AtomicBool>>,
 }
@@ -321,7 +317,7 @@ impl<'a> Collector<'a> {
             project,
             recognizers,
             options,
-            environment: Environment::default(),
+            environment: None,
             installed: OnceLock::new(),
             stop: None,
         }
@@ -345,17 +341,19 @@ impl<'a> Collector<'a> {
 
     /// What refinement depends on outside the project's files: the
     /// interpreter workers run, the framework's arguments and the
-    /// environment variables. Without an interpreter, the default, the
-    /// refinement cache is neither read nor written.
+    /// environment variables, as the cache's key holds them. Without one,
+    /// the default, the refinement cache is neither read nor written.
     #[must_use]
-    pub fn with_environment(mut self, environment: Environment) -> Self {
-        self.environment = environment;
+    pub fn with_environment(mut self, environment: EnvironmentFingerprint) -> Self {
+        self.environment = Some(environment);
         self
     }
 
-    /// Whether the refinement cache may be used at all.
-    fn caching(&self) -> bool {
-        self.options.cache_dir.is_some() && self.environment.interpreter.is_some()
+    /// The environment, when the refinement cache may be used at all.
+    fn caching(&self) -> Option<&EnvironmentFingerprint> {
+        self.environment
+            .as_ref()
+            .filter(|_| self.options.cache_dir.is_some())
     }
 
     fn scope<'s>(
@@ -369,11 +367,9 @@ impl<'a> Collector<'a> {
             framework,
             seen,
             installed: self.installed.get_or_init(|| {
-                if self.caching() {
-                    self.environment.installed_modules(self.project.cwd)
-                } else {
-                    HashSet::new()
-                }
+                self.caching()
+                    .map(|environment| environment.installed_modules(self.project.cwd))
+                    .unwrap_or_default()
             }),
         }
     }
@@ -650,7 +646,7 @@ impl<'a> Collector<'a> {
             recognized.by.push((*i, recognition));
         }
         let refine = recognized.by.iter().any(|(_, r)| r.refine.is_some());
-        if refine && self.caching() {
+        if refine && self.caching().is_some() {
             recognized.digest = Some(ContentDigest::of(source.bytes()));
             for (i, recognition) in &recognized.by {
                 if recognition.refine.is_none() {

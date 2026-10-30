@@ -93,7 +93,8 @@ impl Default for Fnv128 {
 /// The digest of a file's content: its [`Fnv128`] hash. A stored run keeps
 /// one for each of its files (`RunMeta.files`), and `aye show` says a file
 /// changed since when its digest differs; the refinement cache's key holds
-/// the digests of the file and its support files.
+/// the digests of the file and its support files, and of the environment
+/// refinement runs in, which is hashed in parts (`From<Fnv128>`).
 ///
 /// It prints and serializes as 32 lower-case hex digits, and reads 32 hex
 /// digits in either case. Any other text is not a digest: aye has always
@@ -112,6 +113,13 @@ impl ContentDigest {
     /// Its 16 bytes, little-endian, as a key that holds it hashes them.
     pub const fn to_le_bytes(self) -> [u8; 16] {
         self.0.to_le_bytes()
+    }
+}
+
+/// What a hash was given, in parts or not.
+impl From<Fnv128> for ContentDigest {
+    fn from(hash: Fnv128) -> Self {
+        Self(hash.finish())
     }
 }
 

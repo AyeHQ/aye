@@ -239,6 +239,7 @@ dependencies = [
  "aye-events",
  "aye-fs",
  "aye-protocol",
+ "aye-provision",
  "aye-static",
  "ruff_python_parser",
  "serde_json",
@@ -315,6 +316,8 @@ name = "aye-provision"
 version = "0.0.1"
 dependencies = [
  "aye-events",
+ "aye-fs",
+ "aye-static",
  "tempfile",
  "thiserror",
 ]

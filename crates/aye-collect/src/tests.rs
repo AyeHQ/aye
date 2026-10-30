@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use aye_adapter::{Claim, Ranged, Requested, Setting, ast};
 use aye_events::{Certainty, DiagnosticCode, ProjectPath};
 use aye_protocol::{AdapterContext, RefineError, RefineRequest, Refined};
+use aye_static::ProcessEnv;
 
 use super::*;
 
@@ -250,11 +251,11 @@ fn interpreter(dir: &Path) -> PathBuf {
 }
 
 /// `python` with no environment variables and no framework arguments.
-fn environment(python: &Path) -> Environment {
-    Environment {
-        interpreter: Some(python.to_path_buf()),
+fn environment(python: &Path) -> EnvironmentFingerprint {
+    EnvironmentFingerprint {
+        interpreter: python.to_path_buf(),
         framework_args: Vec::new(),
-        variables: Some(Vec::new()),
+        variables: ProcessEnv::new(),
     }
 }
 
@@ -263,7 +264,7 @@ fn run_cached(
     root: &Path,
     recognizers: &[Prepared],
     cache: &Path,
-    environment: Environment,
+    environment: EnvironmentFingerprint,
     refiner: Option<&(dyn Refiner + Sync)>,
 ) -> Collection {
     run_cached_with(root, recognizers, cache, environment, refiner, &[])
@@ -275,7 +276,7 @@ fn run_cached_with(
     root: &Path,
     recognizers: &[Prepared],
     cache: &Path,
-    environment: Environment,
+    environment: EnvironmentFingerprint,
     refiner: Option<&(dyn Refiner + Sync)>,
     framework_args: &[String],
 ) -> Collection {
@@ -1572,17 +1573,12 @@ fn the_interpreter_and_the_environment_are_in_the_key() {
     let python = interpreter(cache.path());
     write(root, "d_check.py", "def dynamic(): pass\n");
     let refiner = FakeRefiner::default();
-    let calls = |environment: Environment| {
+    let calls = |environment: EnvironmentFingerprint| {
         run_cached(root, &fake(), cache.path(), environment, Some(&refiner));
         std::mem::take(&mut *refiner.requests.lock().unwrap()).len()
     };
-    let with = |variables: &[(&str, &str)], args: &[&str]| Environment {
-        variables: Some(
-            variables
-                .iter()
-                .map(|(k, v)| ((*k).into(), (*v).into()))
-                .collect(),
-        ),
+    let with = |variables: &[(&str, &str)], args: &[&str]| EnvironmentFingerprint {
+        variables: ProcessEnv::from_vars(variables.iter().copied()),
         framework_args: args.iter().map(|a| (*a).to_string()).collect(),
         ..environment(&python)
     };
@@ -1929,9 +1925,10 @@ fn what_makes_a_file_not_standalone() {
     write(root, "tests/conftest.py", "");
     write(root, "src/mypkg/__init__.py", "");
     let seen = Mutex::new(HashMap::new());
-    let installed: HashSet<String> = ["extmod", "numpy", "installed_plugin", "pytest", "_pytest"]
+    let installed: InstalledModules = ["extmod", "numpy", "installed_plugin", "pytest", "_pytest"]
         .map(String::from)
-        .into();
+        .into_iter()
+        .collect();
     let scope = standalone::Scope {
         root,
         cwd: root,
@@ -2052,9 +2049,10 @@ fn what_loads_a_module_by_name() {
     let root = dir.path();
     write(root, "src/mypkg/__init__.py", "");
     let seen = Mutex::new(HashMap::new());
-    let installed: HashSet<String> = ["extmod", "installed_plugin", "pytest", "_pytest"]
+    let installed: InstalledModules = ["extmod", "installed_plugin", "pytest", "_pytest"]
         .map(String::from)
-        .into();
+        .into_iter()
+        .collect();
     let scope = standalone::Scope {
         root,
         cwd: root,
@@ -2176,10 +2174,7 @@ fn code_named_by_string_outside_the_project_is_never_cached() {
         );
         write(dir.path(), "onpath/onpath.py", "");
         let mut env = environment(&python);
-        env.variables = Some(vec![(
-            "PYTHONPATH".into(),
-            dir.path().join("onpath").into_os_string(),
-        )]);
+        env.variables = ProcessEnv::from_vars([("PYTHONPATH", dir.path().join("onpath"))]);
         write(&root, "d_check.py", source);
         if !helpers.is_empty() {
             write(&root, "helpers.py", helpers);
@@ -2191,234 +2186,6 @@ fn code_named_by_string_outside_the_project_is_never_cached() {
         assert_eq!(entries(cache.path()), usize::from(*cached), "{what}");
         assert_eq!(refiner.calls(), if *cached { 1 } else { 2 }, "{what}");
     }
-}
-
-/// The environment's digest, which the refinement cache's key holds,
-/// pinned to what it hashes, each an FNV-1a 128 part: the interpreter (its
-/// path, the file it resolves to, that file's size and time), its venv's
-/// `pyvenv.cfg` and its content, each `site-packages` directory with its
-/// entries in order (and a `.pth` file's content after its name), then the
-/// variables but the shell's, sorted, then the framework's arguments.
-/// Entries an earlier aye wrote keep answering only while it hashes the
-/// same. `#[cfg(unix)]`: there a temporary directory has one spelling once
-/// resolved, so the venv is found once.
-#[cfg(unix)]
-#[test]
-fn the_environments_digest_is_pinned() {
-    use std::time::{Duration, UNIX_EPOCH};
-
-    use aye_events::Fnv128;
-
-    let dir = tempfile::tempdir().unwrap();
-    // As the interpreter resolves to itself: no second spelling of the venv.
-    let root = fs::canonicalize(dir.path()).unwrap();
-    let python = interpreter(&root);
-    let site = root.join("venv/lib/python3.13/site-packages");
-    write(&site, "b.pth", "/src\n");
-    write(&site, "a/__init__.py", "");
-    let modified = Duration::from_secs(1_700_000_000);
-    fs::File::options()
-        .write(true)
-        .open(&python)
-        .unwrap()
-        .set_modified(UNIX_EPOCH + modified)
-        .unwrap();
-    let environment = Environment {
-        framework_args: vec!["-x".into(), "--lf".into()],
-        variables: Some(
-            [("B", "2"), ("SHLVL", "3"), ("A", "1"), ("PWD", "/x")]
-                .into_iter()
-                .map(|(name, value)| (name.into(), value.into()))
-                .collect(),
-        ),
-        ..environment(&python)
-    };
-
-    let mut hash = Fnv128::new();
-    hash.part(b"interpreter");
-    hash.part(python.as_os_str().as_encoded_bytes());
-    hash.part(python.as_os_str().as_encoded_bytes());
-    hash.part(&0u64.to_le_bytes());
-    hash.part(&modified.as_nanos().to_le_bytes());
-    hash.part(root.join("venv/pyvenv.cfg").as_os_str().as_encoded_bytes());
-    hash.part(b"home = /usr/bin\n");
-    hash.part(site.as_os_str().as_encoded_bytes());
-    hash.part(b"a");
-    hash.part(b"b.pth");
-    hash.part(b"/src\n");
-    hash.part(b"variables");
-    for part in ["A", "1", "B", "2"] {
-        hash.part(part.as_bytes());
-    }
-    hash.part(b"framework args");
-    hash.part(b"-x");
-    hash.part(b"--lf");
-    assert_eq!(environment.digest(&root), Some(hash.finish()));
-    // A relative interpreter is the cwd's.
-    let relative = Environment {
-        interpreter: Some(PathBuf::from("venv/bin/python")),
-        ..environment.clone()
-    };
-    assert_eq!(relative.digest(&root), Some(hash.finish()));
-}
-
-#[test]
-fn installed_modules_are_listed_from_the_interpreters_paths() {
-    let dir = tempfile::tempdir().unwrap();
-    let python = interpreter(dir.path());
-    let site = dir.path().join("venv/lib/python3.13/site-packages");
-    for entry in [
-        "pkg/__init__.py",
-        "single.py",
-        "ext.cpython-313-darwin.so",
-        "winext.pyd",
-        "Some_Dist-1.0.dist-info/top_level.txt",
-        "old.egg-info/top_level.txt",
-        "notes.txt",
-    ] {
-        write(&site, entry, "");
-    }
-    write(&site, "Some_Dist-1.0.dist-info/top_level.txt", "toplevel\n");
-    write(&site, "old.egg-info/top_level.txt", "oldmod\n");
-    write(dir.path(), "elsewhere/viapth/__init__.py", "");
-    write(dir.path(), "relative/relmod.py", "");
-    write(
-        &site,
-        "paths.pth",
-        format!(
-            "# a comment\n{}\n../../../../relative\nimport hook; hook.install()\n",
-            dir.path().join("elsewhere").display()
-        ),
-    );
-    write(dir.path(), "pp/onpath.py", "");
-    let mut env = environment(&python);
-    env.variables = Some(vec![(
-        "PYTHONPATH".into(),
-        dir.path().join("pp").into_os_string(),
-    )]);
-    let names = env.installed_modules(dir.path());
-    for name in [
-        "pkg",
-        "single",
-        "ext",
-        "winext",
-        "Some_Dist",
-        "some_dist",
-        "toplevel",
-        "old",
-        "oldmod",
-        "viapth",
-        "relmod",
-        "onpath",
-    ] {
-        assert!(names.contains(name), "{name}: {names:?}");
-    }
-    for name in ["notes", "paths", "hook", "1"] {
-        assert!(!names.contains(name), "{name}: {names:?}");
-    }
-    assert!(
-        Environment::default()
-            .installed_modules(dir.path())
-            .is_empty()
-    );
-}
-
-/// Whether the interpreter installs a module (pytest, for the default
-/// adapters): `None` when its packages can't be found, and a venv that
-/// leaves out the system's packages counts only its own.
-#[test]
-fn whether_the_interpreter_installs_a_module() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    // The base interpreter, with pytest.
-    write(root, "base/bin/python3", "");
-    write(
-        root,
-        "base/lib/python3.13/site-packages/_pytest/__init__.py",
-        "",
-    );
-    write(
-        root,
-        "base/lib/python3.13/site-packages/pytest-9.1.1.dist-info/METADATA",
-        "",
-    );
-    let base = Environment {
-        interpreter: Some(root.join("base/bin/python3")),
-        ..Environment::default()
-    };
-    assert_eq!(base.installs(root, &["pytest"]), Some(true));
-    assert_eq!(base.installs(root, &["_pytest"]), Some(true));
-    assert_eq!(base.installs(root, &["nose"]), Some(false));
-
-    // A venv of it, as `python -m venv` makes one: the interpreter a link to
-    // the base's.
-    write(
-        root,
-        "venv/pyvenv.cfg",
-        format!("home = {}\n", root.join("base/bin").display()),
-    );
-    fs::create_dir_all(root.join("venv/lib/python3.13/site-packages")).unwrap();
-    fs::create_dir_all(root.join("venv/bin")).unwrap();
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(root.join("base/bin/python3"), root.join("venv/bin/python"))
-        .unwrap();
-    #[cfg(not(unix))]
-    write(root, "venv/bin/python", "");
-    let venv = Environment {
-        interpreter: Some(root.join("venv/bin/python")),
-        ..Environment::default()
-    };
-    assert_eq!(venv.installs(root, &["pytest", "_pytest"]), Some(false));
-    write(
-        root,
-        "venv/lib/python3.13/site-packages/pytest/__init__.py",
-        "",
-    );
-    assert_eq!(venv.installs(root, &["pytest", "_pytest"]), Some(true));
-    fs::remove_dir_all(root.join("venv/lib/python3.13/site-packages/pytest")).unwrap();
-    // One that includes the system's packages sees the base's.
-    write(
-        root,
-        "venv/pyvenv.cfg",
-        format!(
-            "home = {}\ninclude-system-site-packages = true\n",
-            root.join("base/bin").display()
-        ),
-    );
-    #[cfg(unix)]
-    assert_eq!(venv.installs(root, &["pytest", "_pytest"]), Some(true));
-
-    // Windows: `Scripts\python.exe` in a venv, `python.exe` beside `Lib` in
-    // an installation.
-    write(root, "win/python.exe", "");
-    write(root, "win/Lib/site-packages/pytest/__init__.py", "");
-    let windows = Environment {
-        interpreter: Some(root.join("win/python.exe")),
-        ..Environment::default()
-    };
-    assert_eq!(windows.installs(root, &["pytest"]), Some(true));
-    write(root, "winvenv/pyvenv.cfg", "home = C:\\Python313\n");
-    write(root, "winvenv/Scripts/python.exe", "");
-    fs::create_dir_all(root.join("winvenv/Lib/site-packages")).unwrap();
-    let windows = Environment {
-        interpreter: Some(root.join("winvenv/Scripts/python.exe")),
-        ..Environment::default()
-    };
-    assert_eq!(windows.installs(root, &["pytest"]), Some(false));
-
-    // Can't tell: no interpreter, a missing one, a shim with no packages.
-    assert_eq!(Environment::default().installs(root, &["pytest"]), None);
-    let missing = Environment {
-        interpreter: Some(root.join("nope/bin/python")),
-        ..Environment::default()
-    };
-    assert_eq!(missing.installs(root, &["pytest"]), None);
-    write(root, "shims/python", "#!/bin/sh\n");
-    let shim = Environment {
-        interpreter: Some(root.join("shims/python")),
-        ..Environment::default()
-    };
-    assert_eq!(shim.installs(root, &["pytest"]), None);
 }
 
 #[test]
@@ -2512,7 +2279,7 @@ fn a_plugin_in_the_context_or_arguments_turns_the_cache_off() {
         );
         assert_eq!(entries(cache.path()), 0);
     }
-    let args = Environment {
+    let args = EnvironmentFingerprint {
         framework_args: vec!["-p".into(), "myplugins.params".into()],
         ..environment(&python)
     };
@@ -2529,7 +2296,7 @@ fn a_plugin_in_the_context_or_arguments_turns_the_cache_off() {
         Some(&refiner),
     );
     assert_eq!(entries(cache.path()), 0);
-    let args = Environment {
+    let args = EnvironmentFingerprint {
         framework_args: vec!["-p".into(), "extmod".into()],
         ..environment(&python)
     };

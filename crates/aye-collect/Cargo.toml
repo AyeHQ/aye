@@ -14,13 +14,14 @@ aye-adapter = { workspace = true }
 aye-events = { workspace = true }
 aye-fs = { workspace = true }
 aye-protocol = { workspace = true }
-aye-static = { workspace = true }
+aye-provision = { workspace = true }
 ruff_python_parser = { workspace = true }
 serde_json = { workspace = true }
 walkdir = { workspace = true }
 
 [dev-dependencies]
 aye-config = { workspace = true }
+aye-static = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

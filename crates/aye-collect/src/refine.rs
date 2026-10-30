@@ -54,7 +54,7 @@ impl Collector<'_> {
         let mut out = Refinement::default();
         let mut digests: HashMap<usize, ContentDigest> = HashMap::new();
         // Computed once, when a file first needs it.
-        let mut environment: Option<Option<u128>> = None;
+        let mut environment: Option<Option<ContentDigest>> = None;
         // By support file and recognizer: whether it is standalone.
         let mut supports_standalone: HashMap<(usize, usize), bool> = HashMap::new();
         // By package `__init__.py` and recognizer: its digest when standalone.
@@ -75,8 +75,7 @@ impl Collector<'_> {
             let scope = self.scope(adapter.as_str(), seen);
             let environment = *environment.get_or_insert_with(|| {
                 self.caching()
-                    .then(|| self.environment.digest(self.project.cwd))
-                    .flatten()
+                    .and_then(|environment| environment.digest(self.project.cwd))
             });
             let cache = match (self.options.cache_dir.as_deref(), environment) {
                 (Some(dir), Some(environment))
@@ -446,7 +445,12 @@ impl Collector<'_> {
         let texts = strings
             .into_iter()
             .chain(self.project.framework_args.iter().map(String::as_str))
-            .chain(self.environment.framework_args.iter().map(String::as_str));
+            .chain(
+                self.environment
+                    .iter()
+                    .flat_map(|environment| &environment.framework_args)
+                    .map(String::as_str),
+            );
         standalone::loads_by_name(texts, scope).is_some()
     }
 }
