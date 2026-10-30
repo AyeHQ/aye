@@ -31,7 +31,7 @@ pub(crate) struct Assigned {
     /// which the adapter must not run again (see `run.rs`).
     pub ran: Vec<TestId>,
     /// The only lane that may run it: the first, for the tests of files
-    /// another lane lists otherwise ([`Queue::pin`]).
+    /// another lane lists otherwise ([`Queue::pin`](super::Queue::pin)).
     pub lane: Option<WorkerIndex>,
     /// Holds a test to run first.
     pub(super) priority: bool,

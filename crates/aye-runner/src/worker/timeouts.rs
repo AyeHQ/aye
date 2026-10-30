@@ -26,3 +26,9 @@ pub(crate) const EXIT_POLL: Duration = Duration::from_millis(100);
 /// which may be forever. Generous, so that a reader thread starved of CPU
 /// doesn't lose the worker's last lines.
 pub(crate) const DRAIN: Duration = Duration::from_secs(1);
+/// How often a run checks its [`StopHandle`](crate::StopHandle) while nothing else happens.
+pub(crate) const POLL: Duration = Duration::from_millis(50);
+/// How long a worker interrupted when `maxfail` ran out may take to end its
+/// batch, tearing down, before it is killed: pytest-xdist gives its workers
+/// as long to stop.
+pub(crate) const INTERRUPT_GRACE: Duration = Duration::from_secs(10);

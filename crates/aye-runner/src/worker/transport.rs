@@ -114,6 +114,18 @@ pub(crate) fn is_reply(line: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(line).is_ok_and(|value| value.get("reply").is_some())
 }
 
+pub(crate) fn shorten(line: &str) -> String {
+    const MAX: usize = 500;
+    if line.len() <= MAX {
+        return line.to_string();
+    }
+    let mut end = MAX;
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &line[..end])
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc;
@@ -158,5 +170,13 @@ mod tests {
         assert!(is_reply(r#"{"reply":"batch_done","batch":"x"}"#));
         assert!(!is_reply(r#"{"event":"test_finished"}"#));
         assert!(!is_reply("reply"));
+    }
+
+    #[test]
+    fn long_lines_are_shortened_on_a_char_boundary() {
+        let line = "é".repeat(400);
+        let short = shorten(&line);
+        assert!(short.ends_with('…') && short.len() <= 503);
+        assert_eq!(shorten("short"), "short");
     }
 }

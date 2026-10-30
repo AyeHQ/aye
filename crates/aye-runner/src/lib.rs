@@ -223,7 +223,9 @@
 //!   its lane (a crashed one's) gets a new worker.
 
 mod env;
+mod listing;
 mod options;
+mod refine;
 mod run;
 mod schedule;
 mod stop;

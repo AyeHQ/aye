@@ -43,8 +43,8 @@ pub use process::Killer;
 pub(crate) use process::{Proc, kill_groups};
 pub use spec::WorkerSpec;
 pub use stderr::Echo;
-pub(crate) use transport::is_reply;
 pub use transport::{Incoming, parse_line};
+pub(crate) use transport::{is_reply, shorten};
 
 use exit::Waited;
 use stderr::Stderr;
