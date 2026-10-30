@@ -43,7 +43,7 @@ use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime,
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use aye_pytest::getini::{apply_overrides, ini_bool, ini_lines, read_ini};
+use aye_pytest::getini::{apply_overrides, ini_bool, ini_lines};
 use aye_pytest::names::{self, DOCTEST};
 
 use crate::context::PytestContext;
@@ -332,7 +332,7 @@ pub(crate) struct NativeContext {
 /// The `native` section for `config`.
 fn native_context(config: &PytestConfig) -> NativeContext {
     let args = config.args.clone();
-    let mut ini = read_ini(config.inifile.as_deref());
+    let mut ini = config.file_ini();
     apply_overrides(&mut ini, &args);
     let mut parsed = parse_options(&args);
     parsed

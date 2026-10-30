@@ -24,6 +24,7 @@ use aye_python_stdlib::os_path::{self, normalize_absolute};
 use aye_static::{EnvVars, ProcessEnv};
 
 use crate::argv::{Lifted, MaxFail, option_values, without_addopts_override};
+use crate::getini::toml_json;
 use crate::ini::{self, ini_section};
 
 /// Which rules find pytest's rootdir, its configuration file and what the
@@ -245,6 +246,19 @@ enum Raw {
     Toml(toml::Value),
 }
 
+impl Raw {
+    /// The value as the front-end's `getini` gets it, to coerce by the
+    /// option's type: a string, a list of strings, or the TOML value
+    /// itself (dates as their text).
+    fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::Ini(text) => serde_json::json!(text),
+            Self::IniList(items) => serde_json::json!(items),
+            Self::Toml(value) => toml_json(value),
+        }
+    }
+}
+
 /// The options read from the config file.
 #[derive(Debug, Default)]
 struct RawConfig {
@@ -373,6 +387,9 @@ pub struct PytestConfig {
     /// in which no doctest adapter runs (see
     /// [`Self::keep_doctest_options`]).
     args_with_doctest: Vec<String>,
+    /// The configuration file's values as read, before `-o` and the
+    /// `--strict` flag (see [`Self::file_ini`]).
+    file_values: BTreeMap<String, Raw>,
 }
 
 /// pytest's doctest options, read from addopts, `PYTEST_ADDOPTS` and the
@@ -433,7 +450,7 @@ pub enum ImportMode {
 
 /// Python's `str()` of a TOML scalar, as `[tool.pytest.ini_options]`
 /// stringifies values.
-pub(crate) fn python_str(value: &toml::Value) -> String {
+fn python_str(value: &toml::Value) -> String {
     match value {
         toml::Value::String(s) => s.clone(),
         toml::Value::Boolean(b) => if *b { "True" } else { "False" }.to_string(),
@@ -706,6 +723,11 @@ impl PytestConfig {
             .filter(|dir| !dir.is_empty());
         let (rootdir, inifile, mut raw) =
             determine_setup(project, config_file.as_deref(), rootdir_arg.as_deref())?;
+        let file_values = raw
+            .values
+            .iter()
+            .map(|(name, (value, _))| (name.clone(), value.clone()))
+            .collect();
 
         let overrides = |raw: &mut RawConfig, args: &[String], via: &'static str| {
             for item in option_values(args, "--override-ini", Some("-o")) {
@@ -927,7 +949,18 @@ impl PytestConfig {
             tags,
             doctest,
             args_with_doctest: kept_with_doctest,
+            file_values,
         })
+    }
+
+    /// The configuration file's values, by name, as read, before `-o` and
+    /// the `--strict…` flags: what the native context's `ini` starts from
+    /// (see [`crate::getini`]). The file is read once, by discovery.
+    pub fn file_ini(&self) -> BTreeMap<String, serde_json::Value> {
+        self.file_values
+            .iter()
+            .map(|(name, value)| (name.clone(), value.to_json()))
+            .collect()
     }
 
     /// The configuration for a run in which no doctest adapter runs beside

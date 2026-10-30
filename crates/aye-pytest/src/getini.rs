@@ -1,16 +1,20 @@
 //! The raw values of pytest's configuration, as JSON, for the front-end's
 //! `getini` to coerce by each option's type: what the pytest adapter's
-//! native context's `ini` holds.
+//! native context's `ini` holds. They start from the configuration file's
+//! values, as discovery read them ([`PytestConfig::file_ini`]), then
+//! [`apply_overrides`] applies `-o` and the `--strict…` flags of the
+//! front-end's arguments again, as pytest's `OverrideIniAction` does.
+//!
+//! [`PytestConfig::file_ini`]: crate::config::PytestConfig::file_ini
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::config::{python_str, strtobool};
+use crate::config::strtobool;
 
 /// A native TOML value as JSON (dates as their text).
-fn toml_json(value: &toml::Value) -> Value {
+pub(crate) fn toml_json(value: &toml::Value) -> Value {
     match value {
         toml::Value::String(s) => json!(s),
         toml::Value::Integer(i) => json!(i),
@@ -24,76 +28,6 @@ fn toml_json(value: &toml::Value) -> Value {
                 .map(|(k, v)| (k.clone(), toml_json(v)))
                 .collect(),
         ),
-    }
-}
-
-/// The raw values of pytest's configuration in `inifile` (see the pytest
-/// adapter's native context's `ini`). The file was read once already,
-/// with its errors reported; here an unreadable one gives nothing.
-pub fn read_ini(inifile: Option<&Path>) -> BTreeMap<String, Value> {
-    let Some(path) = inifile else {
-        return BTreeMap::new();
-    };
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default();
-    let texts = |section: Option<crate::ini::Section>| -> BTreeMap<String, Value> {
-        section
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(k, v)| (k, json!(v)))
-            .collect()
-    };
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default()
-    {
-        "ini" => texts(crate::ini::ini_section(path, "pytest").ok().flatten()),
-        "cfg" => texts(crate::ini::ini_section(path, "tool:pytest").ok().flatten()),
-        "toml" => {
-            let Ok(doc) = aye_config::read_toml(path) else {
-                return BTreeMap::new();
-            };
-            let native = |table: &toml::Table| -> BTreeMap<String, Value> {
-                table
-                    .iter()
-                    .map(|(k, v)| (k.clone(), toml_json(v)))
-                    .collect()
-            };
-            if name == "pytest.toml" || name == ".pytest.toml" {
-                return doc
-                    .get("pytest")
-                    .and_then(toml::Value::as_table)
-                    .map(native)
-                    .unwrap_or_default();
-            }
-            let Some(tool) = doc
-                .get("tool")
-                .and_then(|t| t.get("pytest"))
-                .and_then(toml::Value::as_table)
-            else {
-                return BTreeMap::new();
-            };
-            let mut table = tool.clone();
-            match table.remove("ini_options") {
-                Some(toml::Value::Table(ini)) if table.is_empty() => ini
-                    .iter()
-                    .map(|(k, v)| {
-                        let value = match v {
-                            toml::Value::Array(items) => {
-                                json!(items.iter().map(python_str).collect::<Vec<_>>())
-                            }
-                            other => json!(python_str(other)),
-                        };
-                        (k.clone(), value)
-                    })
-                    .collect(),
-                _ => native(&table),
-            }
-        }
-        _ => BTreeMap::new(),
     }
 }
 
