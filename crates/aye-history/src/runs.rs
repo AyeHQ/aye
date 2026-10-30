@@ -49,7 +49,9 @@
 //! every stored run. Nothing here may fail a run: the binary reports
 //! errors as warnings.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashSet};
+use std::fmt;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -57,11 +59,14 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use aye_events::{Counts, Event, ExitCode, Record, Severity};
+use aye_events::{
+    ContentDigest, Counts, DiagnosticCode, DiagnosticOrigin, ErrorClass, Event, ExitCode,
+    ProjectPath, Record, RunId, RunNumber, Severity, StopReason,
+};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The store's directory, inside aye's state directory.
 pub const DIR: &str = aye_fs::StateBucket::Runs.name();
@@ -92,7 +97,7 @@ pub struct RunMeta {
     pub version: u32,
     /// The run's id in the store: `r81` (a run stored before runs were
     /// numbered has its records' 16 hex digits).
-    pub run: String,
+    pub run: StoredRunId,
     /// The project root, absolute, from `run_started`.
     pub root: String,
     /// When the store saw `run_started`, in milliseconds since the Unix
@@ -109,7 +114,7 @@ pub struct RunMeta {
     #[serde(default)]
     pub ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stopped: Option<String>,
+    pub stopped: Option<StopReason>,
     /// What the run's summary counts beside `counts`, by name, the non-zero
     /// ones (`aye_render::Extra::named`: `skipped_modules`, `setup_error`,
     /// `teardown_error`, `lifetime_error`, `collection_error`,
@@ -118,10 +123,11 @@ pub struct RunMeta {
     pub extra: BTreeMap<String, u32>,
     /// Each file holding a test the run collected, or that collection
     /// reported an error on or skipped, relative to the root as ids spell
-    /// it, and the digest of its content ([`digest`]) when collection
-    /// finished. A file that couldn't be read (a directory) is left out.
+    /// it, and the digest of its content when collection finished. A file
+    /// that couldn't be read (a directory) is left out. A summary holding a
+    /// digest that isn't 32 hex digits doesn't read; aye never wrote one.
     #[serde(default)]
-    pub files: BTreeMap<String, String>,
+    pub files: BTreeMap<ProjectPath, ContentDigest>,
 }
 
 /// How a file differs from what a stored run read.
@@ -140,7 +146,7 @@ impl RunMeta {
     pub fn change(&self, root: &Path, path: &str) -> Option<Change> {
         let recorded = self.files.get(path)?;
         match fs::read(root.join(path)) {
-            Ok(bytes) => (digest(&bytes) != *recorded).then_some(Change::Edited),
+            Ok(bytes) => (ContentDigest::of(&bytes) != *recorded).then_some(Change::Edited),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Some(Change::Gone),
             Err(_) => None,
         }
@@ -148,35 +154,86 @@ impl RunMeta {
 
     /// The run's number: 81 for `r81`; `None` for a run stored under a hex
     /// id.
-    pub fn number(&self) -> Option<u64> {
-        number(&self.run)
+    pub fn number(&self) -> Option<RunNumber> {
+        self.run.number()
     }
 }
 
-/// The number of a run's id: 81 for `r81`.
-pub fn number(id: &str) -> Option<u64> {
+/// A stored run's id, which names its files: `r81` for the run numbered
+/// 81, or, for a run stored before runs were numbered, its records' run id
+/// (16 hex digits). Any text but a number's own spelling, `r` and its
+/// digits without leading zeros, is such a legacy id, so an id reads back
+/// as it was written, and two ids are equal when their texts are.
+///
+/// It prints and serializes as its text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum StoredRunId {
+    Numbered(RunNumber),
+    Legacy(RunId),
+}
+
+impl StoredRunId {
+    /// The run's number, when it has one.
+    pub fn number(&self) -> Option<RunNumber> {
+        match self {
+            Self::Numbered(number) => Some(*number),
+            Self::Legacy(_) => None,
+        }
+    }
+}
+
+/// The number `id` is the spelling of: `r` and its digits, without
+/// leading zeros.
+fn numbered(id: &str) -> Option<RunNumber> {
     let digits = id.strip_prefix('r')?;
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+    if digits.starts_with('0') {
         return None;
     }
-    digits.parse().ok()
+    id.parse().ok()
 }
 
-/// The id of the run numbered `n`: `r81`.
-pub fn numbered(n: u64) -> String {
-    format!("r{n}")
+impl From<&str> for StoredRunId {
+    fn from(id: &str) -> Self {
+        numbered(id).map_or_else(|| Self::Legacy(RunId::from(id)), Self::Numbered)
+    }
 }
 
-/// The digest of a file's content: FNV-1a, 128 bits, as 32 hex digits.
-/// Stable across builds and platforms; it tells whether a file changed,
-/// and nothing more.
-pub fn digest(bytes: &[u8]) -> String {
-    const OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
-    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
-    let hash = bytes.iter().fold(OFFSET, |hash, &byte| {
-        (hash ^ u128::from(byte)).wrapping_mul(PRIME)
-    });
-    format!("{hash:032x}")
+impl fmt::Display for StoredRunId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Numbered(number) => number.fmt(f),
+            Self::Legacy(id) => id.fmt(f),
+        }
+    }
+}
+
+/// Whether `other` is its text.
+impl PartialEq<str> for StoredRunId {
+    fn eq(&self, other: &str) -> bool {
+        match self {
+            Self::Numbered(number) => numbered(other) == Some(*number),
+            Self::Legacy(id) => numbered(other).is_none() && *id == *other,
+        }
+    }
+}
+
+impl PartialEq<&str> for StoredRunId {
+    fn eq(&self, other: &&str) -> bool {
+        *self == **other
+    }
+}
+
+impl Serialize for StoredRunId {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for StoredRunId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let id = Box::<str>::deserialize(deserializer)?;
+        Ok(Self::from(&*id))
+    }
 }
 
 /// Keeps the log of the run fed to it, as a consumer of the stream: each
@@ -207,7 +264,7 @@ pub struct RunWriter {
 /// A run's number, and its log, created empty.
 #[derive(Debug)]
 struct Claimed {
-    number: u64,
+    number: RunNumber,
     log: fs::File,
 }
 
@@ -217,11 +274,11 @@ struct Run {
     /// Records serialized, not yet handed to the thread.
     lines: Vec<u8>,
     sender: Option<mpsc::Sender<Chunk>>,
-    thread: thread::JoinHandle<io::Result<BTreeMap<String, String>>>,
+    thread: thread::JoinHandle<io::Result<BTreeMap<ProjectPath, ContentDigest>>>,
     meta: RunMeta,
     /// The files of the tests collected so far, each once.
-    files: Vec<String>,
-    seen: HashSet<String>,
+    files: Vec<ProjectPath>,
+    seen: HashSet<ProjectPath>,
     /// Whether the run has something to show (see the module's docs).
     worth: bool,
 }
@@ -230,9 +287,8 @@ struct Run {
 enum Chunk {
     /// Serialized records, one per line.
     Lines(Vec<u8>),
-    /// Collection finished: the digests of these files, relative to the
-    /// root.
-    Digests(Vec<String>),
+    /// Collection finished: the digests of these files.
+    Digests(Vec<ProjectPath>),
 }
 
 /// How much serialized log is handed to the thread at once.
@@ -265,7 +321,7 @@ impl RunWriter {
     /// collects); a writer fed a `run_started` without a claim claims then.
     /// A number claimed for a run that turns out to have nothing to show,
     /// or only to collect, is free again once it finishes.
-    pub fn claim(&mut self) -> Option<u64> {
+    pub fn claim(&mut self) -> Option<RunNumber> {
         if self.keep == 0 || self.started.is_some() {
             return None;
         }
@@ -320,7 +376,7 @@ impl RunWriter {
     /// name), and `last`, then deletes what retention doesn't keep. The
     /// run's id (`r81`), when it was kept: a run with nothing to show is
     /// not (its log is deleted, and its number free again).
-    pub fn finish(mut self, extra: BTreeMap<String, u32>) -> io::Result<Option<String>> {
+    pub fn finish(mut self, extra: BTreeMap<String, u32>) -> io::Result<Option<StoredRunId>> {
         let store = RunStore::new(&self.dir);
         // A number claimed for a run that never started, or only collected.
         if let Some(Ok(claimed)) = self.claimed.take() {
@@ -359,11 +415,11 @@ impl RunWriter {
     }
 
     /// The log of the run numbered `number`.
-    fn log(&self, number: u64) -> PathBuf {
-        self.log_of(&numbered(number))
+    fn log(&self, number: RunNumber) -> PathBuf {
+        self.log_of(&StoredRunId::Numbered(number))
     }
 
-    fn log_of(&self, id: &str) -> PathBuf {
+    fn log_of(&self, id: &StoredRunId) -> PathBuf {
         self.dir.join(format!("{id}{LOG}"))
     }
 }
@@ -374,8 +430,8 @@ impl RunWriter {
 fn claim(dir: &Path) -> io::Result<Claimed> {
     aye_fs::prepare_dir(dir)?;
     let first = highest(dir).saturating_add(1);
-    for number in first..first.saturating_add(CLAIMS) {
-        let path = dir.join(format!("{}{LOG}", numbered(number)));
+    for number in (first..first.saturating_add(CLAIMS)).filter_map(RunNumber::new) {
+        let path = dir.join(format!("{number}{LOG}"));
         match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -395,6 +451,7 @@ fn claim(dir: &Path) -> io::Result<Claimed> {
 /// The highest run number in `dir`: of its runs' summaries and logs
 /// (stored, being written, or left over), and of `last`; 0 when none.
 fn highest(dir: &Path) -> u64 {
+    let number = |id: &str| numbered(id).map(RunNumber::get);
     let mut highest = fs::read_to_string(dir.join(LAST))
         .ok()
         .and_then(|last| number(last.trim()))
@@ -427,7 +484,7 @@ impl Run {
     /// Starts the thread that writes the log of the run `claimed` in `dir`.
     fn start(dir: &Path, claimed: Claimed, root: &str) -> Option<Self> {
         let (sender, chunks) = mpsc::channel();
-        let id = numbered(claimed.number);
+        let id = StoredRunId::Numbered(claimed.number);
         let path = dir.join(format!("{id}{LOG}"));
         let writer_root = PathBuf::from(root);
         let thread = thread::Builder::new()
@@ -468,8 +525,9 @@ impl Run {
     /// A file whose digest the summary keeps, once.
     fn file(&mut self, path: &str) {
         if !path.is_empty() && !self.seen.contains(path) {
-            self.seen.insert(path.to_string());
-            self.files.push(path.to_string());
+            let path = ProjectPath::as_written(path);
+            self.seen.insert(path.clone());
+            self.files.push(path);
         }
     }
 
@@ -478,14 +536,15 @@ impl Run {
     fn note(&mut self, record: &Record) {
         self.worth = self.worth || shows(record);
         match &record.event {
-            Event::CaseCollected(case) => self.file(case.id.path()),
+            Event::CaseCollected(case) => self.file(case.id.path().as_str()),
             // A file that failed to collect, or was skipped while collecting,
             // which `aye show` shows too.
             Event::Diagnostic(diagnostic)
                 if diagnostic.severity == Severity::Error
-                    || (diagnostic.severity == Severity::Info && diagnostic.code == "skipped") =>
+                    || (diagnostic.severity == Severity::Info
+                        && diagnostic.code == DiagnosticCode::Skipped) =>
             {
-                self.file(&diagnostic.path);
+                self.file(diagnostic.path.as_str());
             }
             Event::CollectionFinished { .. } => {
                 let files = std::mem::take(&mut self.files);
@@ -509,7 +568,7 @@ impl Run {
 
 /// Whether a record gives a run something to show: a test's result, a
 /// failed lifetime or worker, an error diagnostic other than the command
-/// line's (what it names that doesn't exist).
+/// line's (what it names that doesn't exist; [`ErrorClass::shows`]).
 fn shows(record: &Record) -> bool {
     match &record.event {
         Event::TestFinished(_)
@@ -517,11 +576,9 @@ fn shows(record: &Record) -> bool {
             failure: Some(_), ..
         }
         | Event::WorkerFinished { error: Some(_), .. } => true,
-        Event::Diagnostic(diagnostic) => {
-            diagnostic.severity == Severity::Error
-                && !(diagnostic.code == "unclaimed"
-                    || (diagnostic.code == "not-found" && record.envelope.batch.is_none()))
-        }
+        Event::Diagnostic(diagnostic) => diagnostic
+            .error_class(DiagnosticOrigin::of(&record.envelope))
+            .is_some_and(ErrorClass::shows),
         _ => false,
     }
 }
@@ -534,7 +591,7 @@ fn write_log(
     path: &Path,
     root: &Path,
     chunks: &mpsc::Receiver<Chunk>,
-) -> io::Result<BTreeMap<String, String>> {
+) -> io::Result<BTreeMap<ProjectPath, ContentDigest>> {
     let mut digests = BTreeMap::new();
     let written = (|| {
         let mut out = GzEncoder::new(file, Compression::fast());
@@ -543,8 +600,8 @@ fn write_log(
                 Chunk::Lines(lines) => out.write_all(&lines)?,
                 Chunk::Digests(files) => {
                     for file in files {
-                        if let Ok(bytes) = fs::read(root.join(&file)) {
-                            digests.insert(file, digest(&bytes));
+                        if let Ok(bytes) = fs::read(root.join(file.as_str())) {
+                            digests.insert(file, ContentDigest::of(&bytes));
                         }
                     }
                 }
@@ -591,10 +648,12 @@ impl RunStore {
             })
             .collect();
         let last = self.named_last();
-        runs.sort_by(|a, b| {
-            let key =
-                |meta: &RunMeta| (last.as_deref() == Some(meta.run.as_str()), meta.finished_ms);
-            (key(b), &b.run).cmp(&(key(a), &a.run))
+        runs.sort_by_cached_key(|meta| {
+            Reverse((
+                last.as_ref() == Some(&meta.run),
+                meta.finished_ms,
+                meta.run.to_string(),
+            ))
         });
         runs
     }
@@ -606,10 +665,10 @@ impl RunStore {
     }
 
     /// The id `last` holds, when it is one.
-    fn named_last(&self) -> Option<String> {
+    fn named_last(&self) -> Option<StoredRunId> {
         let id = fs::read_to_string(self.dir.join(LAST)).ok()?;
         let id = id.trim();
-        is_run_id(id).then(|| id.to_owned())
+        is_run_id(id).then(|| StoredRunId::from(id))
     }
 
     /// The summary of the run `id`, when it is kept.
@@ -627,7 +686,7 @@ impl RunStore {
     pub fn find(&self, prefix: &str) -> Vec<RunMeta> {
         self.runs()
             .into_iter()
-            .filter(|meta| meta.run.starts_with(prefix))
+            .filter(|meta| meta.run.to_string().starts_with(prefix))
             .collect()
     }
 
@@ -695,12 +754,12 @@ impl RunStore {
     /// the others, and what is left over from runs that never completed
     /// (logs without a summary, temporary files) once a day old. With
     /// `keep` 0, `last` goes too.
-    fn retain(&self, keep: usize, current: Option<&str>) -> io::Result<()> {
+    fn retain(&self, keep: usize, current: Option<&StoredRunId>) -> io::Result<()> {
         if !self.dir.is_dir() {
             return Ok(());
         }
         for meta in self.runs().iter().skip(keep) {
-            if Some(meta.run.as_str()) == current {
+            if Some(&meta.run) == current {
                 continue;
             }
             // The log first: a summary without its log is deleted next

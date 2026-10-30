@@ -13,16 +13,18 @@ authors = ["René-Jean Corneille"]
 
 [workspace.dependencies]
 # x-release-please-start-version
+aye-adapter = { path = "crates/aye-adapter", version = "=0.0.1" }
+aye-adapter-doctest = { path = "crates/aye-adapter-doctest", version = "=0.0.1" }
+aye-adapter-pytest = { path = "crates/aye-adapter-pytest", version = "=0.0.1" }
+aye-adapter-unittest = { path = "crates/aye-adapter-unittest", version = "=0.0.1" }
 aye-collect = { path = "crates/aye-collect", version = "=0.0.1" }
 aye-config = { path = "crates/aye-config", version = "=0.0.1" }
 aye-engine = { path = "crates/aye-engine", version = "=0.0.1" }
-aye-engine-doctest = { path = "crates/aye-engine-doctest", version = "=0.0.1" }
-aye-engine-pytest = { path = "crates/aye-engine-pytest", version = "=0.0.1" }
-aye-engine-unittest = { path = "crates/aye-engine-unittest", version = "=0.0.1" }
 aye-events = { path = "crates/aye-events", version = "=0.0.1" }
 aye-fs = { path = "crates/aye-fs", version = "=0.0.1" }
 aye-history = { path = "crates/aye-history", version = "=0.0.1" }
 aye-index = { path = "crates/aye-index", version = "=0.0.1" }
+aye-protocol = { path = "crates/aye-protocol", version = "=0.0.1" }
 aye-provision = { path = "crates/aye-provision", version = "=0.0.1" }
 aye-render = { path = "crates/aye-render", version = "=0.0.1" }
 aye-runner = { path = "crates/aye-runner", version = "=0.0.1" }
@@ -54,8 +56,9 @@ walkdir = "2"
 # Ruff's parser crates are internal to Ruff and carry no semver guarantees, so
 # they are pinned exactly. Each release raises its MSRV; 0.0.4 is the newest
 # that builds on Rust 1.94. `get-size2` is pinned too: 0.10.2 pulls a second
-# `compact_str` and breaks `ruff_python_ast`. `aye-engine` depends on it
-# directly so the pin also holds for `cargo install aye` without `--locked`.
+# `compact_str` and breaks `ruff_python_ast`. `aye-adapter`, which re-exports
+# Ruff's AST for collection and the adapters, depends on it directly so the
+# pin also holds for `cargo install aye` without `--locked`.
 get-size2 = "=0.10.1"
 ruff_python_ast = "=0.0.4"
 ruff_python_parser = "=0.0.4"

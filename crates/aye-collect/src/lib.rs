@@ -1,17 +1,20 @@
 //! Discovery infrastructure. Walks the tree, parses files with Ruff's parser,
 //! hands each file and its AST to every registered recognizer, merges the
-//! results, runs the refinement protocol for files any engine marked
+//! results, runs the refinement protocol for files any adapter marked
 //! runtime-dependent, caches refinement by file content hash, and emits
 //! diagnostics (duplicate definitions, uncollected tests, files with no tests)
 //! with the strict-mode policy.
 //!
 //! Owns: the mechanism of discovery. Does not own: what counts as a test, which
-//! is each engine's recognizer. If a framework's name pattern or id algorithm
+//! is each adapter's recognizer. If a framework's name pattern or id algorithm
 //! appears in this crate, the boundary has leaked.
 //!
-//! Depends on: aye-engine, aye-events, aye-fs (paths, and marking the state
-//! directory), aye-static (the variables it reads by name). Must not depend
-//! on any `aye-engine-*`.
+//! Depends on: aye-adapter (the recognizers it drives, and Ruff's syntax
+//! tree), aye-events, aye-fs (paths, and marking the state directory),
+//! aye-protocol (refinement's messages and the `Refiner` it asks),
+//! aye-provision (the environment's fingerprint, which the cache's key
+//! holds: collection reads the interpreter only through it). Must not
+//! depend on any `aye-adapter-*`.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **Stopping and progress.** [`Collector::with_stop`] takes a flag the
@@ -33,9 +36,9 @@
 //!   dropped, so the files keep the order of the path that subsumes them.
 //!   A root is always entered, whatever `descend` says. A missing explicit
 //!   path is a `not-found` error; a missing recognizer root is skipped. A file
-//!   given as a root is claimed with `explicit` set; an explicit file no
-//!   recognizer claims is an `unclaimed` error, as pytest's "found no
-//!   collectors" is.
+//!   given as a root is claimed, and recognized, as `Requested::Named`; an
+//!   explicit file no recognizer claims is an `unclaimed` error, as
+//!   pytest's "found no collectors" is.
 //! - **The walk** is depth-first and sorted by file name, directories and
 //!   files interleaved, as pytest's `scandir` is, except that a package's
 //!   `__init__.py` comes first in its directory, as pytest's `Package`
@@ -91,21 +94,13 @@
 //!   so recognizers report them and collection passes them through.
 //!   Collection adds `no-tests` (info) for a test file no adapter finds a
 //!   test in, unless every adapter claiming it claims such files whatever
-//!   their names (pytest's doctest modules: every module): asked about a
-//!   file of the same kind, in the same directory, named nothing in
-//!   particular (`__aye_any_name__.py`), it claims that one too, so a file
-//!   without tests is no surprise. The rule knows no framework's patterns:
-//!   it only asks the recognizers. Nor is it added for a file an adapter
+//!   their names (pytest's doctest modules: every module), as
+//!   `Recognizer::claims_any_name` says for the file's directory and
+//!   extension: a file without tests is no surprise then. The rule knows no
+//!   framework's patterns: it only asks the recognizers. Nor is it added for a file an adapter
 //!   already reported about (a module the framework skipped or ignores, a
 //!   class it won't collect) or, in refinement, about a directory it is
 //!   in (a conftest that skipped the directory), which says why already.
-//! - **Whether the interpreter installs a module** ([`Environment::installs`],
-//!   which the binary asks about pytest to choose the default adapters) is
-//!   read from its `site-packages`, as for the cache's key: `None` when they
-//!   can't be found, and only the venv's own when its `pyvenv.cfg` leaves
-//!   out the system's packages (`include-system-site-packages = false`, the
-//!   default). An installation's own directory is a prefix too, as
-//!   Windows' `python.exe` sits beside `Lib`.
 //! - **Refinement** sends one request per adapter, with all its flagged files
 //!   and its recognizer's `context()`. Refined cases replace that adapter's
 //!   static cases for the file; other adapters' cases stay. The refined
@@ -128,9 +123,10 @@
 //!   It must never answer differently from a fresh import, since a stale
 //!   answer drops tests pytest would run, so it caches only what its key
 //!   covers. The key is a 128-bit FNV-1a hash of the cache's format, aye's
-//!   version, the project root and cwd, the [`Environment`] (the interpreter
-//!   and its installed packages, the environment variables but a few shell
-//!   ones, its framework arguments), the project's `framework_args` (the
+//!   version, the project root and cwd, the environment's digest
+//!   (`aye_provision::EnvironmentFingerprint`: the interpreter and its
+//!   installed packages, the environment variables but a few shell ones,
+//!   its framework arguments), the project's `framework_args` (the
 //!   arguments after `--`, which adapters pass to refinement in their
 //!   context), the adapter's name, its recognizer's `context()` (with the
 //!   content of every existing file the context names, such as pytest's
@@ -180,52 +176,34 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use aye_engine::{Project, Recognition, Recognizer, Refiner, SourceFile};
-use aye_events::{Case, Diagnostic, Severity, TestId};
+use aye_adapter::{Project, Recognition, Recognizer, RefineReason, SourceFile};
+use aye_events::{
+    AdapterName, Case, ContentDigest, Diagnostic, DiagnosticCode, DiagnosticPath, ProjectPathRef,
+    Severity, TestId,
+};
+use aye_protocol::Refiner;
+use aye_provision::{EnvironmentFingerprint, InstalledModules};
 
-mod environment;
 mod parallel;
 mod refine;
 mod source;
 mod standalone;
 mod tree;
 
-pub use environment::Environment;
 use refine::Refinement;
 use source::Source;
 use standalone::Scope;
 use tree::{Mask, Tree, bits};
 
-/// The diagnostic codes collection emits itself.
-pub mod codes {
-    /// A claimed file doesn't parse.
-    pub const SYNTAX_ERROR: &str = "syntax-error";
-    /// A claimed file or a directory can't be read.
-    pub const UNREADABLE: &str = "unreadable";
-    /// An explicit path doesn't exist.
-    pub const NOT_FOUND: &str = "not-found";
-    /// No recognizer claims an explicit file.
-    pub const UNCLAIMED: &str = "unclaimed";
-    /// Two cases share an id.
-    pub const DUPLICATE_ID: &str = "duplicate-id";
-    /// A test file has no tests.
-    pub const NO_TESTS: &str = "no-tests";
-    /// A file needs refinement, but refinement is off (no refiner was
-    /// given).
-    pub const NOT_REFINED: &str = "not-refined";
-    /// Refinement failed.
-    pub const REFINE_FAILED: &str = "refine-failed";
-}
-
 /// A prepared recognizer and its adapter's name.
-pub type Prepared = (&'static str, Box<dyn Recognizer>);
+pub type Prepared = (AdapterName, Box<dyn Recognizer>);
 
 #[derive(Debug, Clone, Default)]
 pub struct Options {
     /// Report every warning as an error.
     pub strict: bool,
     /// Where refinement results are cached. `None` turns the cache off, and
-    /// so does an [`Environment`] without an interpreter (see
+    /// so does a collector without an environment (see
     /// [`Collector::with_environment`]).
     pub cache_dir: Option<PathBuf>,
     /// aye's version, part of every cache key.
@@ -272,10 +250,12 @@ pub struct Collector<'a> {
     project: Project<'a>,
     recognizers: &'a [Prepared],
     options: Options,
-    environment: Environment,
+    /// What refinement depends on outside the project's files; without
+    /// it, no cache.
+    environment: Option<EnvironmentFingerprint>,
     /// The environment's installed modules, listed when the cache first
     /// needs them.
-    installed: OnceLock<HashSet<String>>,
+    installed: OnceLock<InstalledModules>,
     /// Set from another thread (Ctrl-C) to stop collection.
     stop: Option<Arc<AtomicBool>>,
 }
@@ -304,7 +284,7 @@ pub(crate) struct Recognized {
     /// By recognizer, in priority order.
     by: Vec<(usize, Recognition)>,
     /// The content digest, when the cache needs it.
-    digest: Option<u128>,
+    digest: Option<ContentDigest>,
     /// By recognizer asking for refinement, why the file's refinement may
     /// depend on something the cache's key leaves out (`None`: it can't).
     /// Empty when the cache is off.
@@ -337,7 +317,7 @@ impl<'a> Collector<'a> {
             project,
             recognizers,
             options,
-            environment: Environment::default(),
+            environment: None,
             installed: OnceLock::new(),
             stop: None,
         }
@@ -361,17 +341,19 @@ impl<'a> Collector<'a> {
 
     /// What refinement depends on outside the project's files: the
     /// interpreter workers run, the framework's arguments and the
-    /// environment variables. Without an interpreter, the default, the
-    /// refinement cache is neither read nor written.
+    /// environment variables, as the cache's key holds them. Without one,
+    /// the default, the refinement cache is neither read nor written.
     #[must_use]
-    pub fn with_environment(mut self, environment: Environment) -> Self {
-        self.environment = environment;
+    pub fn with_environment(mut self, environment: EnvironmentFingerprint) -> Self {
+        self.environment = Some(environment);
         self
     }
 
-    /// Whether the refinement cache may be used at all.
-    fn caching(&self) -> bool {
-        self.options.cache_dir.is_some() && self.environment.interpreter.is_some()
+    /// The environment, when the refinement cache may be used at all.
+    fn caching(&self) -> Option<&EnvironmentFingerprint> {
+        self.environment
+            .as_ref()
+            .filter(|_| self.options.cache_dir.is_some())
     }
 
     fn scope<'s>(
@@ -385,11 +367,9 @@ impl<'a> Collector<'a> {
             framework,
             seen,
             installed: self.installed.get_or_init(|| {
-                if self.caching() {
-                    self.environment.installed_modules(self.project.cwd)
-                } else {
-                    HashSet::new()
-                }
+                self.caching()
+                    .map(|environment| environment.installed_modules(self.project.cwd))
+                    .unwrap_or_default()
             }),
         }
     }
@@ -543,17 +523,17 @@ impl<'a> Collector<'a> {
                     continue;
                 }
                 (
-                    codes::UNCLAIMED,
+                    DiagnosticCode::Unclaimed,
                     "no adapter collects this file".to_string(),
                 )
             } else {
                 let message = format!("file or directory not found: {}", target.display());
-                (codes::NOT_FOUND, message)
+                (DiagnosticCode::NotFound, message)
             };
             tree.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                code: code.to_string(),
-                path: rel,
+                code,
+                path: DiagnosticPath::as_written(rel),
                 span: None,
                 message,
             });
@@ -656,15 +636,18 @@ impl<'a> Collector<'a> {
                     support.get(at)?.file(&entry.rel, &entry.abs)
                 })
                 .collect();
-            let mut recognition = self.recognizers[*i].1.recognize(&file, &support);
+            let mut recognition =
+                self.recognizers[*i]
+                    .1
+                    .recognize(&file, entry.requested(), &support);
             if source.is_lossy() && recognition.refine.is_none() {
-                recognition.refine = Some("the file is not valid UTF-8".to_string());
+                recognition.refine = Some(RefineReason::NotUtf8);
             }
             recognized.by.push((*i, recognition));
         }
         let refine = recognized.by.iter().any(|(_, r)| r.refine.is_some());
-        if refine && self.caching() {
-            recognized.digest = Some(refine::digest(source.bytes()));
+        if refine && self.caching().is_some() {
+            recognized.digest = Some(ContentDigest::of(source.bytes()));
             for (i, recognition) in &recognized.by {
                 if recognition.refine.is_none() {
                     continue;
@@ -672,7 +655,7 @@ impl<'a> Collector<'a> {
                 let why = if source.is_lossy() {
                     Some("it is not valid UTF-8".to_string())
                 } else {
-                    let scope = self.scope(self.recognizers[*i].0, seen);
+                    let scope = self.scope(self.recognizers[*i].0.as_str(), seen);
                     standalone::dependence(file.module, &entry.abs, &scope)
                 };
                 recognized.dependence.push((*i, why));
@@ -705,7 +688,7 @@ impl<'a> Collector<'a> {
         for stray in std::mem::take(&mut refinement.stray) {
             let mut rest = Vec::new();
             for case in stray.refined.cases {
-                match package_anchor(tree, &stray.requested, case.id.path()) {
+                match package_anchor(tree, &stray.requested, case.id.path().as_str()) {
                     Some(at) => anchored
                         .entry(at)
                         .or_default()
@@ -743,7 +726,7 @@ impl<'a> Collector<'a> {
                         recognition
                             .diagnostics
                             .into_iter()
-                            .filter(|d| d.severity != Severity::Error || d.path != *rel),
+                            .filter(|d| d.severity != Severity::Error || d.path != rel.as_str()),
                     );
                     notes.extend(result.diagnostics);
                     result.cases
@@ -762,45 +745,56 @@ impl<'a> Collector<'a> {
             // framework skipped or ignored it, a class it won't collect),
             // or a directory it is in (a conftest skipped it), has had its
             // explanation.
-            let quiet = notes.iter().all(|d| d.path != *rel)
-                && !explained.iter().any(|dir| within(rel, dir));
+            let quiet = notes.iter().all(|d| d.path != rel.as_str())
+                && !explained.iter().any(|dir| {
+                    rel.as_path()
+                        .starts_with_dir(ProjectPathRef::as_written(dir))
+                });
             if found.parsed
                 && quiet
                 && !fell_back
                 && !anchored.contains_key(&job.at)
                 && groups.iter().all(|(_, c)| c.is_empty())
-                && groups
-                    .iter()
-                    .any(|(i, _)| !claims_any_name(&mut probes, &self.recognizers[*i], *i, rel))
+                && groups.iter().any(|(i, _)| {
+                    !claims_any_name(&mut probes, &self.recognizers[*i], *i, rel.as_str())
+                })
             {
-                let names: Vec<&str> = groups.iter().map(|(i, _)| self.recognizers[*i].0).collect();
+                let names: Vec<&str> = groups
+                    .iter()
+                    .map(|(i, _)| self.recognizers[*i].0.as_str())
+                    .collect();
                 notes.push(Diagnostic {
                     severity: Severity::Info,
-                    code: codes::NO_TESTS.to_string(),
-                    path: tree.entries[job.at].rel.clone(),
+                    code: DiagnosticCode::NoTests,
+                    path: rel.clone().into(),
                     span: None,
                     message: format!("claimed for tests by {}, but has none", names.join(", ")),
                 });
             }
             files.push(Merged {
-                rel: rel.clone(),
+                rel: rel.as_str().to_owned(),
                 notes,
                 groups,
             });
         }
         for (anchor, cases) in anchored {
-            let package = &tree.entries[anchor].rel;
+            let package = tree.entries[anchor].rel.as_str();
             let package = &package[..package.len() - INIT.len()];
             // By file, in walk order; by recognizer within each.
             let mut by_file: BTreeMap<WalkKey, Vec<(usize, Vec<Case>)>> = BTreeMap::new();
             for (i, case) in cases {
-                let groups = by_file.entry(WalkKey::new(case.id.path())).or_default();
+                let groups = by_file
+                    .entry(WalkKey::new(case.id.path().as_str()))
+                    .or_default();
                 match groups.iter_mut().find(|(by, _)| *by == i) {
                     Some((_, group)) => group.push(case),
                     None => groups.push((i, vec![case])),
                 }
             }
-            let Some(start) = files.iter().position(|f| f.rel == tree.entries[anchor].rel) else {
+            let Some(start) = files
+                .iter()
+                .position(|f| f.rel == tree.entries[anchor].rel.as_str())
+            else {
                 continue;
             };
             for (key, groups) in by_file {
@@ -878,8 +872,8 @@ impl<'a> Collector<'a> {
         // The framework selects by id, so it runs them all (pytest does).
         Diagnostic {
             severity: Severity::Warning,
-            code: codes::DUPLICATE_ID.to_string(),
-            path: case.id.path().to_string(),
+            code: DiagnosticCode::DuplicateId,
+            path: DiagnosticPath::as_written(case.id.path().as_str()),
             span: case.span.clone(),
             message: format!(
                 "{} collects `{}` more than once; aye lists it once, \
@@ -902,18 +896,12 @@ fn package_anchor(tree: &Tree<'_>, requested: &[usize], path: &str) -> Option<us
     requested
         .iter()
         .filter_map(|&at| {
-            let package = tree.entries[at].rel.strip_suffix(INIT)?;
+            let package = tree.entries[at].rel.as_str().strip_suffix(INIT)?;
             let holds = (package.is_empty() || package.ends_with('/')) && path.starts_with(package);
             holds.then_some((package.len(), at))
         })
         .max_by_key(|(len, _)| *len)
         .map(|(_, at)| at)
-}
-
-/// Whether the file `rel` is `path`, or below the directory `path`.
-fn within(rel: &str, path: &str) -> bool {
-    rel.strip_prefix(path)
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
 /// A path's place in the walk ([`tree::walk_order`] at each level), with
@@ -949,15 +937,10 @@ impl PartialOrd for WalkKey {
     }
 }
 
-/// The name of a file no recognizer is expected to claim by its name: a
-/// recognizer that claims it claims modules whatever their names (pytest's
-/// doctest modules, `python_files = *.py`).
-const PROBE: &str = "__aye_any_name__";
-
 /// Whether `recognizer` would claim for tests any file of `rel`'s kind in
-/// its directory, whatever its name: then a file of that kind without tests
-/// is no surprise, and gets no `no-tests` note. Asked once per directory,
-/// extension and recognizer.
+/// its directory, whatever its name ([`Recognizer::claims_any_name`]): then
+/// a file of that kind without tests is no surprise, and gets no
+/// `no-tests` note. Asked once per directory, extension and recognizer.
 fn claims_any_name(
     probes: &mut HashMap<(String, String, usize), bool>,
     recognizer: &Prepared,
@@ -968,19 +951,7 @@ fn claims_any_name(
     let extension = name.rsplit_once('.').map_or("", |(_, ext)| ext);
     *probes
         .entry((dir.to_string(), extension.to_string(), index))
-        .or_insert_with(|| {
-            let mut probe = String::new();
-            if !dir.is_empty() {
-                probe.push_str(dir);
-                probe.push('/');
-            }
-            probe.push_str(PROBE);
-            if !extension.is_empty() {
-                probe.push('.');
-                probe.push_str(extension);
-            }
-            recognizer.1.claim(&probe, false).has_tests()
-        })
+        .or_insert_with(|| recognizer.1.claims_any_name(dir, extension))
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@
 //!
 //! # The levels
 //!
-//! The verbosity (`-v` count minus `-q` count, clamped to -1..=3) says
+//! The [`Level`] (`-v` count minus `-q` count, clamped to -1..=3) says
 //! which lines are written and how much a bad outcome's line holds (its
 //! level of detail, L1 to L3, below), each level adding to the one below:
 //! - **-1** (`-q`): the `summary` alone, without `failures` or `more`.
@@ -135,14 +135,15 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use aye_events::{
-    Captured, Certainty, Compare, Counts, Diagnostic, Event, ExitCode, Failure, LifetimeId,
-    Outcome, Record, Severity, TestId, TestResult,
+    Captured, Certainty, Compare, Counts, Diagnostic, DiagnosticCode, Event, ExitCode, Failure,
+    FailureSignature, LifetimeId, Local, Outcome, Record, RunNumber, Severity, StopReason, TestId,
+    TestResult, WorkerIndex,
 };
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
 
 use crate::tally::{Noted, Tally};
-use crate::{Keys, Reporter, ShowContext, ShowMode, shared};
+use crate::{Keys, Level, Reporter, ShowContext, ShowMode, shared};
 
 const ID_MAX: usize = 1000;
 const PATH_MAX: usize = 500;
@@ -191,26 +192,26 @@ pub struct JsonLines<W: Write> {
     verbosity: i8,
     collect_only: bool,
     /// From `run_started`.
-    run: Option<u64>,
+    run: Option<RunNumber>,
     /// From `collection_finished`.
     selected: Option<u32>,
     /// Each worker's Python version, from its `worker_started`.
-    pythons: HashMap<Option<u32>, String>,
+    pythons: HashMap<Option<WorkerIndex>, String>,
     /// The first bad outcome reported with each signature: its key and
     /// message.
-    signatures: HashMap<String, (String, String)>,
+    signatures: HashMap<FailureSignature, (String, String)>,
     /// Tests blocked by a lifetime whose `lifetime_finished` has not
     /// arrived, with their keys.
     pending: BTreeMap<LifetimeId, Vec<(TestId, String)>>,
     /// Lifetimes reported, and the signature they were reported with.
-    reported: HashMap<LifetimeId, String>,
+    reported: HashMap<LifetimeId, Option<FailureSignature>>,
     /// Bad sub-outcomes of tests that haven't finished, held so that the
     /// first can carry the test's output and rerun.
     held: BTreeMap<TestId, Vec<HeldSub>>,
     /// Diagnostics reported, by severity, code, path and message, so that
     /// one every batch repeats (a framework rejecting its arguments) is
     /// reported once.
-    diagnostics: HashSet<(&'static str, String, String, String)>,
+    diagnostics: HashSet<(&'static str, DiagnosticCode, String, String)>,
     /// What the summary counts beside the tests' counts: modules skipped
     /// while collecting, failed lifetimes that kept no test from running.
     tally: Tally,
@@ -229,7 +230,7 @@ struct HeldSub {
     outcome: Outcome,
     failure: Option<Failure>,
     duration: Duration,
-    worker: Option<u32>,
+    worker: Option<WorkerIndex>,
 }
 
 #[derive(Serialize)]
@@ -251,7 +252,7 @@ enum Line<'a> {
     },
     WorkerError {
         #[serde(skip_serializing_if = "Option::is_none")]
-        worker: Option<u32>,
+        worker: Option<WorkerIndex>,
         error: Cow<'a, str>,
     },
     Test {
@@ -451,15 +452,15 @@ struct History {
 }
 
 /// The innermost frame's locals, as an object in their order.
-struct Locals<'a>(&'a [(String, String)]);
+struct Locals<'a>(&'a [Local]);
 
 impl Serialize for Locals<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
-        for (name, value) in self.0 {
+        for local in self.0 {
             map.serialize_entry(
-                &shared::head(name, LOCAL_MAX),
-                &shared::head(value, LOCAL_MAX),
+                &shared::head(&local.name, LOCAL_MAX),
+                &shared::head(&local.value, LOCAL_MAX),
             )?;
         }
         map.end()
@@ -505,7 +506,7 @@ struct Summary {
     lifetime_error: u32,
     s: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    stopped: Option<String>,
+    stopped: Option<StopReason>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     failures: Vec<String>,
     #[serde(skip_serializing_if = "is_zero")]
@@ -593,7 +594,7 @@ fn compare_line<'a>(
         .unwrap_or(u32::MAX)
         .saturating_add(compare.omitted);
     CompareLine {
-        kind: shared::head(&compare.kind, VALUE_MAX),
+        kind: shared::head(compare.kind.as_str(), VALUE_MAX),
         summary: shared::head(&compare.summary, SUMMARY_MAX),
         same: compare.same,
         differs,
@@ -703,12 +704,11 @@ fn output_tails(output: &Captured) -> Option<Output> {
 }
 
 impl<W: Write> JsonLines<W> {
-    /// `verbosity`: `-v` count minus `-q` count; clamped to -1..=3 (see the
-    /// module's docs).
-    pub fn new(out: W, verbosity: i8) -> Self {
+    /// At `level` (see the module's docs).
+    pub fn new(out: W, level: Level) -> Self {
         Self {
             out,
-            verbosity: verbosity.clamp(QUIET, ALL),
+            verbosity: level.count(),
             collect_only: false,
             run: None,
             selected: None,
@@ -777,7 +777,7 @@ impl<W: Write> JsonLines<W> {
     /// The key of a test's or a lifetime's id.
     fn key(&self, id: &str) -> String {
         self.keys.key(id).map_or_else(
-            || aye_events::TestKey::of(id).0[..crate::keys::MIN].to_owned(),
+            || aye_events::TestKey::of(id).prefix(crate::keys::MIN),
             str::to_owned,
         )
     }
@@ -792,12 +792,12 @@ impl<W: Write> JsonLines<W> {
 
     /// What `aye show`'s details add to a bad outcome's line about `path`,
     /// run by `worker`.
-    fn shown(&self, path: &str, worker: Option<u32>) -> Option<Shown> {
+    fn shown(&self, path: &str, worker: Option<WorkerIndex>) -> Option<Shown> {
         if self.show != Some(ShowMode::Details) {
             return None;
         }
         Some(Shown {
-            run: self.context.run.or(self.run).map(|run| format!("r{run}")),
+            run: self.context.run.or(self.run).map(|run| run.to_string()),
             python: self.pythons.get(&worker).cloned(),
             stale: self.context.stale.contains_key(path),
         })
@@ -807,14 +807,15 @@ impl<W: Write> JsonLines<W> {
     /// sub-outcome's `<key> › <name>`), and its message; records `key` as
     /// the first when there is none yet (none is grouped at L3).
     fn first_with(&mut self, failure: &Failure, key: &str) -> Option<(String, String)> {
-        if failure.signature.is_empty() || self.all() {
+        let signature = failure.signature.as_ref()?;
+        if self.all() {
             return None;
         }
-        if let Some(first) = self.signatures.get(&failure.signature) {
+        if let Some(first) = self.signatures.get(signature) {
             return Some(first.clone());
         }
         self.signatures.insert(
-            failure.signature.clone(),
+            signature.clone(),
             (key.to_owned(), shared::message(failure).to_owned()),
         );
         None
@@ -851,7 +852,7 @@ impl<W: Write> JsonLines<W> {
             detail.cols = frame
                 .cols
                 .filter(|_| frame.source.is_some())
-                .map(|[start, end]| [start + indent, end + indent]);
+                .map(|cols| [cols.start + indent, cols.end + indent]);
             detail.before = frame
                 .before
                 .iter()
@@ -893,13 +894,13 @@ impl<W: Write> JsonLines<W> {
                 })
                 .collect();
             detail.history = result.history.as_ref().and_then(|previous| {
-                let total = previous.outcomes.chars().count();
-                let (passed, failed) = shared::history_counts(previous);
+                let total = previous.outcomes.len();
+                let (passed, failed) = previous.outcomes.counts();
                 (total > 0).then(|| History {
                     previous: total,
                     passed,
                     failed,
-                    since: previous.since.map(|since| format!("r{since}")),
+                    since: previous.since.map(|since| since.to_string()),
                 })
             });
         }
@@ -941,7 +942,7 @@ impl<W: Write> JsonLines<W> {
         }
     }
 
-    fn test(&mut self, result: &TestResult, worker: Option<u32>) -> io::Result<()> {
+    fn test(&mut self, result: &TestResult, worker: Option<WorkerIndex>) -> io::Result<()> {
         // A test that failed only through its sub-outcomes gets no line of
         // its own: the first of theirs carries its output and rerun. What
         // they reported (the unittest and doctest adapters fail the test
@@ -977,7 +978,7 @@ impl<W: Write> JsonLines<W> {
         &mut self,
         result: &TestResult,
         own: &[Failure],
-        worker: Option<u32>,
+        worker: Option<WorkerIndex>,
     ) -> io::Result<()> {
         let key = self.key(result.id.as_str());
         if let Some(lifetime) = &result.cause {
@@ -993,7 +994,7 @@ impl<W: Write> JsonLines<W> {
         let Some(first) = own.first() else {
             let mut fail = Fail::new(key, &result.id, result.outcome);
             fail.why = shared::bare_why(&result.output);
-            fail.shown = self.shown(result.id.path(), worker);
+            fail.shown = self.shown(result.id.path().as_str(), worker);
             self.carry(&mut fail.detail, result);
             if self.detailed() {
                 fail.detail.ms = Some(shared::millis(result.duration));
@@ -1006,7 +1007,7 @@ impl<W: Write> JsonLines<W> {
         let mut fail = Fail::new(key.clone(), &result.id, result.outcome);
         fail.phase = shared::notable_phase(first);
         fail.at = at(first);
-        fail.shown = self.shown(result.id.path(), worker);
+        fail.shown = self.shown(result.id.path().as_str(), worker);
         if let Some((same, message)) = self.first_with(first, &key) {
             fail.same_as = Some(same);
             if message != shared::message(first) {
@@ -1034,7 +1035,7 @@ impl<W: Write> JsonLines<W> {
         let key = self.key(id.as_str());
         let mut fail = Fail::new(key.clone(), id, sub.outcome);
         fail.sub = Some(shared::head(&sub.name, ID_MAX));
-        fail.shown = self.shown(id.path(), sub.worker);
+        fail.shown = self.shown(id.path().as_str(), sub.worker);
         if let Some(failure) = &sub.failure {
             fail.phase = shared::notable_phase(failure);
             fail.at = at(failure);
@@ -1080,10 +1081,10 @@ impl<W: Write> JsonLines<W> {
         id: &TestId,
         key: String,
         outcome: Outcome,
-        lifetime: &str,
+        lifetime: &LifetimeId,
     ) -> io::Result<()> {
         let mut fail = Fail::new(key, id, outcome);
-        fail.cause = Some(shared::head(lifetime, ID_MAX));
+        fail.cause = Some(shared::head(lifetime.as_str(), ID_MAX));
         self.line(&Line::Fail(Box::new(fail)))
     }
 
@@ -1092,12 +1093,11 @@ impl<W: Write> JsonLines<W> {
         lifetime: &LifetimeId,
         failure: Option<&Failure>,
         duration: Duration,
-        worker: Option<u32>,
+        worker: Option<WorkerIndex>,
     ) -> io::Result<()> {
         let blocked = self.pending.remove(lifetime).unwrap_or_default();
-        let fresh = failure.filter(|failure| {
-            self.reported.get(lifetime).map(String::as_str) != Some(failure.signature.as_str())
-        });
+        let fresh =
+            failure.filter(|failure| self.reported.get(lifetime) != Some(&failure.signature));
         let Some(failure) = fresh else {
             for (id, key) in blocked {
                 self.caused(&id, key, Outcome::Error, lifetime)?;
@@ -1106,15 +1106,15 @@ impl<W: Write> JsonLines<W> {
         };
         self.reported
             .insert(lifetime.clone(), failure.signature.clone());
-        let key = self.key(lifetime);
+        let key = self.key(lifetime.as_str());
         let mut line = LifetimeFail {
             key: key.clone(),
-            lifetime: shared::head(lifetime, ID_MAX),
+            lifetime: shared::head(lifetime.as_str(), ID_MAX),
             phase: failure.phase.map(shared::phase),
             same_as: None,
             at: at(failure),
             why: None,
-            shown: self.shown(shared::file_of(lifetime), worker),
+            shown: self.shown(lifetime.file().as_str(), worker),
             detail: Detail::default(),
             blocked: blocked
                 .iter()
@@ -1145,8 +1145,8 @@ impl<W: Write> JsonLines<W> {
         self.reported
             .insert(lifetime.clone(), failure.signature.clone());
         self.line(&Line::LifetimeFail(Box::new(LifetimeFail {
-            key: self.key(lifetime),
-            lifetime: shared::head(lifetime, ID_MAX),
+            key: self.key(lifetime.as_str()),
+            lifetime: shared::head(lifetime.as_str(), ID_MAX),
             phase: failure.phase.map(shared::phase),
             same_as: None,
             at: at(failure),
@@ -1180,8 +1180,8 @@ impl<W: Write> JsonLines<W> {
                 .map(|reason| shared::head(reason, REASON_MAX)),
             cause: result
                 .cause
-                .as_deref()
-                .map(|cause| shared::head(cause, ID_MAX)),
+                .as_ref()
+                .map(|cause| shared::head(cause.as_str(), ID_MAX)),
         })
     }
 
@@ -1190,7 +1190,7 @@ impl<W: Write> JsonLines<W> {
     fn module_skip_line(&mut self, diagnostic: &Diagnostic) -> io::Result<()> {
         self.line(&Line::Test {
             key: None,
-            id: shared::head(&diagnostic.path, ID_MAX),
+            id: shared::head(diagnostic.path.as_str(), ID_MAX),
             outcome: Outcome::Skipped.as_str(),
             ms: 0,
             why: None,
@@ -1212,24 +1212,20 @@ impl<W: Write> JsonLines<W> {
     /// An error diagnostic's `collection_error`; from level 2, a warning's
     /// or info's `diagnostic`. Each once.
     fn diagnostic(&mut self, diagnostic: &Diagnostic) -> io::Result<()> {
-        let severity = match diagnostic.severity {
-            Severity::Error => "error",
-            Severity::Warning => "warning",
-            Severity::Info => "info",
-        };
+        let severity = diagnostic.severity.as_str();
         if (diagnostic.severity != Severity::Error && !self.detailed())
             || !self.diagnostics.insert((
                 severity,
                 diagnostic.code.clone(),
-                diagnostic.path.clone(),
+                diagnostic.path.to_string(),
                 diagnostic.message.clone(),
             ))
         {
             return Ok(());
         }
-        let path = shared::head(&diagnostic.path, PATH_MAX);
+        let path = shared::head(diagnostic.path.as_str(), PATH_MAX);
         let line = diagnostic.span.as_ref().and_then(|span| span.line);
-        let code = shared::head(&diagnostic.code, DIAGNOSTIC_CODE_MAX);
+        let code = shared::head(diagnostic.code.as_str(), DIAGNOSTIC_CODE_MAX);
         let message = shared::head(&diagnostic.message, COLLECTION_ERROR_MAX);
         if diagnostic.severity == Severity::Error {
             return self.line(&Line::CollectionError {
@@ -1248,7 +1244,7 @@ impl<W: Write> JsonLines<W> {
         })
     }
 
-    fn worker_error(&mut self, worker: Option<u32>, error: &str) -> io::Result<()> {
+    fn worker_error(&mut self, worker: Option<WorkerIndex>, error: &str) -> io::Result<()> {
         self.line(&Line::WorkerError {
             worker,
             error: shared::tail(error.trim_end(), WORKER_ERROR_MAX),
@@ -1260,7 +1256,7 @@ impl<W: Write> JsonLines<W> {
         exit_code: ExitCode,
         counts: &Counts,
         duration: Duration,
-        stopped: Option<&str>,
+        stopped: Option<&StopReason>,
     ) -> io::Result<()> {
         if self.lines() {
             self.flush_held()?;
@@ -1277,7 +1273,7 @@ impl<W: Write> JsonLines<W> {
             .then_some("aye show <key> --output json");
         let omitted = failures.len().saturating_sub(FAILURES);
         self.line(&Line::Summary(Summary {
-            run: self.context.run.or(self.run).map(|run| format!("r{run}")),
+            run: self.context.run.or(self.run).map(|run| run.to_string()),
             exit: u8::from(exit_code),
             tests: self.selected,
             failed: counts.failed,
@@ -1291,7 +1287,7 @@ impl<W: Write> JsonLines<W> {
             teardown_error: extra.teardown_error,
             lifetime_error: extra.lifetime_error,
             s: shared::secs(duration),
-            stopped: stopped.map(str::to_owned),
+            stopped: stopped.cloned(),
             failures: failures.into_iter().take(FAILURES).collect(),
             failures_omitted: omitted,
             more,
@@ -1327,7 +1323,7 @@ impl<W: Write> JsonLines<W> {
                 lifetime,
                 failure: Some(_),
                 ..
-            } => self.note_bad(lifetime),
+            } => self.note_bad(lifetime.as_str()),
             _ => {}
         }
     }
@@ -1345,7 +1341,7 @@ impl<W: Write> Reporter for JsonLines<W> {
             stopped,
         } = &record.event
         {
-            return self.summary(*exit_code, counts, *duration, stopped.as_deref());
+            return self.summary(*exit_code, counts, *duration, stopped.as_ref());
         }
         if self.verbosity <= QUIET {
             return Ok(());

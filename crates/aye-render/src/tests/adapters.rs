@@ -6,7 +6,7 @@
 use aye_events::Record;
 
 use super::{feed, lines};
-use crate::{ColorChoice, GithubAnnotations, JsonLines, Junit, Reporter, Text, TextOptions};
+use crate::{ColorChoice, GithubAnnotations, JsonLines, Junit, Level, Reporter, Text, TextOptions};
 
 /// The log (`aye --output json -vvv docs/test_failure.txt`) of
 /// `examples/doctest` with `AYE_EXAMPLE_FAIL=1`: one text file whose last
@@ -55,7 +55,7 @@ pub(super) fn text_of(records: &[Record], verbosity: i8) -> String {
     let mut text = Text::new(
         Vec::new(),
         TextOptions {
-            verbosity,
+            verbosity: Level::from_count(verbosity.into()),
             color: ColorChoice::Never,
             live: false,
         },
@@ -70,7 +70,7 @@ fn text(jsonl: &str, verbosity: i8) -> String {
 
 /// JSON lines at `verbosity`.
 pub(super) fn json_of(records: &[Record], verbosity: i8) -> String {
-    let mut json = JsonLines::new(Vec::new(), verbosity);
+    let mut json = JsonLines::new(Vec::new(), Level::from_count(verbosity.into()));
     feed(&mut json, records);
     String::from_utf8(json.into_inner()).unwrap()
 }
@@ -400,7 +400,7 @@ fn a_module_skip_a_batch_reports_or_a_repeat_is_not_counted_again() {
         .cloned()
         .unwrap();
     let mut from_batch = skip.clone();
-    from_batch.envelope.batch = Some(0);
+    from_batch.envelope.batch = Some(aye_events::BatchIndex::from_u32(0));
     records.insert(3, skip);
     records.insert(3, from_batch);
     for verbosity in -1..=1 {
@@ -608,7 +608,7 @@ fn a_failed_lifetime_that_blocked_tests_counts_through_them_alone() {
 /// not crashed or been stopped.
 fn closed(records: &[Record]) -> Vec<Record> {
     use aye_events::Event;
-    let mut open: Vec<(Option<u32>, String)> = Vec::new();
+    let mut open: Vec<(Option<aye_events::BatchIndex>, aye_events::LifetimeId)> = Vec::new();
     let mut out = Vec::new();
     for record in records {
         match &record.event {

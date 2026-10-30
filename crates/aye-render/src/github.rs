@@ -14,10 +14,11 @@ use std::fmt::Write as _;
 use std::io::{self, Write};
 
 use aye_events::{
-    Diagnostic, Event, Failure, LifetimeId, Outcome, Phase, Record, Severity, TestId, TestResult,
+    Diagnostic, DiagnosticCode, Event, Failure, FailureSignature, LifetimeId, Outcome, Phase,
+    Record, Severity, TestId, TestResult, WorkerIndex,
 };
 
-use aye_static::EnvVars;
+use aye_static::{EnvVars, ProcessEnv};
 
 use crate::{Reporter, shared};
 
@@ -28,9 +29,10 @@ const DIFF_LINES: usize = 10;
 /// Lines of a worker's error in an annotation.
 const WORKER_LINES: usize = 10;
 
-/// Whether this process runs as a GitHub Actions step.
-pub fn github_actions_enabled() -> bool {
-    is_github_actions(std::env::var_os(EnvVars::GITHUB_ACTIONS).as_deref())
+/// Whether aye runs as a GitHub Actions step, as its environment `env`
+/// says.
+pub fn github_actions_enabled(env: &ProcessEnv) -> bool {
+    is_github_actions(env.get_os(EnvVars::GITHUB_ACTIONS))
 }
 
 fn is_github_actions(value: Option<&std::ffi::OsStr>) -> bool {
@@ -44,7 +46,7 @@ pub struct GithubAnnotations<W: Write> {
     lines: HashMap<String, u32>,
     annotations: Vec<Annotation>,
     /// Index of the annotation for each failure signature.
-    signatures: HashMap<String, usize>,
+    signatures: HashMap<FailureSignature, usize>,
     /// Index of the annotation for each failed lifetime.
     lifetimes: HashMap<LifetimeId, usize>,
     /// Per lifetime: the first test it kept from running, and how many.
@@ -54,7 +56,7 @@ pub struct GithubAnnotations<W: Write> {
     written: bool,
     /// Error diagnostics annotated, so that one every batch repeats is
     /// annotated once.
-    errors: HashSet<(String, String, String)>,
+    errors: HashSet<(DiagnosticCode, String, String)>,
 }
 
 struct Annotation {
@@ -111,16 +113,16 @@ impl<W: Write> GithubAnnotations<W> {
     fn locate(&self, failure: Option<&Failure>, id: &TestId) -> (Option<String>, Option<u32>) {
         if let Some((path, line)) = failure
             .and_then(shared::origin)
-            .filter(|(path, _)| shared::is_project_path(path))
+            .filter(|(path, _)| path.is_project())
         {
-            return (Some(path.to_owned()), Some(line));
+            return (Some(path.as_str().to_owned()), Some(line));
         }
         let line = self
             .lines
             .get(id.as_str())
             .or_else(|| self.lines.get(id.without_params()))
             .copied();
-        (Some(id.path().to_owned()), line)
+        (Some(id.path().as_str().to_owned()), line)
     }
 
     fn test(&mut self, result: &TestResult) {
@@ -149,7 +151,12 @@ impl<W: Write> GithubAnnotations<W> {
             },
             None => result.failure(),
         };
-        self.annotate(result.id.0.clone(), &result.id, failure, result.outcome);
+        self.annotate(
+            result.id.as_str().to_owned(),
+            &result.id,
+            failure,
+            result.outcome,
+        );
     }
 
     /// A bad sub-outcome (a failed subtest or doctest example), annotated
@@ -177,9 +184,7 @@ impl<W: Write> GithubAnnotations<W> {
         failure: Option<&Failure>,
         outcome: Outcome,
     ) {
-        let signature = failure
-            .map(|failure| failure.signature.as_str())
-            .filter(|signature| !signature.is_empty());
+        let signature = failure.and_then(|failure| failure.signature.as_ref());
         if let Some(&at) = signature.and_then(|signature| self.signatures.get(signature)) {
             self.annotations[at].repeats += 1;
             return;
@@ -188,7 +193,7 @@ impl<W: Write> GithubAnnotations<W> {
         let message = failure.map_or_else(|| outcome.as_str().to_owned(), message);
         if let Some(signature) = signature {
             self.signatures
-                .insert(signature.to_owned(), self.annotations.len());
+                .insert(signature.clone(), self.annotations.len());
         }
         self.annotations.push(Annotation {
             title,
@@ -207,9 +212,9 @@ impl<W: Write> GithubAnnotations<W> {
         let (file, line) = match self.blocked.get(lifetime) {
             Some((first, _)) => self.locate(Some(failure), first),
             None => shared::origin(failure)
-                .filter(|(path, _)| shared::is_project_path(path))
+                .filter(|(path, _)| path.is_project())
                 .map_or((None, None), |(path, line)| {
-                    (Some(path.to_owned()), Some(line))
+                    (Some(path.as_str().to_owned()), Some(line))
                 }),
         };
         let phase = match failure.phase {
@@ -232,7 +237,7 @@ impl<W: Write> GithubAnnotations<W> {
         if diagnostic.severity != Severity::Error
             || !self.errors.insert((
                 diagnostic.code.clone(),
-                diagnostic.path.clone(),
+                diagnostic.path.to_string(),
                 diagnostic.message.clone(),
             ))
         {
@@ -241,12 +246,17 @@ impl<W: Write> GithubAnnotations<W> {
         let line = diagnostic.span.as_ref().and_then(|span| span.line);
         // A diagnostic about no file in particular (pytest rejecting its
         // arguments) is annotated on none.
-        let file = (!diagnostic.path.is_empty()).then(|| self.file(&diagnostic.path));
-        let command = command(file.as_deref(), line, &diagnostic.code, &diagnostic.message);
+        let file = (!diagnostic.path.is_nowhere()).then(|| self.file(diagnostic.path.as_str()));
+        let command = command(
+            file.as_deref(),
+            line,
+            diagnostic.code.as_str(),
+            &diagnostic.message,
+        );
         writeln!(self.out, "{command}")
     }
 
-    fn worker_error(&mut self, worker: Option<u32>, error: &str) -> io::Result<()> {
+    fn worker_error(&mut self, worker: Option<WorkerIndex>, error: &str) -> io::Result<()> {
         let title = worker.map_or_else(
             || "a worker failed".to_owned(),
             |w| format!("worker {w} failed"),
@@ -266,7 +276,7 @@ impl<W: Write> GithubAnnotations<W> {
             if !self.lifetimes.contains_key(lifetime) {
                 annotations.push(Annotation {
                     title: format!("setup of {lifetime}"),
-                    file: Some(first.path().to_owned()),
+                    file: Some(first.path().as_str().to_owned()),
                     line: None,
                     message: format!("setup of {lifetime} failed"),
                     repeats: 0,
@@ -364,7 +374,7 @@ impl<W: Write> Reporter for GithubAnnotations<W> {
         match &record.event {
             Event::CaseCollected(case) => {
                 if let Some(line) = case.span.as_ref().and_then(|span| span.line) {
-                    self.lines.insert(case.id.0.clone(), line);
+                    self.lines.insert(case.id.as_str().to_owned(), line);
                 }
                 Ok(())
             }

@@ -2,8 +2,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use aye_engine::{Claim, Ranged, RefineError, RefineRequest, Refined, Setting, ast};
-use aye_events::Certainty;
+use aye_adapter::{Claim, Ranged, Requested, Setting, ast};
+use aye_events::{Certainty, DiagnosticCode, ProjectPath};
+use aye_protocol::{AdapterContext, RefineError, RefineRequest, Refined};
+use aye_static::ProcessEnv;
 
 use super::*;
 
@@ -11,7 +13,7 @@ fn extension(rel: &str) -> Option<&str> {
     Path::new(rel).extension()?.to_str()
 }
 
-/// Claims `*_check.py` (any `.py` when explicit), `helpers.py` as support,
+/// Claims `*_check.py` (any `.py` when named), `helpers.py` as support,
 /// and `both.py` as tests and support. One case per top-level function,
 /// carrying the support files it was handed as keywords; a function named
 /// `dynamic` asks for refinement, and one named `broken` too, with a static
@@ -23,8 +25,10 @@ struct Fake {
     any_name: bool,
     /// The adapter its cases name.
     adapter: &'static str,
-    /// Every `claim` call: the path and `explicit`.
-    claims: Arc<Mutex<Vec<(String, bool)>>>,
+    /// Every `claim` call: the path and how it was asked about.
+    claims: Arc<Mutex<Vec<(String, Requested)>>>,
+    /// Every `recognize` call, likewise.
+    recognized: Arc<Mutex<Vec<(String, Requested)>>>,
     setting: String,
     context: serde_json::Value,
 }
@@ -36,6 +40,7 @@ impl Fake {
             any_name: false,
             adapter: "fake",
             claims: Arc::default(),
+            recognized: Arc::default(),
             setting: "1".to_string(),
             context: serde_json::json!({"rootdir": "/fake"}),
         }
@@ -63,18 +68,18 @@ impl Recognizer for Fake {
         !name.starts_with('.') && name != "skip"
     }
 
-    fn claim(&self, rel: &str, explicit: bool) -> Claim {
+    fn claim(&self, rel: &str, requested: Requested) -> Claim {
         self.claims
             .lock()
             .unwrap()
-            .push((rel.to_string(), explicit));
+            .push((rel.to_string(), requested));
         let name = rel.rsplit('/').next().unwrap();
         if name == "helpers.py" {
             Claim::Support
         } else if name == "both.py" {
             Claim::TestsAndSupport
         } else if name.ends_with("_check.py")
-            || ((explicit || self.any_name) && extension(name) == Some("py"))
+            || ((requested.is_named() || self.any_name) && extension(name) == Some("py"))
         {
             Claim::Tests
         } else {
@@ -82,24 +87,33 @@ impl Recognizer for Fake {
         }
     }
 
-    fn recognize(&self, file: &SourceFile<'_>, support: &[SourceFile<'_>]) -> Recognition {
+    fn recognize(
+        &self,
+        file: &SourceFile<'_>,
+        requested: Requested,
+        support: &[SourceFile<'_>],
+    ) -> Recognition {
+        self.recognized
+            .lock()
+            .unwrap()
+            .push((file.rel.to_string(), requested));
         let mut recognition = Recognition::default();
         for stmt in &file.module.body {
             if let ast::Stmt::FunctionDef(def) = stmt {
                 let name = def.name.as_str();
                 if name == "dynamic" {
-                    recognition.refine = Some("tests made at import".to_string());
+                    recognition.refine = Some("tests made at import".into());
                 }
                 if name == "broken" {
-                    recognition.refine = Some("the framework decides".to_string());
+                    recognition.refine = Some("the framework decides".into());
                     for (severity, code) in [
                         (Severity::Error, "static-error"),
                         (Severity::Warning, "static-lint"),
                     ] {
                         recognition.diagnostics.push(Diagnostic {
                             severity,
-                            code: code.to_string(),
-                            path: file.rel.to_string(),
+                            code: code.into(),
+                            path: file.rel.to_project_path().into(),
                             span: Some(file.span(def.range())),
                             message: format!("{name} is broken"),
                         });
@@ -116,14 +130,14 @@ impl Recognizer for Fake {
 
     fn settings(&self) -> Vec<Setting> {
         vec![Setting {
-            name: "setting".to_string(),
+            name: "setting".into(),
             value: self.setting.clone(),
-            origin: "default".to_string(),
+            source: aye_config::ValueSource::Default,
         }]
     }
 
-    fn context(&self) -> serde_json::Value {
-        self.context.clone()
+    fn context(&self) -> AdapterContext {
+        self.context.clone().into()
     }
 }
 
@@ -139,7 +153,7 @@ impl Recognizer for Lines {
         true
     }
 
-    fn claim(&self, rel: &str, _: bool) -> Claim {
+    fn claim(&self, rel: &str, _: Requested) -> Claim {
         if extension(rel) == Some("txt") {
             Claim::Tests
         } else {
@@ -147,7 +161,7 @@ impl Recognizer for Lines {
         }
     }
 
-    fn recognize(&self, file: &SourceFile<'_>, _: &[SourceFile<'_>]) -> Recognition {
+    fn recognize(&self, file: &SourceFile<'_>, _: Requested, _: &[SourceFile<'_>]) -> Recognition {
         assert!(file.module.body.is_empty());
         let cases = file
             .source
@@ -192,7 +206,7 @@ impl Refiner for FakeRefiner {
             .iter()
             .flat_map(|file| {
                 ["dynamic[1]", "dynamic[2]"].map(|name| {
-                    let mut case = Case::new(format!("{file}::{name}"), &request.adapter);
+                    let mut case = Case::new(format!("{file}::{name}"), request.adapter.clone());
                     case.certainty = Certainty::Refined;
                     case
                 })
@@ -219,18 +233,12 @@ fn run(
     options: Options,
     refiner: Option<&(dyn Refiner + Sync)>,
 ) -> Collection {
-    let project = Project {
-        root,
-        cwd: root,
-        args: &[],
-        config_file: None,
-        framework_args: &[],
-    };
+    let project = Project::new(root, root);
     Collector::new(project, recognizers, options).collect(targets, refiner)
 }
 
 fn fake() -> Vec<Prepared> {
-    vec![("fake", Box::new(Fake::new()))]
+    vec![("fake".into(), Box::new(Fake::new()))]
 }
 
 /// A fake interpreter in a venv: `<dir>/venv/bin/python`, its
@@ -243,11 +251,11 @@ fn interpreter(dir: &Path) -> PathBuf {
 }
 
 /// `python` with no environment variables and no framework arguments.
-fn environment(python: &Path) -> Environment {
-    Environment {
-        interpreter: Some(python.to_path_buf()),
+fn environment(python: &Path) -> EnvironmentFingerprint {
+    EnvironmentFingerprint {
+        interpreter: python.to_path_buf(),
         framework_args: Vec::new(),
-        variables: Some(Vec::new()),
+        variables: ProcessEnv::new(),
     }
 }
 
@@ -256,7 +264,7 @@ fn run_cached(
     root: &Path,
     recognizers: &[Prepared],
     cache: &Path,
-    environment: Environment,
+    environment: EnvironmentFingerprint,
     refiner: Option<&(dyn Refiner + Sync)>,
 ) -> Collection {
     run_cached_with(root, recognizers, cache, environment, refiner, &[])
@@ -268,16 +276,13 @@ fn run_cached_with(
     root: &Path,
     recognizers: &[Prepared],
     cache: &Path,
-    environment: Environment,
+    environment: EnvironmentFingerprint,
     refiner: Option<&(dyn Refiner + Sync)>,
     framework_args: &[String],
 ) -> Collection {
     let project = Project {
-        root,
-        cwd: root,
-        args: &[],
-        config_file: None,
         framework_args,
+        ..Project::new(root, root)
     };
     let options = Options {
         cache_dir: Some(cache.to_path_buf()),
@@ -298,11 +303,11 @@ fn ids(collection: &Collection) -> Vec<&str> {
     collection.cases.iter().map(|c| c.id.as_str()).collect()
 }
 
-fn codes_of(collection: &Collection) -> Vec<(&str, Severity)> {
+fn codes_of(collection: &Collection) -> Vec<(DiagnosticCode, Severity)> {
     collection
         .diagnostics
         .iter()
-        .map(|d| (d.code.as_str(), d.severity))
+        .map(|d| (d.code.clone(), d.severity))
         .collect()
 }
 
@@ -350,15 +355,18 @@ fn walks_sorted_and_honours_descend() {
     assert_eq!((span.path.as_str(), span.line), ("a_check.py", Some(2)));
 }
 
+/// A file named on the command line is claimed, and recognized, as named;
+/// one its directory's walk finds, as found.
 #[test]
-fn explicit_files_are_claimed_as_explicit() {
+fn explicit_files_are_claimed_and_recognized_as_named() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     write(root, "plain.py", "def test_p(): pass\n");
     write(root, "tests/one_check.py", "def test_one(): pass\n");
     let recognizer = Fake::new();
     let claims = recognizer.claims.clone();
-    let recognizers: Vec<Prepared> = vec![("fake", Box::new(recognizer))];
+    let recognitions = recognizer.recognized.clone();
+    let recognizers: Vec<Prepared> = vec![("fake".into(), Box::new(recognizer))];
 
     let targets = [PathBuf::from("plain.py"), root.join("tests/./../tests")];
     let collection = run(root, &recognizers, &targets, Options::default(), None);
@@ -367,8 +375,17 @@ fn explicit_files_are_claimed_as_explicit() {
         ["plain.py::test_p", "tests/one_check.py::test_one"]
     );
     let claims = claims.lock().unwrap();
-    assert!(claims.contains(&("plain.py".to_string(), true)));
-    assert!(claims.contains(&("tests/one_check.py".to_string(), false)));
+    assert!(claims.contains(&("plain.py".to_string(), Requested::Named)));
+    assert!(claims.contains(&("tests/one_check.py".to_string(), Requested::Found)));
+    let mut recognitions = recognitions.lock().unwrap().clone();
+    recognitions.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        recognitions,
+        [
+            ("plain.py".to_string(), Requested::Named),
+            ("tests/one_check.py".to_string(), Requested::Found),
+        ]
+    );
 }
 
 /// pytest's `normalize_collection_arguments` drops an explicit file below
@@ -438,7 +455,10 @@ fn explicit_paths_are_normalized_as_pytest_does() {
         root.join("tests"),
     ];
     let collection = run(root, &fake(), &targets, Options::default(), None);
-    assert_eq!(codes_of(&collection), [(codes::NOT_FOUND, Severity::Error)]);
+    assert_eq!(
+        codes_of(&collection),
+        [(DiagnosticCode::NotFound, Severity::Error)]
+    );
     assert_eq!(ids(&collection), walk);
 }
 
@@ -472,8 +492,8 @@ fn missing_and_unclaimed_targets_are_errors() {
     assert_eq!(
         codes_of(&collection),
         [
-            (codes::NOT_FOUND, Severity::Error),
-            (codes::UNCLAIMED, Severity::Error),
+            (DiagnosticCode::NotFound, Severity::Error),
+            (DiagnosticCode::Unclaimed, Severity::Error),
         ]
     );
     assert_eq!(collection.diagnostics[0].path, "nope.py");
@@ -489,8 +509,11 @@ fn roots_are_walked_only_for_the_recognizers_that_list_them() {
     write(root, "other/o_check.py", "def test_o(): pass\n");
     write(root, "other/notes.txt", "first\nsecond\n");
     let recognizers: Vec<Prepared> = vec![
-        ("fake", Box::new(Fake::rooted(vec![root.join("tests")]))),
-        ("lines", Box::new(Lines)),
+        (
+            "fake".into(),
+            Box::new(Fake::rooted(vec![root.join("tests")])),
+        ),
+        ("lines".into(), Box::new(Lines)),
     ];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(
@@ -508,7 +531,7 @@ fn non_python_files_reach_recognizers_with_an_empty_module() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     write(root, "doc.txt", "def (:\nalpha\n");
-    let recognizers: Vec<Prepared> = vec![("lines", Box::new(Lines))];
+    let recognizers: Vec<Prepared> = vec![("lines".into(), Box::new(Lines))];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(ids(&collection), ["doc.txt::def (:", "doc.txt::alpha"]);
     assert_eq!(collection.diagnostics, [] as [aye_events::Diagnostic; 0]);
@@ -609,7 +632,7 @@ fn a_file_claimed_as_tests_and_support_is_both() {
     let collection = run(root, &fake(), &[], Options::default(), None);
     assert_eq!(
         codes_of(&collection),
-        [(codes::SYNTAX_ERROR, Severity::Error)]
+        [(DiagnosticCode::SyntaxError, Severity::Error)]
     );
     assert_eq!(collection.diagnostics[0].path, "both.py");
     assert_eq!(keywords(&collection, "a_check.py::test_a"), ["helpers.py"]);
@@ -636,7 +659,7 @@ fn an_unreadable_file_claimed_as_tests_and_support_is_reported_once() {
     fs::set_permissions(&both, fs::Permissions::from_mode(0o644)).unwrap();
     assert_eq!(
         codes_of(&collection),
-        [(codes::UNREADABLE, Severity::Error)]
+        [(DiagnosticCode::Unreadable, Severity::Error)]
     );
     assert_eq!(collection.diagnostics[0].path, "both.py");
     assert_eq!(ids(&collection), ["a_check.py::test_a"]);
@@ -659,11 +682,11 @@ fn a_file_yields_tests_only_for_the_recognizers_whose_walk_reached_it() {
     // in the root's file would win the id.
     let recognizers: Vec<Prepared> = vec![
         (
-            "tests_only",
+            "tests_only".into(),
             Box::new(named("tests_only", vec![root.join("tests")])),
         ),
         (
-            "everywhere",
+            "everywhere".into(),
             Box::new(named("everywhere", vec![root.to_path_buf()])),
         ),
     ];
@@ -697,7 +720,7 @@ fn syntax_errors_are_reported_and_yield_no_cases() {
     assert_eq!(ids(&collection), ["good_check.py::test_good"]);
     assert_eq!(
         codes_of(&collection),
-        [(codes::SYNTAX_ERROR, Severity::Error)]
+        [(DiagnosticCode::SyntaxError, Severity::Error)]
     );
     let diagnostic = &collection.diagnostics[0];
     assert_eq!(diagnostic.path, "bad_check.py");
@@ -718,7 +741,7 @@ fn a_syntax_error_at_the_end_of_the_file_is_located() {
     let collection = run(root, &fake(), &[], Options::default(), None);
     assert_eq!(collection.cases, [] as [aye_events::Case; 0]);
     let diagnostic = &collection.diagnostics[0];
-    assert_eq!(diagnostic.code, codes::SYNTAX_ERROR);
+    assert_eq!(diagnostic.code, DiagnosticCode::SyntaxError);
     assert!(diagnostic.message.starts_with("syntax error at 2:"));
 }
 
@@ -776,12 +799,12 @@ fn a_file_that_is_not_utf8_is_refined() {
     assert_eq!(collection.cases, [] as [aye_events::Case; 0]);
     assert_eq!(
         codes_of(&collection),
-        [(codes::NOT_REFINED, Severity::Info)]
+        [(DiagnosticCode::NotRefined, Severity::Info)]
     );
-    assert!(
-        collection.diagnostics[0]
-            .message
-            .contains("not valid UTF-8")
+    assert_eq!(
+        collection.diagnostics[0].message,
+        "fake must import this file to know its tests (the file is not valid UTF-8), but \
+         refinement is off; keeping the static guess"
     );
 }
 
@@ -795,8 +818,8 @@ fn the_higher_priority_adapter_wins_a_duplicate_id() {
         ..Fake::new()
     };
     let recognizers: Vec<Prepared> = vec![
-        ("first", Box::new(named("first"))),
-        ("second", Box::new(named("second"))),
+        ("first".into(), Box::new(named("first"))),
+        ("second".into(), Box::new(named("second"))),
     ];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(ids(&collection), ["a_check.py::test_a"]);
@@ -822,7 +845,7 @@ fn the_higher_priority_adapter_wins_a_duplicate_id() {
     assert_eq!(ids(&collection), ["a_check.py::test_a"]);
     assert_eq!(
         codes_of(&collection),
-        [(codes::DUPLICATE_ID, Severity::Warning)]
+        [(DiagnosticCode::DuplicateId, Severity::Warning)]
     );
     assert!(
         collection.diagnostics[0]
@@ -853,7 +876,7 @@ fn an_adapter_repeating_an_id_keeps_the_first() {
     );
     assert_eq!(
         codes_of(&collection),
-        [(codes::DUPLICATE_ID, Severity::Warning)]
+        [(DiagnosticCode::DuplicateId, Severity::Warning)]
     );
     assert_eq!(
         collection.diagnostics[0].span.as_ref().unwrap().line,
@@ -876,7 +899,10 @@ fn a_test_file_without_tests_is_noted() {
     write(root, "empty_check.py", "X = 1\n");
     let collection = run(root, &fake(), &[], Options::default(), None);
     assert_eq!(collection.cases, [] as [aye_events::Case; 0]);
-    assert_eq!(codes_of(&collection), [(codes::NO_TESTS, Severity::Info)]);
+    assert_eq!(
+        codes_of(&collection),
+        [(DiagnosticCode::NoTests, Severity::Info)]
+    );
     let strict = Options {
         strict: true,
         ..Options::default()
@@ -898,8 +924,8 @@ fn a_file_whose_adapter_says_why_it_has_no_tests_gets_no_note() {
                     .0
                     .map(|code| Diagnostic {
                         severity: Severity::Info,
-                        code: code.to_string(),
-                        path: request.files[0].clone(),
+                        code: code.into(),
+                        path: request.files[0].clone().into(),
                         span: None,
                         message: "…".to_string(),
                     })
@@ -915,12 +941,15 @@ fn a_file_whose_adapter_says_why_it_has_no_tests_gets_no_note() {
     for code in ["skipped", "ignored"] {
         let refiner = Replies(Some(code));
         let collection = run(root, &fake(), &[], Options::default(), Some(&refiner));
-        assert_eq!(codes_of(&collection), [(code, Severity::Info)]);
+        assert_eq!(codes_of(&collection), [(code.into(), Severity::Info)]);
     }
     // Nothing said: the note.
     let refiner = Replies(None);
     let collection = run(root, &fake(), &[], Options::default(), Some(&refiner));
-    assert_eq!(codes_of(&collection), [(codes::NO_TESTS, Severity::Info)]);
+    assert_eq!(
+        codes_of(&collection),
+        [(DiagnosticCode::NoTests, Severity::Info)]
+    );
 }
 
 /// A file in a directory an adapter reported about (a conftest pytest
@@ -931,14 +960,14 @@ fn a_file_in_a_directory_the_adapter_reported_about_gets_no_note() {
     struct SkipsSub;
     impl Refiner for SkipsSub {
         fn refine(&self, request: &RefineRequest) -> Result<Refined, RefineError> {
-            let skips = request.files.iter().any(|f| f.starts_with("sub/"));
+            let skips = request.files.iter().any(|f| f.as_str().starts_with("sub/"));
             Ok(Refined {
                 cases: Vec::new(),
                 diagnostics: skips
                     .then(|| Diagnostic {
                         severity: Severity::Info,
-                        code: "skipped".to_string(),
-                        path: "sub".to_string(),
+                        code: DiagnosticCode::Skipped,
+                        path: "sub".into(),
                         span: None,
                         message: "could not import 'missing'".to_string(),
                     })
@@ -954,14 +983,17 @@ fn a_file_in_a_directory_the_adapter_reported_about_gets_no_note() {
         write(root, rel, "def dynamic():\n    pass\n");
     }
     let collection = run(root, &fake(), &[], Options::default(), Some(&SkipsSub));
-    let notes: Vec<(&str, &str)> = collection
+    let notes: Vec<(DiagnosticCode, &str)> = collection
         .diagnostics
         .iter()
-        .map(|d| (d.code.as_str(), d.path.as_str()))
+        .map(|d| (d.code.clone(), d.path.as_str()))
         .collect();
     assert_eq!(
         notes,
-        [(codes::NO_TESTS, "subway/c_check.py"), ("skipped", "sub")]
+        [
+            (DiagnosticCode::NoTests, "subway/c_check.py"),
+            (DiagnosticCode::Skipped, "sub")
+        ]
     );
 }
 
@@ -979,7 +1011,10 @@ fn files_claimed_whatever_their_names_may_hold_no_tests() {
         any_name: true,
         ..Fake::new()
     };
-    let recognizers: Vec<Prepared> = vec![("every", Box::new(every)), ("lines", Box::new(Lines))];
+    let recognizers: Vec<Prepared> = vec![
+        ("every".into(), Box::new(every)),
+        ("lines".into(), Box::new(Lines)),
+    ];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(collection.cases, [] as [aye_events::Case; 0]);
     // `empty_check.py` is claimed by name too, by the same recognizer: one
@@ -989,16 +1024,19 @@ fn files_claimed_whatever_their_names_may_hold_no_tests() {
 
     let recognizers: Vec<Prepared> = vec![
         (
-            "every",
+            "every".into(),
             Box::new(Fake {
                 any_name: true,
                 ..Fake::new()
             }),
         ),
-        ("named", Box::new(Fake::new())),
+        ("named".into(), Box::new(Fake::new())),
     ];
     let collection = run(root, &recognizers, &[], Options::default(), None);
-    assert_eq!(codes_of(&collection), [(codes::NO_TESTS, Severity::Info)]);
+    assert_eq!(
+        codes_of(&collection),
+        [(DiagnosticCode::NoTests, Severity::Info)]
+    );
     assert_eq!(collection.diagnostics[0].path, "pkg/empty_check.py");
     assert_eq!(
         collection.diagnostics[0].message,
@@ -1026,7 +1064,7 @@ fn a_packages_init_comes_first_in_the_walk() {
         any_name: true,
         ..Fake::new()
     };
-    let recognizers: Vec<Prepared> = vec![("every", Box::new(every))];
+    let recognizers: Vec<Prepared> = vec![("every".into(), Box::new(every))];
     let collection = run(root, &recognizers, &[], Options::default(), None);
     assert_eq!(
         ids(&collection),
@@ -1069,7 +1107,7 @@ fn an_unreadable_directory_is_an_error() {
     // `skip` is never entered, so it can't fail.
     assert_eq!(
         codes_of(&collection),
-        [(codes::UNREADABLE, Severity::Error)]
+        [(DiagnosticCode::Unreadable, Severity::Error)]
     );
     assert_eq!(collection.diagnostics[0].path, "locked");
     assert!(collection.has_errors());
@@ -1106,9 +1144,12 @@ fn refined_cases_replace_the_static_ones() {
     assert_eq!(
         *refiner.requests.lock().unwrap(),
         [RefineRequest {
-            adapter: "fake".to_string(),
-            files: vec!["b_check.py".to_string(), "c_check.py".to_string()],
-            context: serde_json::json!({"rootdir": "/fake"}),
+            adapter: "fake".into(),
+            files: vec![
+                ProjectPath::new("b_check.py").unwrap(),
+                ProjectPath::new("c_check.py").unwrap(),
+            ],
+            context: AdapterContext::from(serde_json::json!({"rootdir": "/fake"})).into(),
             digests_only: false,
         }]
     );
@@ -1126,11 +1167,16 @@ fn refinement_only_replaces_the_adapter_that_asked() {
         fn descend(&self, dir: &Path) -> bool {
             self.0.descend(dir)
         }
-        fn claim(&self, rel: &str, explicit: bool) -> Claim {
-            self.0.claim(rel, explicit)
+        fn claim(&self, rel: &str, requested: Requested) -> Claim {
+            self.0.claim(rel, requested)
         }
-        fn recognize(&self, file: &SourceFile<'_>, support: &[SourceFile<'_>]) -> Recognition {
-            let mut recognition = self.0.recognize(file, support);
+        fn recognize(
+            &self,
+            file: &SourceFile<'_>,
+            requested: Requested,
+            support: &[SourceFile<'_>],
+        ) -> Recognition {
+            let mut recognition = self.0.recognize(file, requested, support);
             recognition.refine = None;
             for case in &mut recognition.cases {
                 case.id = TestId::new(format!("{}::static", case.id));
@@ -1143,8 +1189,8 @@ fn refinement_only_replaces_the_adapter_that_asked() {
     let root = dir.path();
     write(root, "d_check.py", "def dynamic(): pass\n");
     let recognizers: Vec<Prepared> = vec![
-        ("fake", Box::new(Fake::new())),
-        ("static", Box::new(Static(Fake::new()))),
+        ("fake".into(), Box::new(Fake::new())),
+        ("static".into(), Box::new(Static(Fake::new()))),
     ];
     let refiner = FakeRefiner::default();
     let collection = run(root, &recognizers, &[], Options::default(), Some(&refiner));
@@ -1209,7 +1255,7 @@ fn stray_refined_cases_in_a_requested_package_keep_their_place() {
         fn descend(&self, _: &Path) -> bool {
             true
         }
-        fn claim(&self, rel: &str, _: bool) -> Claim {
+        fn claim(&self, rel: &str, _: Requested) -> Claim {
             let name = rel.rsplit('/').next().unwrap();
             if name == "__init__.py" || name.ends_with("_check.py") {
                 Claim::Tests
@@ -1217,12 +1263,17 @@ fn stray_refined_cases_in_a_requested_package_keep_their_place() {
                 Claim::Ignore
             }
         }
-        fn recognize(&self, file: &SourceFile<'_>, _: &[SourceFile<'_>]) -> Recognition {
+        fn recognize(
+            &self,
+            file: &SourceFile<'_>,
+            _: Requested,
+            _: &[SourceFile<'_>],
+        ) -> Recognition {
             let mut recognition = Recognition::default();
             for stmt in &file.module.body {
                 if let ast::Stmt::FunctionDef(def) = stmt {
                     if def.name.as_str() == "dynamic" {
-                        recognition.refine = Some("tests made at import".to_string());
+                        recognition.refine = Some("tests made at import".into());
                     } else {
                         let id = format!("{}::{}", file.rel, def.name);
                         recognition.cases.push(Case::new(id, "packages"));
@@ -1264,7 +1315,7 @@ fn stray_refined_cases_in_a_requested_package_keep_their_place() {
     write(root, "pkg/m_check.py", "def dynamic(): pass\n");
     write(root, "pkg/sub/__init__.py", "def dynamic(): pass\n");
     write(root, "z_check.py", "def test_z(): pass\n");
-    let packages: Vec<Prepared> = vec![("packages", Box::new(Packages))];
+    let packages: Vec<Prepared> = vec![("packages".into(), Box::new(Packages))];
     let collection = run(root, &packages, &[], Options::default(), Some(&Discovering));
     assert_eq!(
         ids(&collection),
@@ -1301,7 +1352,7 @@ fn refinement_failure_keeps_the_static_guess() {
     assert_eq!(collection.refined_files, 0);
     assert_eq!(
         codes_of(&collection),
-        [(codes::REFINE_FAILED, Severity::Warning)]
+        [(DiagnosticCode::RefineFailed, Severity::Warning)]
     );
     assert!(
         collection.diagnostics[0]
@@ -1319,7 +1370,7 @@ fn without_a_refiner_the_static_guess_stays() {
     assert_eq!(ids(&collection), ["d_check.py::dynamic"]);
     assert_eq!(
         codes_of(&collection),
-        [(codes::NOT_REFINED, Severity::Info)]
+        [(DiagnosticCode::NotRefined, Severity::Info)]
     );
     let message = &collection.diagnostics[0].message;
     assert!(message.contains("tests made at import"), "{message}");
@@ -1343,8 +1394,8 @@ fn a_refined_file_keeps_only_the_frameworks_errors() {
                 .iter()
                 .map(|file| Diagnostic {
                     severity: Severity::Error,
-                    code: "collection-error".to_string(),
-                    path: file.clone(),
+                    code: DiagnosticCode::CollectionError,
+                    path: file.clone().into(),
                     span: None,
                     message: "the framework could not collect it".to_string(),
                 })
@@ -1365,15 +1416,18 @@ fn a_refined_file_keeps_only_the_frameworks_errors() {
     assert_eq!(
         codes_of(&collection),
         [
-            ("static-lint", Severity::Warning),
-            ("collection-error", Severity::Error)
+            (DiagnosticCode::from("static-lint"), Severity::Warning),
+            (DiagnosticCode::CollectionError, Severity::Error)
         ]
     );
     assert_eq!(ids(&collection), [] as [&str; 0]);
     // A framework that collects the file has the final word too.
     let refiner = FakeRefiner::default();
     let collection = run(root, &fake(), &[], Options::default(), Some(&refiner));
-    assert_eq!(codes_of(&collection), [("static-lint", Severity::Warning)]);
+    assert_eq!(
+        codes_of(&collection),
+        [(DiagnosticCode::from("static-lint"), Severity::Warning)]
+    );
     assert_eq!(
         ids(&collection),
         ["b_check.py::dynamic[1]", "b_check.py::dynamic[2]"]
@@ -1384,9 +1438,9 @@ fn a_refined_file_keeps_only_the_frameworks_errors() {
     assert_eq!(
         codes_of(&collection),
         [
-            ("static-error", Severity::Error),
-            ("static-lint", Severity::Warning),
-            (codes::NOT_REFINED, Severity::Info)
+            (DiagnosticCode::from("static-error"), Severity::Error),
+            (DiagnosticCode::from("static-lint"), Severity::Warning),
+            (DiagnosticCode::NotRefined, Severity::Info)
         ]
     );
     let refiner = FakeRefiner::failing();
@@ -1394,9 +1448,9 @@ fn a_refined_file_keeps_only_the_frameworks_errors() {
     assert_eq!(
         codes_of(&collection),
         [
-            ("static-error", Severity::Error),
-            ("static-lint", Severity::Warning),
-            (codes::REFINE_FAILED, Severity::Warning)
+            (DiagnosticCode::from("static-error"), Severity::Error),
+            (DiagnosticCode::from("static-lint"), Severity::Warning),
+            (DiagnosticCode::RefineFailed, Severity::Warning)
         ]
     );
     assert_eq!(ids(&collection), ["b_check.py::broken"]);
@@ -1412,13 +1466,7 @@ fn refinement_is_cached_by_content() {
     write(root, "d_check.py", "def dynamic(): pass\n");
     write(root, "e_check.py", "def dynamic(): pass\n");
     let collect = |refiner: &FakeRefiner, recognizers: &[Prepared], version: &str| {
-        let project = Project {
-            root,
-            cwd: root,
-            args: &[],
-            config_file: None,
-            framework_args: &[],
-        };
+        let project = Project::new(root, root);
         let options = Options {
             cache_dir: Some(cache.path().join("cache")),
             version: version.to_string(),
@@ -1448,7 +1496,7 @@ fn refinement_is_cached_by_content() {
     // Nothing changed: no worker.
     assert_eq!(
         collect(&refiner, &fake(), "0.0.1"),
-        [] as [aye_engine::RefineRequest; 0]
+        [] as [aye_protocol::RefineRequest; 0]
     );
     // No refiner at all: the cache still answers.
     let collection = run_cached(
@@ -1473,14 +1521,14 @@ fn refinement_is_cached_by_content() {
     assert_eq!(requests[0].files, ["d_check.py", "e_check.py"]);
     assert_eq!(
         collect(&refiner, &fake(), "0.0.1"),
-        [] as [aye_engine::RefineRequest; 0]
+        [] as [aye_protocol::RefineRequest; 0]
     );
 
     // So do another version of aye and other settings.
     assert_eq!(collect(&refiner, &fake(), "0.0.2").len(), 1);
     let mut other = Fake::new();
     other.setting = "2".to_string();
-    let recognizers: Vec<Prepared> = vec![("fake", Box::new(other))];
+    let recognizers: Vec<Prepared> = vec![("fake".into(), Box::new(other))];
     assert_eq!(collect(&refiner, &recognizers, "0.0.1").len(), 1);
 }
 
@@ -1525,17 +1573,12 @@ fn the_interpreter_and_the_environment_are_in_the_key() {
     let python = interpreter(cache.path());
     write(root, "d_check.py", "def dynamic(): pass\n");
     let refiner = FakeRefiner::default();
-    let calls = |environment: Environment| {
+    let calls = |environment: EnvironmentFingerprint| {
         run_cached(root, &fake(), cache.path(), environment, Some(&refiner));
         std::mem::take(&mut *refiner.requests.lock().unwrap()).len()
     };
-    let with = |variables: &[(&str, &str)], args: &[&str]| Environment {
-        variables: Some(
-            variables
-                .iter()
-                .map(|(k, v)| ((*k).into(), (*v).into()))
-                .collect(),
-        ),
+    let with = |variables: &[(&str, &str)], args: &[&str]| EnvironmentFingerprint {
+        variables: ProcessEnv::from_vars(variables.iter().copied()),
         framework_args: args.iter().map(|a| (*a).to_string()).collect(),
         ..environment(&python)
     };
@@ -1615,7 +1658,7 @@ fn a_file_claimed_as_tests_and_support_keys_itself_and_the_files_below() {
             .collect::<Vec<_>>()
     };
     assert_eq!(files(), ["both.py", "sub/d_check.py"]);
-    assert_eq!(files(), [] as [std::string::String; 0]);
+    assert_eq!(files(), [] as [&str; 0]);
     write(root, "both.py", "def dynamic(): pass\n# edited\n");
     assert_eq!(files(), ["both.py", "sub/d_check.py"]);
     write(root, "sub/d_check.py", "def dynamic(): pass\n# edited\n");
@@ -1675,8 +1718,8 @@ fn only_clean_results_are_cached() {
     fn diagnostic(severity: Severity, code: &str, path: &str) -> Diagnostic {
         Diagnostic {
             severity,
-            code: code.to_string(),
-            path: path.to_string(),
+            code: code.into(),
+            path: path.into(),
             span: None,
             message: "…".to_string(),
         }
@@ -1692,12 +1735,16 @@ fn only_clean_results_are_cached() {
     let replies: [(&str, Reply); 6] = [
         ("an import error", |r| Refined {
             cases: Vec::new(),
-            diagnostics: vec![diagnostic(Severity::Error, "collection-error", &r.files[0])],
+            diagnostics: vec![diagnostic(
+                Severity::Error,
+                "collection-error",
+                r.files[0].as_str(),
+            )],
             digests: None,
         }),
         ("a module-level skip", |r| Refined {
             cases: Vec::new(),
-            diagnostics: vec![diagnostic(Severity::Info, "skipped", &r.files[0])],
+            diagnostics: vec![diagnostic(Severity::Info, "skipped", r.files[0].as_str())],
             digests: None,
         }),
         ("no tests", |_| Refined::default()),
@@ -1762,7 +1809,7 @@ fn only_clean_results_are_cached() {
     );
     assert_eq!(
         codes_of(&collection),
-        [(codes::REFINE_FAILED, Severity::Warning)]
+        [(DiagnosticCode::RefineFailed, Severity::Warning)]
     );
     assert_eq!(entries(cache.path()), 0);
 }
@@ -1878,9 +1925,10 @@ fn what_makes_a_file_not_standalone() {
     write(root, "tests/conftest.py", "");
     write(root, "src/mypkg/__init__.py", "");
     let seen = Mutex::new(HashMap::new());
-    let installed: HashSet<String> = ["extmod", "numpy", "installed_plugin", "pytest", "_pytest"]
+    let installed: InstalledModules = ["extmod", "numpy", "installed_plugin", "pytest", "_pytest"]
         .map(String::from)
-        .into();
+        .into_iter()
+        .collect();
     let scope = standalone::Scope {
         root,
         cwd: root,
@@ -2001,9 +2049,10 @@ fn what_loads_a_module_by_name() {
     let root = dir.path();
     write(root, "src/mypkg/__init__.py", "");
     let seen = Mutex::new(HashMap::new());
-    let installed: HashSet<String> = ["extmod", "installed_plugin", "pytest", "_pytest"]
+    let installed: InstalledModules = ["extmod", "installed_plugin", "pytest", "_pytest"]
         .map(String::from)
-        .into();
+        .into_iter()
+        .collect();
     let scope = standalone::Scope {
         root,
         cwd: root,
@@ -2125,10 +2174,7 @@ fn code_named_by_string_outside_the_project_is_never_cached() {
         );
         write(dir.path(), "onpath/onpath.py", "");
         let mut env = environment(&python);
-        env.variables = Some(vec![(
-            "PYTHONPATH".into(),
-            dir.path().join("onpath").into_os_string(),
-        )]);
+        env.variables = ProcessEnv::from_vars([("PYTHONPATH", dir.path().join("onpath"))]);
         write(&root, "d_check.py", source);
         if !helpers.is_empty() {
             write(&root, "helpers.py", helpers);
@@ -2140,165 +2186,6 @@ fn code_named_by_string_outside_the_project_is_never_cached() {
         assert_eq!(entries(cache.path()), usize::from(*cached), "{what}");
         assert_eq!(refiner.calls(), if *cached { 1 } else { 2 }, "{what}");
     }
-}
-
-#[test]
-fn installed_modules_are_listed_from_the_interpreters_paths() {
-    let dir = tempfile::tempdir().unwrap();
-    let python = interpreter(dir.path());
-    let site = dir.path().join("venv/lib/python3.13/site-packages");
-    for entry in [
-        "pkg/__init__.py",
-        "single.py",
-        "ext.cpython-313-darwin.so",
-        "winext.pyd",
-        "Some_Dist-1.0.dist-info/top_level.txt",
-        "old.egg-info/top_level.txt",
-        "notes.txt",
-    ] {
-        write(&site, entry, "");
-    }
-    write(&site, "Some_Dist-1.0.dist-info/top_level.txt", "toplevel\n");
-    write(&site, "old.egg-info/top_level.txt", "oldmod\n");
-    write(dir.path(), "elsewhere/viapth/__init__.py", "");
-    write(dir.path(), "relative/relmod.py", "");
-    write(
-        &site,
-        "paths.pth",
-        format!(
-            "# a comment\n{}\n../../../../relative\nimport hook; hook.install()\n",
-            dir.path().join("elsewhere").display()
-        ),
-    );
-    write(dir.path(), "pp/onpath.py", "");
-    let mut env = environment(&python);
-    env.variables = Some(vec![(
-        "PYTHONPATH".into(),
-        dir.path().join("pp").into_os_string(),
-    )]);
-    let names = env.installed_modules(dir.path());
-    for name in [
-        "pkg",
-        "single",
-        "ext",
-        "winext",
-        "Some_Dist",
-        "some_dist",
-        "toplevel",
-        "old",
-        "oldmod",
-        "viapth",
-        "relmod",
-        "onpath",
-    ] {
-        assert!(names.contains(name), "{name}: {names:?}");
-    }
-    for name in ["notes", "paths", "hook", "1"] {
-        assert!(!names.contains(name), "{name}: {names:?}");
-    }
-    assert!(
-        Environment::default()
-            .installed_modules(dir.path())
-            .is_empty()
-    );
-}
-
-/// Whether the interpreter installs a module (pytest, for the default
-/// adapters): `None` when its packages can't be found, and a venv that
-/// leaves out the system's packages counts only its own.
-#[test]
-fn whether_the_interpreter_installs_a_module() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    // The base interpreter, with pytest.
-    write(root, "base/bin/python3", "");
-    write(
-        root,
-        "base/lib/python3.13/site-packages/_pytest/__init__.py",
-        "",
-    );
-    write(
-        root,
-        "base/lib/python3.13/site-packages/pytest-9.1.1.dist-info/METADATA",
-        "",
-    );
-    let base = Environment {
-        interpreter: Some(root.join("base/bin/python3")),
-        ..Environment::default()
-    };
-    assert_eq!(base.installs(root, &["pytest"]), Some(true));
-    assert_eq!(base.installs(root, &["_pytest"]), Some(true));
-    assert_eq!(base.installs(root, &["nose"]), Some(false));
-
-    // A venv of it, as `python -m venv` makes one: the interpreter a link to
-    // the base's.
-    write(
-        root,
-        "venv/pyvenv.cfg",
-        format!("home = {}\n", root.join("base/bin").display()),
-    );
-    fs::create_dir_all(root.join("venv/lib/python3.13/site-packages")).unwrap();
-    fs::create_dir_all(root.join("venv/bin")).unwrap();
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(root.join("base/bin/python3"), root.join("venv/bin/python"))
-        .unwrap();
-    #[cfg(not(unix))]
-    write(root, "venv/bin/python", "");
-    let venv = Environment {
-        interpreter: Some(root.join("venv/bin/python")),
-        ..Environment::default()
-    };
-    assert_eq!(venv.installs(root, &["pytest", "_pytest"]), Some(false));
-    write(
-        root,
-        "venv/lib/python3.13/site-packages/pytest/__init__.py",
-        "",
-    );
-    assert_eq!(venv.installs(root, &["pytest", "_pytest"]), Some(true));
-    fs::remove_dir_all(root.join("venv/lib/python3.13/site-packages/pytest")).unwrap();
-    // One that includes the system's packages sees the base's.
-    write(
-        root,
-        "venv/pyvenv.cfg",
-        format!(
-            "home = {}\ninclude-system-site-packages = true\n",
-            root.join("base/bin").display()
-        ),
-    );
-    #[cfg(unix)]
-    assert_eq!(venv.installs(root, &["pytest", "_pytest"]), Some(true));
-
-    // Windows: `Scripts\python.exe` in a venv, `python.exe` beside `Lib` in
-    // an installation.
-    write(root, "win/python.exe", "");
-    write(root, "win/Lib/site-packages/pytest/__init__.py", "");
-    let windows = Environment {
-        interpreter: Some(root.join("win/python.exe")),
-        ..Environment::default()
-    };
-    assert_eq!(windows.installs(root, &["pytest"]), Some(true));
-    write(root, "winvenv/pyvenv.cfg", "home = C:\\Python313\n");
-    write(root, "winvenv/Scripts/python.exe", "");
-    fs::create_dir_all(root.join("winvenv/Lib/site-packages")).unwrap();
-    let windows = Environment {
-        interpreter: Some(root.join("winvenv/Scripts/python.exe")),
-        ..Environment::default()
-    };
-    assert_eq!(windows.installs(root, &["pytest"]), Some(false));
-
-    // Can't tell: no interpreter, a missing one, a shim with no packages.
-    assert_eq!(Environment::default().installs(root, &["pytest"]), None);
-    let missing = Environment {
-        interpreter: Some(root.join("nope/bin/python")),
-        ..Environment::default()
-    };
-    assert_eq!(missing.installs(root, &["pytest"]), None);
-    write(root, "shims/python", "#!/bin/sh\n");
-    let shim = Environment {
-        interpreter: Some(root.join("shims/python")),
-        ..Environment::default()
-    };
-    assert_eq!(shim.installs(root, &["pytest"]), None);
 }
 
 #[test]
@@ -2375,7 +2262,7 @@ fn a_plugin_in_the_context_or_arguments_turns_the_cache_off() {
     let with_context = |context: serde_json::Value| -> Vec<Prepared> {
         let mut fake = Fake::new();
         fake.context = context;
-        vec![("fake", Box::new(fake))]
+        vec![("fake".into(), Box::new(fake))]
     };
     let refiner = FakeRefiner::default();
     for context in [
@@ -2392,7 +2279,7 @@ fn a_plugin_in_the_context_or_arguments_turns_the_cache_off() {
         );
         assert_eq!(entries(cache.path()), 0);
     }
-    let args = Environment {
+    let args = EnvironmentFingerprint {
         framework_args: vec!["-p".into(), "myplugins.params".into()],
         ..environment(&python)
     };
@@ -2409,7 +2296,7 @@ fn a_plugin_in_the_context_or_arguments_turns_the_cache_off() {
         Some(&refiner),
     );
     assert_eq!(entries(cache.path()), 0);
-    let args = Environment {
+    let args = EnvironmentFingerprint {
         framework_args: vec!["-p".into(), "extmod".into()],
         ..environment(&python)
     };
@@ -2447,7 +2334,7 @@ fn files_the_context_names_are_keyed_by_content() {
     write(root, "pytest.ini", "[pytest]\n");
     let mut fake = Fake::new();
     fake.context = serde_json::json!({"inifile": root.join("pytest.ini").to_string_lossy()});
-    let recognizers: Vec<Prepared> = vec![("fake", Box::new(fake))];
+    let recognizers: Vec<Prepared> = vec![("fake".into(), Box::new(fake))];
     let refiner = FakeRefiner::default();
     let calls = || {
         run_cached(
@@ -2604,13 +2491,7 @@ impl Refiner for SlowRefiner {
 }
 
 fn collector_at<'a>(root: &'a Path, recognizers: &'a [Prepared]) -> Collector<'a> {
-    let project = Project {
-        root,
-        cwd: root,
-        args: &[],
-        config_file: None,
-        framework_args: &[],
-    };
+    let project = Project::new(root, root);
     Collector::new(project, recognizers, Options::default())
 }
 

@@ -25,7 +25,7 @@ catalogue! {
     /// The interpreter that runs the tests when `--python` isn't given; it
     /// wins over `[tool.aye] python`. A bare name is looked up on `PATH`,
     /// another relative path is relative to the current directory; empty
-    /// is unset. Read by the runner.
+    /// is unset. Read by the binary.
     AYE_PYTHON;
     /// Set for every worker: its lane, from 0. Set by the runner.
     AYE_WORKER;
@@ -57,20 +57,20 @@ catalogue! {
 
     /// Where a bare interpreter name is looked up, and `python3` or
     /// `python` when nothing else chooses the interpreter. Read by the
-    /// runner.
+    /// binary, for aye-provision's discovery.
     PATH;
     /// An active virtual environment, whose interpreter runs the tests when
     /// `--python`, `AYE_PYTHON` and `[tool.aye] python` don't choose one.
-    /// Read by the runner.
+    /// Read by the binary, for aye-provision's discovery.
     VIRTUAL_ENV;
     /// The home directory: `~` in `--junitxml`, and in pytest's paths
     /// outside Windows; where the user's own `site-packages` are, for the
-    /// refinement cache's key. Read by the binary, aye-collect and the
+    /// refinement cache's key. Read by the binary, aye-provision and the
     /// pytest adapter.
     HOME;
     /// The home directory where `HOME` isn't set, and on Windows in
     /// pytest's paths, as `ntpath.expanduser` reads it. Read by the binary,
-    /// aye-collect and the pytest adapter.
+    /// aye-provision and the pytest adapter.
     USERPROFILE;
     /// On Windows, the home directory's drive where `USERPROFILE` isn't
     /// set, as `ntpath.expanduser` reads it. Read by the pytest adapter.
@@ -83,7 +83,7 @@ catalogue! {
     USERNAME;
     /// Where Python imports from beside the standard library: the modules
     /// there count as installed for the refinement cache, and the pytest
-    /// adapter finds project files there. Read by aye-collect and the
+    /// adapter finds project files there. Read by aye-provision and the
     /// pytest adapter.
     PYTHONPATH;
     /// Python's `-O`: at 2, docstrings are stripped, so they hold no

@@ -5,11 +5,14 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use aye_events::{Counts, Event, ExitCode, Outcome, Record, TestId, TestKey};
+use aye_events::{
+    Counts, DiagnosticCode, Event, ExitCode, Outcome, ProjectPath, Record, RunNumber, TestId,
+    TestKey,
+};
 
 use super::{feed, lines, streams};
 use crate::{
-    ColorChoice, Extra, JsonLines, Keys, ShowContext, ShowMode, Tally, Text, TextOptions,
+    ColorChoice, Extra, JsonLines, Keys, Level, ShowContext, ShowMode, Tally, Text, TextOptions,
     summary_words,
 };
 
@@ -26,7 +29,7 @@ fn text_with(
     let mut text = Text::new(
         Vec::new(),
         TextOptions {
-            verbosity,
+            verbosity: Level::from_count(verbosity.into()),
             color: ColorChoice::Never,
             live: false,
         },
@@ -48,7 +51,7 @@ fn json_with(
     show: Option<(ShowMode, Keys)>,
     context: ShowContext,
 ) -> String {
-    let mut json = JsonLines::new(Vec::new(), verbosity);
+    let mut json = JsonLines::new(Vec::new(), Level::from_count(verbosity.into()));
     if let Some((mode, keys)) = show {
         json = json.for_show(mode, keys, context);
     }
@@ -94,7 +97,7 @@ fn alike() -> (String, String) {
     (0..)
         .find_map(|n| {
             let id = format!("tests/t.py::test_{n}");
-            let start = TestKey::of(&id).0[..5].to_string();
+            let start = TestKey::of(&id).to_string()[..5].to_string();
             seen.insert(start, id.clone()).map(|earlier| (earlier, id))
         })
         .unwrap()
@@ -183,7 +186,7 @@ fn details_say_where_the_run_was_and_whether_the_file_changed() {
     let part = part(&records, &[id]);
     let k = key(&records, id);
     let context = || ShowContext {
-        run: Some(81),
+        run: RunNumber::new(81),
         ago: Some("2 min ago".into()),
         stale: BTreeMap::new(),
     };
@@ -201,7 +204,9 @@ fn details_say_where_the_run_was_and_whether_the_file_changed() {
         "{out}"
     );
     let mut changed = context();
-    changed.stale.insert("tests/test_cart.py".into(), false);
+    changed
+        .stale
+        .insert(ProjectPath::new("tests/test_cart.py").unwrap(), false);
     let out = text_with(
         &part,
         1,
@@ -209,7 +214,9 @@ fn details_say_where_the_run_was_and_whether_the_file_changed() {
         changed.clone(),
     );
     assert!(out.contains(" · file changed since\n"), "{out}");
-    changed.stale.insert("tests/test_cart.py".into(), true);
+    changed
+        .stale
+        .insert(ProjectPath::new("tests/test_cart.py").unwrap(), true);
     let out = text_with(
         &part,
         1,
@@ -338,7 +345,7 @@ fn a_file_changed_since_the_run_is_said_first() {
     let mut text = Text::new(
         Vec::new(),
         TextOptions {
-            verbosity: -1,
+            verbosity: Level::Quiet,
             color: ColorChoice::Never,
             live: false,
         },
@@ -355,7 +362,7 @@ fn a_file_changed_since_the_run_is_said_first() {
             "✓ 1 passed   0.00 s",
         ])
     );
-    let mut json = JsonLines::new(Vec::new(), 0);
+    let mut json = JsonLines::new(Vec::new(), Level::Default);
     json.stale("tests/test_a.py", false).unwrap();
     json.stale("tests/test_b.py", true).unwrap();
     feed(&mut json, &records);
@@ -368,7 +375,7 @@ fn a_file_changed_since_the_run_is_said_first() {
         ])
     );
     // JSON's -q is the summary alone.
-    let mut json = JsonLines::new(Vec::new(), -1);
+    let mut json = JsonLines::new(Vec::new(), Level::Quiet);
     json.stale("tests/test_a.py", false).unwrap();
     assert_eq!(json.into_inner(), [] as [u8; 0]);
 }
@@ -379,7 +386,7 @@ fn listed(records: &[Record]) -> Vec<Record> {
     records
         .iter()
         .filter(|record| match &record.event {
-            Event::LifetimeFinished { lifetime, .. } => lifetime.starts_with("module:"),
+            Event::LifetimeFinished { lifetime, .. } => lifetime.as_str().starts_with("module:"),
             Event::RunStarted { .. } | Event::TestFinished(_) | Event::RunFinished { .. } => true,
             _ => false,
         })
@@ -494,7 +501,7 @@ fn the_list_shows_errors_and_failed_workers_and_no_other_diagnostic() {
 fn module_skip() -> Record {
     Record::new(Event::Diagnostic(aye_events::Diagnostic {
         severity: aye_events::Severity::Info,
-        code: "skipped".into(),
+        code: DiagnosticCode::Skipped,
         path: "tests/test_win.py".into(),
         span: None,
         message: "only on Windows".into(),
