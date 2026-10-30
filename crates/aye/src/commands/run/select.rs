@@ -116,8 +116,8 @@ pub(super) fn select(
             cases.push(case);
         }
     }
-    if settings.failed_first && !last_failed.is_empty() {
-        cases.sort_by_key(|case| !last_failed.contains(&case.id));
+    if settings.failed_first {
+        aye_select::failed_first(&mut cases, last_failed);
     }
     for case in &cases {
         out.emit(Event::CaseCollected(Box::new(case.clone())));

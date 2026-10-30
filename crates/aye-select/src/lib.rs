@@ -98,11 +98,13 @@ mod expression;
 mod keyword;
 mod last_failed;
 mod marker;
+mod order;
 mod selection;
 mod selector;
 mod truth;
 
 pub use expression::{Expression, Kwarg, ParseError, Value};
+pub use order::failed_first;
 pub use selection::{Selected, Selection};
 pub use selector::{Named, Selector, dotted_reach};
 pub use truth::Truth;
