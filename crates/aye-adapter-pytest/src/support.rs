@@ -12,8 +12,9 @@ use aye_adapter::ast::visitor::{self, Visitor};
 use aye_adapter::ast::{Expr, ExprCall, ModModule, Stmt, StmtFunctionDef};
 use aye_adapter::{Ranged, SourceFile, TextSize};
 use aye_events::Fnv64;
+use aye_python_semantic::class::is_unittest_base;
 use aye_python_semantic::eval::{Elem, Value};
-use aye_python_semantic::flow::{exclusive, import_time_skip};
+use aye_python_semantic::flow::{exclusive, guarded_by_try, import_time_skip};
 use aye_python_semantic::namespace::{Binding, Bound, Flag, Namespace, OpKind};
 use aye_python_semantic::resolve::{Lookup, Resolved};
 
@@ -1069,7 +1070,7 @@ impl Summary {
             ..Self::default()
         };
         let guarded = if fixtures {
-            crate::module::guarded_by_try(&module.body)
+            guarded_by_try(&module.body)
         } else {
             Vec::new()
         };
@@ -2018,7 +2019,7 @@ impl Supports {
         first: bool,
     ) -> bool {
         // What a test module imports must come from a project file.
-        if !first && crate::module::is_unittest_base(path) {
+        if !first && is_unittest_base(path) {
             return true;
         }
         if crate::module::no_tests(path) {
@@ -2236,7 +2237,7 @@ impl Supports {
         bases: &[PathBuf],
         visiting: &mut Vec<(PathBuf, String)>,
     ) -> bool {
-        if crate::module::is_unittest_base(path) {
+        if is_unittest_base(path) {
             return true;
         }
         if crate::module::no_tests(path) {

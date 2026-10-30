@@ -7,8 +7,14 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use aye_adapter::ast::{Expr, ExprLambda, Stmt, StmtClassDef, StmtFunctionDef};
 use aye_adapter::{Ranged, Recognition, SourceFile, TextRange, TextSize};
 use aye_events::{AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity};
+use aye_python_semantic::class::{
+    External, Klass, Unresolved, external_kind, is_unittest_base, mangle,
+};
 use aye_python_semantic::eval::deref;
-use aye_python_semantic::flow::{exclusive, import_time_raise, import_time_skip, is_generator};
+use aye_python_semantic::flow::{
+    BodyFacts, conditional_deletes, exclusive, guarded_by_try, import_time_raise, import_time_skip,
+    is_generator, maybe_deleted,
+};
 use aye_python_semantic::namespace::{Binding, Bound, Flag, Namespace, OpKind};
 use aye_python_semantic::resolve::{Lookup, Resolved};
 use aye_python_stdlib::fnmatch::matches_prefix_or_glob;
@@ -281,108 +287,6 @@ const NO_TESTS: &[&str] = &[
     "zipfile",
     "zoneinfo",
 ];
-
-/// Why a class's MRO is not known, and whether only classes from
-/// [`NO_TESTS`] packages are missing from it (they hold no tests to
-/// inherit, and are no unittest cases).
-#[derive(Debug, Clone)]
-struct Unresolved {
-    reason: String,
-    harmless: bool,
-}
-
-/// A class in a method resolution order.
-#[derive(Debug, Clone)]
-enum Klass<'a> {
-    Local(&'a StmtClassDef),
-    /// A known class from elsewhere, by dotted path.
-    External(String),
-}
-
-impl Klass<'_> {
-    fn key(&self) -> String {
-        match self {
-            Self::Local(def) => format!("local:{}", def.start().to_u32()),
-            Self::External(path) => path.clone(),
-        }
-    }
-
-    fn object() -> Self {
-        Self::External("builtins.object".to_string())
-    }
-}
-
-/// What an external base class brings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum External {
-    Object,
-    Abc,
-    Plain,
-    /// `typing.Protocol`: its metaclass derives from `ABCMeta`, and
-    /// `Protocol.__init_subclass__` gives protocol classes an `__init__`
-    /// that their subclasses inherit.
-    Protocol,
-    UnitTest,
-    /// Defines `__init__` and `__new__` (exceptions).
-    InitNew,
-    /// Defines `__new__` (enums, named tuples).
-    New,
-}
-
-fn external_kind(path: &str) -> Option<External> {
-    const PLAIN: &[&str] = &["typing.Generic", "typing_extensions.Generic"];
-    const PROTOCOL: &[&str] = &["typing.Protocol", "typing_extensions.Protocol"];
-    const INIT_NEW: &[&str] = &[
-        "enum.Enum",
-        "enum.IntEnum",
-        "enum.StrEnum",
-        "enum.Flag",
-        "enum.IntFlag",
-        "builtins.list",
-        "builtins.dict",
-        "builtins.set",
-        "builtins.frozenset",
-        "builtins.bytearray",
-    ];
-    const NEW: &[&str] = &[
-        "typing.NamedTuple",
-        "builtins.int",
-        "builtins.str",
-        "builtins.tuple",
-        "builtins.float",
-        "builtins.bytes",
-    ];
-    const EXCEPTIONS: &[&str] = &[
-        "BaseException",
-        "BaseExceptionGroup",
-        "ExceptionGroup",
-        "KeyboardInterrupt",
-        "SystemExit",
-        "GeneratorExit",
-        "StopIteration",
-        "StopAsyncIteration",
-    ];
-    let builtin = path.strip_prefix("builtins.");
-    Some(match path {
-        "builtins.object" => External::Object,
-        "abc.ABC" => External::Abc,
-        _ if PLAIN.contains(&path) => External::Plain,
-        _ if PROTOCOL.contains(&path) => External::Protocol,
-        _ if is_unittest_base(path) => External::UnitTest,
-        _ if INIT_NEW.contains(&path) => External::InitNew,
-        _ if NEW.contains(&path) => External::New,
-        _ if builtin.is_some_and(|name| {
-            name.ends_with("Error")
-                || name.ends_with("Exception")
-                || name.ends_with("Warning")
-                || EXCEPTIONS.contains(&name)
-        }) =>
-        {
-            External::InitNew
-        }
-        _ => return None,
-    })
-}
 
 /// A class being collected, as a node in pytest's tree.
 #[derive(Clone)]
@@ -3014,180 +2918,11 @@ impl<'a> aye_adapter::ast::visitor::Visitor<'a> for ClassMaker {
     }
 }
 
-/// Whether `path` names one of the unittest base classes pytest's unittest
-/// plugin knows.
-pub(crate) fn is_unittest_base(path: &str) -> bool {
-    TESTCASE_ROOTS.contains(&path) || KNOWN_BASES.contains(&path) || RUNTEST_BASES.contains(&path)
-}
-
 /// Whether names imported from `path` are known not to be tests (nor
 /// fixtures or hooks).
 pub(crate) fn no_tests(path: &str) -> bool {
     let top = path.split('.').next().unwrap_or_default();
     NO_TESTS.contains(&top) || TESTCASE_ROOTS.contains(&path) || KNOWN_BASES.contains(&path)
-}
-
-/// What a module or class body may skip at runtime.
-struct BodyFacts<'a> {
-    /// [`conditional_deletes`].
-    deletes: Vec<(&'a str, TextSize)>,
-    /// [`guarded_by_try`].
-    guarded: Vec<TextSize>,
-}
-
-/// Whether a statement of a module or class body surely raises nothing
-/// while it runs.
-fn cannot_raise(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::FunctionDef(def) => def.decorator_list.is_empty(),
-        Stmt::ClassDef(class) => class.decorator_list.is_empty() && class.arguments.is_none(),
-        Stmt::Pass(_) => true,
-        Stmt::Expr(expr) => expr.value.is_string_literal_expr(),
-        _ => false,
-    }
-}
-
-/// The statements of a `try` body (with `except` clauses) or a `with`
-/// body, each with whether an earlier one may have raised and been
-/// swallowed, so that it never runs: any context manager may suppress
-/// what its body raises (`contextlib.suppress`, `pytest.raises`).
-fn swallowed(stmt: &Stmt) -> Option<Vec<(&Stmt, bool)>> {
-    let (body, handled) = match stmt {
-        Stmt::Try(s) => (&s.body, !s.handlers.is_empty()),
-        Stmt::With(s) => (&s.body, true),
-        _ => return None,
-    };
-    let mut risky = false;
-    let mut out = Vec::with_capacity(body.len());
-    for inner in body {
-        out.push((inner, risky));
-        risky |= handled && !cannot_raise(inner);
-    }
-    Some(out)
-}
-
-/// `del name` statements in `body` (a module or class body, not its
-/// functions) that may not run: inside an `if`, a loop, a `match`, an
-/// `except` or `else` clause, or a `try` or `with` body after a statement
-/// that may raise. With where each one is.
-fn conditional_deletes(body: &[Stmt]) -> Vec<(&str, TextSize)> {
-    fn walk<'a>(body: &'a [Stmt], conditional: bool, out: &mut Vec<(&'a str, TextSize)>) {
-        for stmt in body {
-            match stmt {
-                Stmt::Delete(delete) if conditional => {
-                    for target in &delete.targets {
-                        if let Expr::Name(name) = target {
-                            out.push((name.id.as_str(), stmt.start()));
-                        }
-                    }
-                }
-                Stmt::If(s) => {
-                    walk(&s.body, true, out);
-                    for clause in &s.elif_else_clauses {
-                        walk(&clause.body, true, out);
-                    }
-                }
-                Stmt::Try(s) => {
-                    for (inner, risky) in swallowed(stmt).unwrap_or_default() {
-                        walk(std::slice::from_ref(inner), conditional || risky, out);
-                    }
-                    for handler in &s.handlers {
-                        if let Some(handler) = handler.as_except_handler() {
-                            walk(&handler.body, true, out);
-                        }
-                    }
-                    walk(&s.orelse, true, out);
-                    walk(&s.finalbody, conditional, out);
-                }
-                Stmt::With(_) => {
-                    for (inner, risky) in swallowed(stmt).unwrap_or_default() {
-                        walk(std::slice::from_ref(inner), conditional || risky, out);
-                    }
-                }
-                Stmt::For(s) => {
-                    walk(&s.body, true, out);
-                    walk(&s.orelse, true, out);
-                }
-                Stmt::While(s) => {
-                    walk(&s.body, true, out);
-                    walk(&s.orelse, true, out);
-                }
-                Stmt::Match(s) => {
-                    for case in &s.cases {
-                        walk(&case.body, true, out);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    let mut out = Vec::new();
-    walk(body, false, &mut out);
-    out
-}
-
-/// Where statements start, in `body` (a module or class body), that sit in
-/// a `try` body with `except` clauses, or a `with` body, after a statement
-/// that may raise (an import, a call): if it raises and the exception is
-/// swallowed, they never run.
-pub(crate) fn guarded_by_try(body: &[Stmt]) -> Vec<TextSize> {
-    fn walk(body: &[Stmt], guarded: bool, out: &mut Vec<TextSize>) {
-        for stmt in body {
-            if guarded {
-                out.push(stmt.start());
-            }
-            match stmt {
-                Stmt::Try(s) => {
-                    for (inner, risky) in swallowed(stmt).unwrap_or_default() {
-                        walk(std::slice::from_ref(inner), guarded || risky, out);
-                    }
-                    walk(&s.orelse, guarded, out);
-                    walk(&s.finalbody, guarded, out);
-                }
-                Stmt::With(_) => {
-                    for (inner, risky) in swallowed(stmt).unwrap_or_default() {
-                        walk(std::slice::from_ref(inner), guarded || risky, out);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    let mut out = Vec::new();
-    walk(body, false, &mut out);
-    out
-}
-
-/// Names a conditional `del` took out of `ns` that may still be bound at
-/// runtime, with the binding the `del` would have removed.
-fn maybe_deleted<'a>(ns: &Namespace<'a>, body: &'a [Stmt]) -> Vec<(&'a str, Bound<'a>)> {
-    let mut out: Vec<(&'a str, Bound<'a>)> = Vec::new();
-    for (name, at) in conditional_deletes(body) {
-        if ns.get(name).is_some() || out.iter().any(|(n, _)| *n == name) {
-            continue;
-        }
-        if let Some(bound) = ns
-            .bindings(name)
-            .iter()
-            .rev()
-            .find(|b| b.range.start() < at)
-        {
-            out.push((name, bound.clone()));
-        }
-    }
-    out
-}
-
-/// A name bound in the body of the class `class` as Python stores it:
-/// `__x` (not a dunder) becomes `_K__x`, `K` being the class's name
-/// without its leading underscores (unless that leaves nothing).
-fn mangle(name: &str, class: &str) -> String {
-    let stripped = class.trim_start_matches('_');
-    if name.starts_with("__") && !name.ends_with("__") && !stripped.is_empty() {
-        format!("_{stripped}{name}")
-    } else {
-        name.to_string()
-    }
 }
 
 /// Whether a class body defines anything that looks like a test, so that

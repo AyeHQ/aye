@@ -12,8 +12,11 @@
 //! - [`resolve`]: names and attribute chains resolved through imports and
 //!   the builtins, where an expression is evaluated.
 //! - [`eval`]: static values, and which of them building surely succeeds.
-//! - [`flow`]: generators, exclusive bindings, and what may skip or raise
-//!   while a module is imported.
+//! - [`flow`]: generators, exclusive bindings, what may skip or raise
+//!   while a module is imported, and the statements that may not run.
+//! - [`class`]: classes: their bases, known classes from elsewhere, and
+//!   names as a class body stores them.
+//! - [`decorator`]: whether a decorator hands back what it decorates.
 //!
 //! Owns: namespaces and the escape analysis over them, names resolved
 //! through imports, static values, classes and their C3 linearization,
@@ -26,6 +29,8 @@
 //! AST. Knows no framework but the standard library's own unittest; only
 //! the adapters depend on it.
 
+pub mod class;
+pub mod decorator;
 mod escape;
 pub mod eval;
 pub mod flow;

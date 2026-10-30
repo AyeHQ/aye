@@ -1,11 +1,13 @@
 //! What a body does while it runs: whether a function is a generator,
-//! which bindings exclude each other, and what may skip or raise while
-//! a module is imported.
+//! which bindings exclude each other, what may skip or raise while a
+//! module is imported, and which of a module's or class body's statements
+//! may not run.
 
 use ruff_python_ast::{self as ast, Expr, Number, Operator, Stmt, UnaryOp};
+use ruff_text_size::{Ranged, TextSize};
 
 use crate::eval::NO_ID;
-use crate::namespace::Bound;
+use crate::namespace::{Bound, Namespace};
 use crate::resolve::Lookup;
 
 /// Whether a function body makes it a generator (a `yield` outside nested
@@ -219,4 +221,155 @@ pub fn import_time_raise<'a>(body: &'a [Stmt], lookup: Lookup<'_, 'a>) -> Option
         finder.visit_stmt(stmt);
     }
     finder.found
+}
+
+/// What a module or class body may skip at runtime.
+pub struct BodyFacts<'a> {
+    /// [`conditional_deletes`].
+    pub deletes: Vec<(&'a str, TextSize)>,
+    /// [`guarded_by_try`].
+    pub guarded: Vec<TextSize>,
+}
+
+/// Whether a statement of a module or class body surely raises nothing
+/// while it runs.
+fn cannot_raise(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::FunctionDef(def) => def.decorator_list.is_empty(),
+        Stmt::ClassDef(class) => class.decorator_list.is_empty() && class.arguments.is_none(),
+        Stmt::Pass(_) => true,
+        Stmt::Expr(expr) => expr.value.is_string_literal_expr(),
+        _ => false,
+    }
+}
+
+/// The statements of a `try` body (with `except` clauses) or a `with`
+/// body, each with whether an earlier one may have raised and been
+/// swallowed, so that it never runs: any context manager may suppress
+/// what its body raises (`contextlib.suppress`, `pytest.raises`).
+fn swallowed(stmt: &Stmt) -> Option<Vec<(&Stmt, bool)>> {
+    let (body, handled) = match stmt {
+        Stmt::Try(s) => (&s.body, !s.handlers.is_empty()),
+        Stmt::With(s) => (&s.body, true),
+        _ => return None,
+    };
+    let mut risky = false;
+    let mut out = Vec::with_capacity(body.len());
+    for inner in body {
+        out.push((inner, risky));
+        risky |= handled && !cannot_raise(inner);
+    }
+    Some(out)
+}
+
+/// `del name` statements in `body` (a module or class body, not its
+/// functions) that may not run: inside an `if`, a loop, a `match`, an
+/// `except` or `else` clause, or a `try` or `with` body after a statement
+/// that may raise. With where each one is.
+pub fn conditional_deletes(body: &[Stmt]) -> Vec<(&str, TextSize)> {
+    fn walk<'a>(body: &'a [Stmt], conditional: bool, out: &mut Vec<(&'a str, TextSize)>) {
+        for stmt in body {
+            match stmt {
+                Stmt::Delete(delete) if conditional => {
+                    for target in &delete.targets {
+                        if let Expr::Name(name) = target {
+                            out.push((name.id.as_str(), stmt.start()));
+                        }
+                    }
+                }
+                Stmt::If(s) => {
+                    walk(&s.body, true, out);
+                    for clause in &s.elif_else_clauses {
+                        walk(&clause.body, true, out);
+                    }
+                }
+                Stmt::Try(s) => {
+                    for (inner, risky) in swallowed(stmt).unwrap_or_default() {
+                        walk(std::slice::from_ref(inner), conditional || risky, out);
+                    }
+                    for handler in &s.handlers {
+                        if let Some(handler) = handler.as_except_handler() {
+                            walk(&handler.body, true, out);
+                        }
+                    }
+                    walk(&s.orelse, true, out);
+                    walk(&s.finalbody, conditional, out);
+                }
+                Stmt::With(_) => {
+                    for (inner, risky) in swallowed(stmt).unwrap_or_default() {
+                        walk(std::slice::from_ref(inner), conditional || risky, out);
+                    }
+                }
+                Stmt::For(s) => {
+                    walk(&s.body, true, out);
+                    walk(&s.orelse, true, out);
+                }
+                Stmt::While(s) => {
+                    walk(&s.body, true, out);
+                    walk(&s.orelse, true, out);
+                }
+                Stmt::Match(s) => {
+                    for case in &s.cases {
+                        walk(&case.body, true, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(body, false, &mut out);
+    out
+}
+
+/// Where statements start, in `body` (a module or class body), that sit in
+/// a `try` body with `except` clauses, or a `with` body, after a statement
+/// that may raise (an import, a call): if it raises and the exception is
+/// swallowed, they never run.
+pub fn guarded_by_try(body: &[Stmt]) -> Vec<TextSize> {
+    fn walk(body: &[Stmt], guarded: bool, out: &mut Vec<TextSize>) {
+        for stmt in body {
+            if guarded {
+                out.push(stmt.start());
+            }
+            match stmt {
+                Stmt::Try(s) => {
+                    for (inner, risky) in swallowed(stmt).unwrap_or_default() {
+                        walk(std::slice::from_ref(inner), guarded || risky, out);
+                    }
+                    walk(&s.orelse, guarded, out);
+                    walk(&s.finalbody, guarded, out);
+                }
+                Stmt::With(_) => {
+                    for (inner, risky) in swallowed(stmt).unwrap_or_default() {
+                        walk(std::slice::from_ref(inner), guarded || risky, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(body, false, &mut out);
+    out
+}
+
+/// Names a conditional `del` took out of `ns` that may still be bound at
+/// runtime, with the binding the `del` would have removed.
+pub fn maybe_deleted<'a>(ns: &Namespace<'a>, body: &'a [Stmt]) -> Vec<(&'a str, Bound<'a>)> {
+    let mut out: Vec<(&'a str, Bound<'a>)> = Vec::new();
+    for (name, at) in conditional_deletes(body) {
+        if ns.get(name).is_some() || out.iter().any(|(n, _)| *n == name) {
+            continue;
+        }
+        if let Some(bound) = ns
+            .bindings(name)
+            .iter()
+            .rev()
+            .find(|b| b.range.start() < at)
+        {
+            out.push((name, bound.clone()));
+        }
+    }
+    out
 }
