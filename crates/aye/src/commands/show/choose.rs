@@ -9,9 +9,8 @@ use std::path::Path;
 use aye_events::{Case, KeyPrefix, Outcome, TestId};
 use aye_history::{RunMeta, StoredRunId};
 use aye_select::Selection;
-use aye_stream::{Keys, ShortKey};
+use aye_stream::{ItemIndex, Keys, RunIndex, RunItem, ShortKey};
 
-use super::feed::{Item, Log};
 use crate::cli::ShowArgs;
 use crate::error::AyeError;
 use crate::positional::Positional;
@@ -38,25 +37,26 @@ pub(super) fn read(cwd: &Path, root: &Path, arg: &str) -> Wanted {
     }
 }
 
-/// The results the arguments select, by their place in [`Log::items`]:
-/// every one without any; for a key, or the start of one test's or
-/// lifetime's key ([`Keys::resolve`]), that test's every result or that
+/// The results the arguments select, by their place in
+/// [`RunIndex::items`]: every one without any; for a key, or the start of
+/// one test's or lifetime's key ([`Keys::resolve`]), that test's every
+/// result or that
 /// lifetime; for another selector, every result it names (a test, a
 /// lifetime, a file's diagnostics, as an id names them). One that names
 /// nothing of the run is a usage error, listing the closest names; the
 /// start of several keys too, listing them.
 pub(super) fn choose(
-    log: &Log<'_>,
+    index: &RunIndex<'_>,
     keys: &Keys,
     wanted: &[(&str, Wanted)],
     meta: &RunMeta,
-) -> Result<HashSet<usize>, AyeError> {
+) -> Result<HashSet<ItemIndex>, AyeError> {
     if wanted.is_empty() {
-        return Ok((0..log.items.len()).collect());
+        return Ok(index.items.indices().collect());
     }
     let mut chosen = HashSet::new();
     let mut problems = Vec::new();
-    let names = log.names();
+    let names = index.names();
     let with_results: HashSet<&str> = names.iter().map(TestId::as_str).collect();
     let mut selectors: Vec<(&str, &str)> = Vec::new();
     for (arg, wanted) in wanted {
@@ -71,9 +71,9 @@ pub(super) fn choose(
                 } else {
                     match by_key(arg, &found, &with_results, &meta.run) {
                         Ok(id) => chosen.extend(
-                            log.items
-                                .iter()
-                                .enumerate()
+                            index
+                                .items
+                                .iter_enumerated()
                                 .filter(|(_, item)| item.name.as_str() == id)
                                 .map(|(at, _)| at),
                         ),
@@ -87,12 +87,12 @@ pub(super) fn choose(
     }
     if !selectors.is_empty() {
         let selection = Selection::default().with_ids(selectors.iter().map(|(_, s)| *s));
-        let selected = selection.apply(names.iter().map(|name| log.case(name)).collect());
+        let selected = selection.apply(names.iter().map(|name| index.case(name)).collect());
         let kept: HashSet<TestId> = selected.cases.into_iter().map(|case| case.id).collect();
         chosen.extend(
-            log.items
-                .iter()
-                .enumerate()
+            index
+                .items
+                .iter_enumerated()
                 .filter(|(_, item)| kept.contains(&item.name))
                 .map(|(at, _)| at),
         );
@@ -262,7 +262,7 @@ impl Filter {
     /// its case (what can't be decided is kept, as a run keeps it). One
     /// without a name (a failed worker, a diagnostic about no file) has
     /// nothing for `-k` or `-m` to match.
-    pub(super) fn keeps(&self, item: &Item<'_>, case: &Case) -> bool {
+    pub(super) fn keeps(&self, item: &RunItem<'_>, case: &Case) -> bool {
         (self.outcomes.is_empty() || self.outcomes.contains(&item.outcome))
             && (self.selection.is_empty()
                 || (!item.name.as_str().is_empty() && !self.selection.truth(case).is_false()))

@@ -6,7 +6,8 @@
 //! what it knows of the run beside the log ([`aye_render::ShowContext`]:
 //! its number, how long ago it finished, which of the files shown changed
 //! since).
-//! What it shows are the log's results ([`Item`]): each test's result, and
+//! What it shows are the log's results, as its index has them
+//! ([`RunIndex`], [`RunItem`]): each test's result, and
 //! what the run's summary counts beside them (a failed lifetime, an error
 //! diagnostic such as a collection error, a module skipped while
 //! collecting) or shows whatever the level (a failed worker).
@@ -63,7 +64,7 @@ use aye_config::OutputFormat;
 use aye_events::RunNumber;
 use aye_history::{RunMeta, RunStore, StoredRunId};
 use aye_render::{JsonLines, ShowMode, Text, TextOptions};
-use aye_stream::{Consumer, Keys};
+use aye_stream::{Consumer, Keys, RunIndex, RunItem};
 
 use crate::cli::ShowArgs;
 use crate::error::AyeError;
@@ -75,7 +76,7 @@ mod feed;
 mod runs;
 
 use choose::{Filter, Wanted, choose, read};
-use feed::{Item, Log, context, feed, now_ms, stale};
+use feed::{context, feed, now_ms, stale};
 use runs::list_runs;
 
 /// Show what `args` ask for of a stored run, through `printer` where it
@@ -117,7 +118,7 @@ pub(crate) fn show(args: &ShowArgs, printer: Printer) -> Result<(), AyeError> {
         };
     }
     let records = store.log(&meta.run.to_string()).map_err(unreadable)?;
-    let log = Log::of(&records);
+    let index = RunIndex::of(&records);
     let keys = Keys::of(&records);
 
     let wanted: Vec<(&str, Wanted)> = args
@@ -134,13 +135,12 @@ pub(crate) fn show(args: &ShowArgs, printer: Printer) -> Result<(), AyeError> {
     } else {
         ShowMode::List
     };
-    let chosen = choose(&log, &keys, &wanted, &meta)?;
+    let chosen = choose(&index, &keys, &wanted, &meta)?;
     let filter = Filter::new(args)?;
     let filtered = filter.is_some() || !wanted.is_empty();
-    let shown: Vec<&Item<'_>> = log
+    let shown: Vec<&RunItem<'_>> = index
         .items
-        .iter()
-        .enumerate()
+        .iter_enumerated()
         .filter(|(at, _)| chosen.contains(at))
         .map(|(_, item)| item)
         // A failed lifetime that kept tests from running is listed through
@@ -149,11 +149,11 @@ pub(crate) fn show(args: &ShowArgs, printer: Printer) -> Result<(), AyeError> {
         .filter(|item| {
             filter
                 .as_ref()
-                .is_none_or(|f| f.keeps(item, &log.case(&item.name)))
+                .is_none_or(|f| f.keeps(item, &index.case(&item.name)))
         })
         .collect();
 
-    let feed = feed(&records, &log, &shown, mode, filtered, meta.exit_code);
+    let feed = feed(&index, &shown, mode, filtered, meta.exit_code);
     let stale = stale(&meta, root, &shown);
     let context = context(&meta, &stale, now_ms());
     let verbosity = settings.level(details);

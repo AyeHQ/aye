@@ -6,7 +6,7 @@ use aye_events::{
     RunNumber, Severity, TestId, TestResult, WorkerIndex,
 };
 
-use aye_stream::FileChange;
+use aye_stream::{FileChange, ItemIndex};
 
 use super::choose::{closest, distance};
 use super::feed::ago;
@@ -296,11 +296,10 @@ fn each_result_comes_with_its_own_records_and_a_key_names_them_all() {
             },
         ),
     ]);
-    let log = Log::of(&records);
+    let log = RunIndex::of(&records);
     // The second result: worker 0's.
-    let shown = [&log.items[1]];
+    let shown = [&log.items[ItemIndex::from_u32(1)]];
     let feed = feed(
-        &records,
         &log,
         &shown,
         ShowMode::Details,
@@ -330,7 +329,7 @@ fn each_result_comes_with_its_own_records_and_a_key_names_them_all() {
         .iter()
         .find(|item| item.name.as_str() == "t.py::test_ok")
         .unwrap();
-    let feed = super::feed(&records, &log, &[ok], ShowMode::List, true, None);
+    let feed = super::feed(&log, &[ok], ShowMode::List, true, None);
     assert_eq!(meta_like(&feed), (ExitCode::TestsFailed, 0, 1));
     // The test's key: both its results, each with its own records.
     let keys = Keys::of(&records);
@@ -340,14 +339,13 @@ fn each_result_comes_with_its_own_records_and_a_key_names_them_all() {
         .to_string();
     let wanted = [(key.as_str(), Wanted::Test(key.clone()))];
     let chosen = choose(&log, &keys, &wanted, &meta("r1")).ok().unwrap();
-    let shown: Vec<&Item<'_>> = log
+    let shown: Vec<&RunItem<'_>> = log
         .items
-        .iter()
-        .enumerate()
+        .iter_enumerated()
         .filter(|(at, _)| chosen.contains(at))
         .map(|(_, item)| item)
         .collect();
-    let feed = super::feed(&records, &log, &shown, ShowMode::Details, true, None);
+    let feed = super::feed(&log, &shown, ShowMode::Details, true, None);
     assert_eq!(
         kinds(&feed),
         [
@@ -393,7 +391,7 @@ fn alike(digits: usize) -> (String, String) {
 
 /// The ids `args` choose in `records`, sorted, or the problem.
 fn chosen(records: &[Record], args: &[&str]) -> Result<Vec<String>, String> {
-    let log = Log::of(records);
+    let log = RunIndex::of(records);
     let keys = Keys::of(records);
     let wanted: Vec<(&str, Wanted)> = args
         .iter()
@@ -528,7 +526,7 @@ fn the_whole_list_has_what_the_summary_counts_beside_the_tests() {
             },
         ),
     ]);
-    let log = Log::of(&records);
+    let log = RunIndex::of(&records);
     let items: Vec<(&str, Outcome, bool)> = log
         .items
         .iter()
@@ -547,8 +545,8 @@ fn the_whole_list_has_what_the_summary_counts_beside_the_tests() {
         ]
     );
     // Its details: a lifetime's every failure; a blocked test's lifetime.
-    let lifetime_a = [&log.items[3]];
-    let feed_a = feed(&records, &log, &lifetime_a, ShowMode::Details, true, None);
+    let lifetime_a = [&log.items[ItemIndex::from_u32(3)]];
+    let feed_a = feed(&log, &lifetime_a, ShowMode::Details, true, None);
     assert_eq!(
         kinds(&feed_a),
         [
@@ -557,8 +555,8 @@ fn the_whole_list_has_what_the_summary_counts_beside_the_tests() {
             "run_finished@-"
         ]
     );
-    let test_b = [&log.items[4]];
-    let feed_b = feed(&records, &log, &test_b, ShowMode::Details, true, None);
+    let test_b = [&log.items[ItemIndex::from_u32(4)]];
+    let feed_b = feed(&log, &test_b, ShowMode::Details, true, None);
     assert_eq!(
         kinds(&feed_b),
         ["test_finished@5", "lifetime_finished@6", "run_finished@-"]

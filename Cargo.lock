@@ -375,6 +375,7 @@ name = "aye-stream"
 version = "0.0.1"
 dependencies = [
  "aye-events",
+ "aye-index",
 ]
 
 [[package]]

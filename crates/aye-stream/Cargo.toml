@@ -1,6 +1,6 @@
 [package]
 name = "aye-stream"
-description = "Folds over the aye event stream that aren't presentation: consumers, keys, tallies"
+description = "Folds over the aye event stream that aren't presentation: consumers, keys, tallies, a stored run's index"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,7 @@ authors.workspace = true
 
 [dependencies]
 aye-events = { workspace = true }
+aye-index = { workspace = true }
 
 [lints]
 workspace = true
