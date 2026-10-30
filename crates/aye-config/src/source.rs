@@ -55,6 +55,33 @@ impl ValueSource {
     pub fn display_row<'a>(&'a self, root: &'a Path) -> impl fmt::Display + 'a {
         Row { source: self, root }
     }
+
+    /// The source of the setting `name` as a header line of `aye config`
+    /// shows it (`[tool.aye] output`): a file by its table and the key,
+    /// since the line names no file; any other source in full.
+    pub fn display_for<'a>(&'a self, name: &'a str) -> impl fmt::Display + 'a {
+        Header { source: self, name }
+    }
+}
+
+/// [`ValueSource::display_for`].
+struct Header<'a> {
+    source: &'a ValueSource,
+    name: &'a str,
+}
+
+impl fmt::Display for Header<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.source {
+            ValueSource::File {
+                table: Some(table), ..
+            } => write!(f, "{table} {}", self.name),
+            ValueSource::File { path, table: None } => {
+                write!(f, "{} {}", path.display(), self.name)
+            }
+            other => other.fmt(f),
+        }
+    }
 }
 
 /// [`ValueSource::display_row`].
@@ -185,6 +212,50 @@ mod tests {
                 "the doctest adapter isn't among the run's adapters"
             )),
             both("the doctest adapter isn't among the run's adapters")
+        );
+    }
+
+    /// Every source as `aye config`'s header lines show it, beside the
+    /// setting's name, as 0.0.1 spelt the ones it shows (`aye config`'s
+    /// snapshots and `aye_config_says_where_the_interpreter_came_from` pin
+    /// them in place).
+    #[test]
+    fn a_source_is_shown_as_a_header_shows_it() {
+        let shown = |source: ValueSource, name: &str| source.display_for(name).to_string();
+        assert_eq!(
+            shown(
+                ValueSource::file("/repo/pyproject.toml", "[tool.aye]"),
+                "output"
+            ),
+            "[tool.aye] output"
+        );
+        assert_eq!(
+            shown(
+                ValueSource::file("/repo/pyproject.toml", "[tool.aye]"),
+                "python"
+            ),
+            "[tool.aye] python"
+        );
+        assert_eq!(
+            shown(ValueSource::whole_file("/repo/pytest.ini"), "addopts"),
+            "/repo/pytest.ini addopts"
+        );
+        assert_eq!(shown(ValueSource::Default, "output"), "default");
+        assert_eq!(shown(ValueSource::Cli("--output"), "output"), "--output");
+        assert_eq!(
+            shown(ValueSource::Env("AYE_PYTHON"), "python"),
+            "$AYE_PYTHON"
+        );
+        assert_eq!(shown(ValueSource::Rule(".venv"), "python"), ".venv");
+        assert_eq!(
+            shown(
+                ValueSource::FrameworkOption {
+                    option: "-o python_classes".into(),
+                    via: "addopts",
+                },
+                "python_classes"
+            ),
+            "-o python_classes (addopts)"
         );
     }
 

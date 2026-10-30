@@ -830,27 +830,69 @@ fn the_interpreter_asked_for_is_the_first_given() {
 #[test]
 fn the_output_is_the_command_lines_else_the_configurations_else_text() {
     let tool_aye = |output: Option<OutputFormat>| aye_config::AyeSettings {
-        output: output.map(aye_config::Sourced::default_value),
+        output: output.map(|output| {
+            Sourced::new(
+                output,
+                ValueSource::file("/repo/pyproject.toml", "[tool.aye]"),
+            )
+        }),
         ..Default::default()
     };
+    let shown = |argv: &[&str], tool_aye: &AyeSettings| {
+        let Sourced { value, source } = output(&args(argv), tool_aye);
+        (value, source.display_for("output").to_string())
+    };
     assert_eq!(
-        output(&args(&[]), &tool_aye(None)),
-        (OutputFormat::Text, "default")
+        shown(&[], &tool_aye(None)),
+        (OutputFormat::Text, "default".to_string())
     );
     assert_eq!(
-        output(&args(&[]), &tool_aye(Some(OutputFormat::Json))),
-        (OutputFormat::Json, "[tool.aye] output")
+        shown(&[], &tool_aye(Some(OutputFormat::Json))),
+        (OutputFormat::Json, "[tool.aye] output".to_string())
     );
     assert_eq!(
-        output(
-            &args(&["--output", "text"]),
-            &tool_aye(Some(OutputFormat::Json))
-        ),
-        (OutputFormat::Text, "--output")
+        shown(&["--output", "text"], &tool_aye(Some(OutputFormat::Json))),
+        (OutputFormat::Text, "--output".to_string())
     );
     assert_eq!(
-        output(&args(&["--output", "JSON", "-vv"]), &tool_aye(None)),
-        (OutputFormat::Json, "--output")
+        shown(&["--output", "JSON", "-vv"], &tool_aye(None)),
+        (OutputFormat::Json, "--output".to_string())
+    );
+}
+
+/// Where the interpreter came from, as `aye config` shows each source, as
+/// 0.0.1 spelt it: what asked for it, or the rule discovery followed.
+#[test]
+fn the_interpreters_source_is_shown_by_its_name() {
+    use aye_provision::VenvDir;
+    let config = ValueSource::file("/repo/pyproject.toml", "[tool.aye]");
+    let shown = [
+        PythonSource::Requested(RequestSource::Flag),
+        PythonSource::Requested(RequestSource::Env),
+        PythonSource::Requested(RequestSource::Config),
+        PythonSource::VirtualEnv,
+        PythonSource::ProjectVenv(VenvDir::Cwd),
+        PythonSource::ProjectVenv(VenvDir::Root),
+        PythonSource::BesideAye,
+        PythonSource::SearchPath,
+    ]
+    .map(|source| {
+        interpreter_source(source, Some(&config))
+            .display_for("python")
+            .to_string()
+    });
+    assert_eq!(
+        shown,
+        [
+            "--python",
+            "$AYE_PYTHON",
+            "[tool.aye] python",
+            "$VIRTUAL_ENV",
+            ".venv",
+            ".venv",
+            "beside aye",
+            "PATH",
+        ]
     );
 }
 

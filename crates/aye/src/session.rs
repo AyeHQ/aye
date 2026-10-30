@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result};
 use aye_adapter::{Adapter, FrameworkDefaults, Project};
 use aye_collect::{Collector, Options, Prepared};
-use aye_config::{AyeSettings, OutputFormat, WorkerCount};
+use aye_config::{AyeSettings, OutputFormat, Sourced, ValueSource, WorkerCount};
 use aye_events::{
     AdapterName, Case, Counts, Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticPath, Event,
     ExitCode, ProjectPath, Record, RerunCommand, RunId, SCHEMA_VERSION, Severity, Stamper,
@@ -54,9 +54,9 @@ pub(crate) struct Session {
     only_paths: bool,
     /// `[tool.aye]`, the project's.
     tool_aye: AyeSettings,
-    /// The adapters the run uses, in priority order, and why.
+    /// The adapters the run uses, in priority order, and why those.
     adapters: Vec<Box<dyn Adapter>>,
-    adapters_why: registry::Why,
+    adapters_source: ValueSource,
     prepared: Vec<Prepared>,
     /// What each prepared adapter's framework says about the run, in the
     /// same order.
@@ -160,13 +160,13 @@ impl Session {
         }
         // Choosing and preparing the adapters can walk the project; on a
         // terminal, say so if it takes a while.
-        let text = output(&args, &tool_aye).0 == OutputFormat::Text;
+        let text = output(&args, &tool_aye).value == OutputFormat::Text;
         let busy = Busy::start(text && io::stdout().is_terminal());
         // `--co --no-refine` lists without importing: pytest's cases are the
         // static recognizer's prediction.
         let static_listing = args.no_refine && args.collect_only;
         let chosen = registry::choose(&project, static_listing)?;
-        let adapters_why = chosen.why;
+        let adapters_source = chosen.source;
         let adapters = chosen.adapters;
         // A run imports every pytest file it runs: aye's pytest front-end
         // lists each one, so there is no static run to fall back on.
@@ -210,7 +210,7 @@ impl Session {
             only_paths,
             tool_aye,
             adapters,
-            adapters_why,
+            adapters_source,
             prepared,
             defaults,
             selection,
@@ -228,8 +228,12 @@ impl Session {
         &self.interpreter.executable
     }
 
-    pub(crate) const fn python_source(&self) -> PythonSource {
-        self.interpreter.source
+    /// Where the interpreter came from, for `aye config`.
+    pub(crate) fn python_source(&self) -> ValueSource {
+        interpreter_source(
+            self.interpreter.source,
+            self.tool_aye.python.as_ref().map(|python| &python.source),
+        )
     }
 
     pub(crate) const fn workers(&self) -> u32 {
@@ -246,10 +250,10 @@ impl Session {
 
     /// The names of the adapters the run uses, in priority order, and why
     /// those.
-    pub(crate) fn adapters(&self) -> (Vec<AdapterName>, registry::Why) {
+    pub(crate) fn adapters(&self) -> (Vec<AdapterName>, &ValueSource) {
         (
             self.adapters.iter().map(|a| a.name()).collect(),
-            self.adapters_why,
+            &self.adapters_source,
         )
     }
 
@@ -694,20 +698,20 @@ impl Session {
 
     /// `--output`, else `[tool.aye] output`, else text.
     fn output(&self) -> OutputFormat {
-        output(&self.args, &self.tool_aye).0
+        output(&self.args, &self.tool_aye).value
     }
 
     /// The output format, at its verbosity (`-v` and `-q`), and where the
     /// format came from, for `aye config`.
-    pub(crate) fn output_shown(&self) -> (String, &'static str) {
-        let (format, origin) = output(&self.args, &self.tool_aye);
+    pub(crate) fn output_shown(&self) -> (String, ValueSource) {
+        let Sourced { value, source } = output(&self.args, &self.tool_aye);
         let verbosity = self.args.verbosity();
         let flags = match verbosity {
             ..0 => " -q".to_string(),
             0 => String::new(),
             n => format!(" -{}", "v".repeat(usize::from(n.unsigned_abs()))),
         };
-        (format!("{}{flags}", format.as_str()), origin)
+        (format!("{}{flags}", value.as_str()), source)
     }
 
     fn reporters<'a>(&self, junit: Option<PathBuf>, file_failed: &Arc<AtomicBool>) -> Tee<'a> {
@@ -1749,13 +1753,32 @@ fn python_request(
 
 /// The output format, and where it came from: `--output`, else
 /// `[tool.aye] output`, else text.
-fn output(args: &Args, tool_aye: &AyeSettings) -> (OutputFormat, &'static str) {
+fn output(args: &Args, tool_aye: &AyeSettings) -> Sourced<OutputFormat> {
     if let Some(output) = args.output {
-        return (output, "--output");
+        return Sourced::new(output, ValueSource::Cli("--output"));
     }
-    match &tool_aye.output {
-        Some(output) => (output.value, "[tool.aye] output"),
-        None => (OutputFormat::Text, "default"),
+    tool_aye
+        .output
+        .clone()
+        .unwrap_or(Sourced::default_value(OutputFormat::Text))
+}
+
+/// Where the interpreter came from, as `aye config` shows it: what asked
+/// for it (`--python`, `$AYE_PYTHON`, or `[tool.aye] python`, whose source
+/// `config` is: a request from the configuration has one), else the rule
+/// discovery followed (`$VIRTUAL_ENV`, the project's `.venv` wherever it
+/// was, the interpreter beside aye, `PATH`).
+fn interpreter_source(source: PythonSource, config: Option<&ValueSource>) -> ValueSource {
+    match source {
+        PythonSource::Requested(RequestSource::Flag) => ValueSource::Cli("--python"),
+        PythonSource::Requested(RequestSource::Env) => ValueSource::Env(EnvVars::AYE_PYTHON),
+        PythonSource::Requested(RequestSource::Config) => {
+            config.cloned().unwrap_or(ValueSource::Default)
+        }
+        PythonSource::VirtualEnv => ValueSource::Env(EnvVars::VIRTUAL_ENV),
+        PythonSource::ProjectVenv(_) => ValueSource::Rule(".venv"),
+        PythonSource::BesideAye => ValueSource::Rule("beside aye"),
+        PythonSource::SearchPath => ValueSource::Rule("PATH"),
     }
 }
 

@@ -1,7 +1,6 @@
 //! What interpreter was asked for ([`PythonRequest`]), and where the
 //! request came from ([`RequestSource`]).
 
-use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// An interpreter asked for by its user, as a path or a name.
@@ -37,16 +36,6 @@ pub enum RequestSource {
     Env,
     /// `[tool.aye] python`.
     Config,
-}
-
-impl fmt::Display for RequestSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Flag => "--python",
-            Self::Env => "$AYE_PYTHON",
-            Self::Config => "[tool.aye] python",
-        })
-    }
 }
 
 #[cfg(test)]

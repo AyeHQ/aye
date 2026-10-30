@@ -4,6 +4,8 @@ use std::io::{self, Write};
 
 use anyhow::Result;
 
+use aye_config::ValueSource;
+
 use crate::session::Session;
 
 pub(crate) fn print(session: &Session) -> Result<()> {
@@ -14,14 +16,14 @@ pub(crate) fn print(session: &Session) -> Result<()> {
         out,
         "python   {}  ({})",
         session.python().display(),
-        session.python_source()
+        session.python_source().display_for("python")
     )?;
     writeln!(out, "workers  {}", session.workers())?;
     // The format at its verbosity, as the command line would ask for it.
-    let (output, origin) = session.output_shown();
-    writeln!(out, "output   {output}  ({origin})")?;
-    let (adapters, why) = session.adapters();
-    writeln!(out, "adapters {}  ({why})", adapters.join(", "))?;
+    let (output, source) = session.output_shown();
+    writeln!(out, "output   {output}  ({})", source.display_for("output"))?;
+    let (adapters, source) = session.adapters();
+    writeln!(out, "adapters {}  ({})", adapters.join(", "), why(source))?;
     // Which engine runs the tests: aye's own, whatever the framework.
     writeln!(out, "engine   native")?;
     let entries = session.tool_aye().entries();
@@ -54,4 +56,30 @@ pub(crate) fn print(session: &Session) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Why the run uses the adapters it does: a list `[tool.aye]` gives is
+/// "from" it, the default its rule.
+fn why(source: &ValueSource) -> String {
+    match source {
+        ValueSource::File { .. } => format!("from {}", source.display_for("adapters")),
+        other => other.display_for("adapters").to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_adapters_reason_is_shown_in_words() {
+        assert_eq!(
+            why(&ValueSource::file("/repo/pyproject.toml", "[tool.aye]")),
+            "from [tool.aye] adapters"
+        );
+        assert_eq!(
+            why(&crate::registry::DEFAULT_ADAPTERS),
+            "default: pytest's rules, which run unittest's TestCase classes too"
+        );
+    }
 }

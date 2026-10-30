@@ -3,12 +3,13 @@
 
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::request::{PythonRequest, RequestSource};
 
-/// Where the interpreter came from: asked for, or found.
+/// Where the interpreter came from: asked for, or found. `aye config` shows
+/// it as the binary words it: the request's source, or the rule discovery
+/// followed (`.venv`, `beside aye`, `PATH`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PythonSource {
     /// Asked for: by `--python`, `$AYE_PYTHON` or `[tool.aye] python`.
@@ -30,19 +31,6 @@ pub enum VenvDir {
     Cwd,
     /// The project root.
     Root,
-}
-
-/// As `aye config` shows it (`--python`, `.venv`, `PATH`).
-impl fmt::Display for PythonSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Requested(source) => source.fmt(f),
-            Self::VirtualEnv => f.write_str("$VIRTUAL_ENV"),
-            Self::ProjectVenv(_) => f.write_str(".venv"),
-            Self::BesideAye => f.write_str("beside aye"),
-            Self::SearchPath => f.write_str("PATH"),
-        }
-    }
 }
 
 /// The interpreter that runs the tests, and where it came from.
@@ -344,35 +332,6 @@ mod tests {
         assert_eq!(
             m.find(None),
             Some((project, PythonSource::ProjectVenv(VenvDir::Root)))
-        );
-    }
-
-    /// As `aye config` shows each source.
-    #[test]
-    fn a_source_is_shown_by_its_name() {
-        let shown = [
-            PythonSource::Requested(RequestSource::Flag),
-            PythonSource::Requested(RequestSource::Env),
-            PythonSource::Requested(RequestSource::Config),
-            PythonSource::VirtualEnv,
-            PythonSource::ProjectVenv(VenvDir::Cwd),
-            PythonSource::ProjectVenv(VenvDir::Root),
-            PythonSource::BesideAye,
-            PythonSource::SearchPath,
-        ]
-        .map(|source| source.to_string());
-        assert_eq!(
-            shown,
-            [
-                "--python",
-                "$AYE_PYTHON",
-                "[tool.aye] python",
-                "$VIRTUAL_ENV",
-                ".venv",
-                ".venv",
-                "beside aye",
-                "PATH",
-            ]
         );
     }
 }

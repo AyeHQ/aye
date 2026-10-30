@@ -7,11 +7,10 @@
 //! with its front-end and aye's own `pytest` module, which every adapter's
 //! workers get, so pytest is never imported.
 
-use std::fmt;
-
 use anyhow::{Context as _, Result, bail};
 use aye_adapter::{Adapter, Project};
 use aye_adapter_pytest::native::SHIM_MODULE;
+use aye_config::ValueSource;
 use aye_engine::{MODEL_MODULE, NATIVE_ENGINE_MODULE, REWRITE_MODULE};
 use aye_events::AdapterName;
 use aye_protocol::ModuleSet;
@@ -69,10 +68,11 @@ pub(crate) fn is_conftest(path: &str) -> bool {
     path.rsplit('/').next() == Some("conftest.py")
 }
 
-/// The adapters a run uses, in priority order, and why.
+/// The adapters a run uses, in priority order, and why: `[tool.aye]
+/// adapters`, whose source is the table's, or [`DEFAULT_ADAPTERS`].
 pub(crate) struct Chosen {
     pub adapters: Vec<Box<dyn Adapter>>,
-    pub why: Why,
+    pub source: ValueSource,
 }
 
 impl Chosen {
@@ -82,23 +82,10 @@ impl Chosen {
     }
 }
 
-/// Why a run uses the adapters it does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Why {
-    /// `[tool.aye] adapters` lists them.
-    Configured,
-    /// The default: doctest then pytest.
-    Default,
-}
-
-impl fmt::Display for Why {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Configured => "from [tool.aye] adapters",
-            Self::Default => "default: pytest's rules, which run unittest's TestCase classes too",
-        })
-    }
-}
+/// Why a run uses doctest then pytest when `[tool.aye] adapters` says
+/// nothing.
+pub(crate) const DEFAULT_ADAPTERS: ValueSource =
+    ValueSource::Rule("default: pytest's rules, which run unittest's TestCase classes too");
 
 /// The adapters a project runs: those `[tool.aye] adapters` names, in its
 /// order (an unknown name is an error); else doctest then pytest, whatever
@@ -113,11 +100,11 @@ impl fmt::Display for Why {
 /// error whichever adapters run. `[tool.aye]` is the project's.
 pub(crate) fn choose(project: &Project<'_>, static_listing: bool) -> Result<Chosen> {
     let settings = project.tool_aye;
-    let (names, why) = match &settings.adapters {
-        Some(names) => (names.value.names().to_vec(), Why::Configured),
+    let (names, source) = match &settings.adapters {
+        Some(names) => (names.value.names().to_vec(), names.source.clone()),
         None => (
             vec![aye_adapter_doctest::NAME, aye_adapter_pytest::NAME],
-            Why::Default,
+            DEFAULT_ADAPTERS,
         ),
     };
     let mut known = known(static_listing);
@@ -144,7 +131,7 @@ pub(crate) fn choose(project: &Project<'_>, static_listing: bool) -> Result<Chos
                 .with_context(|| format!("invalid {} configuration", adapter.name()))?;
         }
     }
-    Ok(Chosen { adapters, why })
+    Ok(Chosen { adapters, source })
 }
 
 #[cfg(test)]
@@ -218,11 +205,11 @@ mod tests {
         let settings = AyeSettings::default();
         let chosen = |args: &[PathBuf]| {
             let chosen = choose(&project(root, args, &settings), false).unwrap();
-            (chosen.names(), chosen.why)
+            (chosen.names(), chosen.source)
         };
         let default = (
             vec![aye_adapter_doctest::NAME, aye_adapter_pytest::NAME],
-            Why::Default,
+            DEFAULT_ADAPTERS,
         );
         assert_eq!(chosen(&[]), default);
         assert_eq!(chosen(&[PathBuf::from("tests")]), default);
@@ -230,7 +217,7 @@ mod tests {
         write(root, "pytest.ini", "[pytest]\n");
         assert_eq!(chosen(&[]), default);
         assert_eq!(
-            Why::Default.to_string(),
+            DEFAULT_ADAPTERS.display_for("adapters").to_string(),
             "default: pytest's rules, which run unittest's TestCase classes too"
         );
     }
@@ -493,11 +480,6 @@ mod tests {
                 installed.push(&module.name);
             }
         }
-    }
-
-    #[test]
-    fn the_reason_is_shown_in_words() {
-        assert_eq!(Why::Configured.to_string(), "from [tool.aye] adapters");
     }
 
     /// Finding C34: an adapter's table is checked even when the adapter
