@@ -169,7 +169,7 @@ fn bad_outcomes_say_how_the_test_ended_before_the_run() {
     use aye_events::{Outcome, Previous, TestId, TestResult};
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join(".aye");
-    let runs = state.join(aye_history::runs::DIR);
+    let runs = state.join(aye_history::store::DIR);
     let finished = |name: &str, outcome| {
         Event::TestFinished(Box::new(TestResult::new(TestId::new(name), outcome)))
     };

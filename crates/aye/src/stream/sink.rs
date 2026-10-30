@@ -25,7 +25,7 @@
 //!   `GITHUB_WORKSPACE` (else the directory holding `.git`).
 //! - **Every run is kept for `aye show`** (October 2026), numbered (`r81`,
 //!   claimed before `run_started`, which says it): the run store
-//!   (`aye_history::runs`) is the stream's last consumer, serializing each
+//!   (`aye_history::store`) is the stream's last consumer, serializing each
 //!   record once every reporter has it and compressing the log on a thread
 //!   of its own, so the run doesn't wait on it (on `packaging`'s 62,000
 //!   tests, 57 MB of records, the run takes as long). Beside it the binary

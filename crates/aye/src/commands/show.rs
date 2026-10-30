@@ -1,6 +1,6 @@
 //! `aye show`: a stored run's results again, without running anything.
 //!
-//! It reads the run store (`.aye/runs`, `aye_history::runs`) and feeds the
+//! It reads the run store (`.aye/runs`, `aye_history::store`) and feeds the
 //! renderers part of a stored log, with the whole log's test keys
 //! ([`Keys::of`]), so that what they write reads as the run wrote it, and
 //! what it knows of the run beside the log ([`aye_render::ShowContext`]:

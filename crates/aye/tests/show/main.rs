@@ -148,7 +148,7 @@ fn suite() -> tempfile::TempDir {
 }
 
 fn last(dir: &Path) -> String {
-    fs::read_to_string(runs_dir(dir).join(aye_history::runs::LAST))
+    fs::read_to_string(runs_dir(dir).join(aye_history::store::LAST))
         .unwrap()
         .trim()
         .to_owned()

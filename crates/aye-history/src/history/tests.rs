@@ -1,6 +1,9 @@
+use std::fs;
+use std::path::Path;
 use std::time::Duration;
 
-use aye_events::{Counts, Envelope, ExitCode, Failure, OutcomeTrail, RunId, RunNumber};
+use aye_events::{Counts, Envelope, ExitCode, Failure, Outcome, OutcomeTrail, RunId, RunNumber};
+use aye_fs::prepare_dir;
 
 use super::*;
 

@@ -4,10 +4,13 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use aye_events::{
-    BatchIndex, Case, Counts, Diagnostic, Event, ExitCode, Failure, Outcome, Phase, Record, RunId,
-    RunNumber, Severity, TestId, TestResult,
+    BatchIndex, Case, ContentDigest, Counts, Diagnostic, DiagnosticCode, Event, ExitCode, Failure,
+    Outcome, Phase, Record, RunId, RunNumber, Severity, TestId, TestResult,
 };
+use aye_stream::FileChange;
 
+use super::layout::replace;
+use super::writer::shows;
 use super::*;
 
 /// A run's log as the binary stamps it: its id on every record, and each

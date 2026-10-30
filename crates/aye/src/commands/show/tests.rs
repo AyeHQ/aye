@@ -337,7 +337,7 @@ fn each_result_comes_with_its_own_records_and_a_key_names_them_all() {
 /// A stored run's summary, as `choose` reads it: its id.
 fn meta(run: &str) -> RunMeta {
     RunMeta {
-        version: aye_history::runs::VERSION,
+        version: aye_history::store::VERSION,
         run: run.into(),
         root: "/p".into(),
         started_ms: 0,
