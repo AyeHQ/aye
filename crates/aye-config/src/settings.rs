@@ -514,6 +514,6 @@ mod tests {
         write(dir.path(), "pyproject.toml", "[project]\nname = \"p\"\n");
         let settings = AyeSettings::load(dir.path()).unwrap();
         assert_eq!(settings, AyeSettings::NONE);
-        assert!(settings.entries().is_empty());
+        assert_eq!(settings.entries(), Vec::new());
     }
 }
