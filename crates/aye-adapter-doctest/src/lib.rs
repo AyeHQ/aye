@@ -311,7 +311,6 @@ mod config;
 mod conftest;
 mod context;
 mod finder;
-mod fnmatch;
 mod parser;
 
 #[cfg(test)]
@@ -328,6 +327,7 @@ use aye_events::{
     AdapterName, AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity, Span,
 };
 use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
+use aye_python_stdlib::fnmatch::{self, SetTranslation};
 use aye_static::{EnvVars, ProcessEnv};
 
 pub use config::{DoctestConfig, ImportMode};
@@ -351,6 +351,12 @@ pub const NAME: AdapterName = AdapterName::new_static("doctest");
 /// The pytest adapter's name: beside it, pytest's default text glob
 /// applies without a pytest configuration file.
 const PYTEST: AdapterName = AdapterName::new_static("pytest");
+
+/// How pytest's patterns read `[...]` sets here (`--doctest-glob`,
+/// `norecursedirs`, `--ignore-glob` and `testpaths`): as the pytest
+/// adapter reads them, which differs from CPython for a set whose first
+/// item is a reversed range followed by `!`.
+const SETS: SetTranslation = SetTranslation::Legacy;
 
 /// The doctest adapter.
 #[derive(Debug, Clone, Copy, Default)]
@@ -871,7 +877,7 @@ impl DoctestRecognizer {
         self.config
             .ignore_glob
             .iter()
-            .any(|glob| fnmatch::fnmatch(&text, glob))
+            .any(|glob| fnmatch::fnmatch(&text, glob, SETS))
     }
 
     /// The project's files, read once: does any assign `__module__`, and
@@ -1150,7 +1156,7 @@ impl DoctestRecognizer {
                     .config
                     .python_files
                     .iter()
-                    .any(|glob| fnmatch::fnmatch_ex(glob, file)))
+                    .any(|glob| fnmatch::fnmatch_ex(glob, file, SETS)))
     }
 
     fn recognize_module(&self, file: &SourceFile<'_>) -> Recognition {
@@ -1268,7 +1274,7 @@ impl Recognizer for DoctestRecognizer {
             .config
             .norecursedirs
             .iter()
-            .any(|pattern| fnmatch::fnmatch_ex(pattern, dir))
+            .any(|pattern| fnmatch::fnmatch_ex(pattern, dir, SETS))
         {
             return false;
         }
@@ -1312,7 +1318,7 @@ impl Recognizer for DoctestRecognizer {
             .globs
             .value
             .iter()
-            .any(|glob| fnmatch::fnmatch_ex(glob, &abs))
+            .any(|glob| fnmatch::fnmatch_ex(glob, &abs, SETS))
         {
             Claim::Tests
         } else {
@@ -1460,7 +1466,7 @@ fn expand(dir: &Path, parts: &[String], out: &mut Vec<PathBuf>) {
         if name.starts_with('.') && !part.starts_with('.') {
             continue;
         }
-        if fnmatch::fnmatch(&name, part) && (rest.is_empty() || entry.is_dir()) {
+        if fnmatch::fnmatch(&name, part, SETS) && (rest.is_empty() || entry.is_dir()) {
             expand(&entry, rest, out);
         }
     }

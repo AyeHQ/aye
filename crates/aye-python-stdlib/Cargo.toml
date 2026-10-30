@@ -9,5 +9,8 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 
+[dev-dependencies]
+aye-test = { path = "../aye-test" }
+
 [lints]
 workspace = true

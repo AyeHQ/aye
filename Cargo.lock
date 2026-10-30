@@ -191,6 +191,7 @@ dependencies = [
  "aye-events",
  "aye-fs",
  "aye-protocol",
+ "aye-python-stdlib",
  "aye-static",
  "aye-test",
  "ruff_python_parser",
@@ -210,6 +211,7 @@ dependencies = [
  "aye-events",
  "aye-fs",
  "aye-protocol",
+ "aye-python-stdlib",
  "aye-static",
  "aye-test",
  "ruff_python_parser",
@@ -229,6 +231,7 @@ dependencies = [
  "aye-events",
  "aye-fs",
  "aye-protocol",
+ "aye-python-stdlib",
  "aye-test",
  "ruff_python_parser",
  "serde",
@@ -334,6 +337,9 @@ dependencies = [
 [[package]]
 name = "aye-python-stdlib"
 version = "0.0.1"
+dependencies = [
+ "aye-test",
+]
 
 [[package]]
 name = "aye-render"

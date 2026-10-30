@@ -7,8 +7,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use aye_adapter::ast::{Expr, ExprLambda, Stmt, StmtClassDef, StmtFunctionDef};
 use aye_adapter::{Ranged, Recognition, SourceFile, TextRange, TextSize};
 use aye_events::{AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity};
+use aye_python_stdlib::fnmatch::matches_prefix_or_glob;
 
-use crate::fnmatch::matches_prefix_or_glob;
+use crate::SETS;
 use crate::ids::{IdOptions, parameterset_ids};
 use crate::marks::{self, Decorator, EmptyMark, Mark, MarkList, Scoped, SetTimeout, decorator};
 use crate::scope::{
@@ -746,11 +747,11 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
     }
 
     fn is_test_function_name(&self, name: &str) -> bool {
-        matches_prefix_or_glob(&self.settings.python_functions, name)
+        matches_prefix_or_glob(&self.settings.python_functions, name, SETS)
     }
 
     fn is_test_class_name(&self, name: &str) -> bool {
-        matches_prefix_or_glob(&self.settings.python_classes, name)
+        matches_prefix_or_glob(&self.settings.python_classes, name, SETS)
     }
 
     /// What a module (`None`) or class body may skip at runtime, worked out

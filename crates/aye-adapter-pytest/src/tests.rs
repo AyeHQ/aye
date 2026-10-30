@@ -455,7 +455,9 @@ fn adapter_faces() {
 /// `python_files`, `norecursedirs`, the ignore globs and `testpaths`.
 #[test]
 fn fnmatch_answers_are_pinned() {
-    aye_test::assert_fnmatch_pins(aye_test::FnmatchAnswers::Legacy, crate::fnmatch::fnmatch);
+    aye_test::assert_fnmatch_pins(aye_test::FnmatchAnswers::Legacy, |name, pattern| {
+        fnmatch::fnmatch(name, pattern, SETS)
+    });
 }
 
 mod p1;

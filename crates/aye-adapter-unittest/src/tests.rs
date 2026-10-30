@@ -870,7 +870,9 @@ fn claims_follow_discovery() {
 /// read as CPython reads them.
 #[test]
 fn fnmatch_answers_are_pinned() {
-    aye_test::assert_fnmatch_pins(aye_test::FnmatchAnswers::CPython, crate::fnmatch::fnmatch);
+    aye_test::assert_fnmatch_pins(aye_test::FnmatchAnswers::CPython, |name, pattern| {
+        fnmatch(name, pattern, SETS)
+    });
 }
 
 /// A file named on the command line is a module alone, as `python -m

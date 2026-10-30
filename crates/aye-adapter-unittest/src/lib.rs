@@ -275,7 +275,6 @@
 
 mod config;
 mod context;
-mod fnmatch;
 mod module;
 
 #[cfg(test)]
@@ -292,9 +291,10 @@ use aye_adapter::{
 use aye_events::{AdapterName, AffinityKey, Case, Certainty, ProjectPath, ProjectPathRef, Span};
 use aye_fs::normalize_absolute;
 use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
+use aye_python_stdlib::fnmatch::{SetTranslation, fnmatch};
+use aye_python_stdlib::unittest::valid_module_name;
 
 pub use config::UnittestConfig;
-pub use fnmatch::{fnmatch, valid_module_name};
 pub use module::may_define_load_tests;
 
 use crate::context::UnittestContext;
@@ -313,6 +313,10 @@ pub const MODULES: ModuleSet = ModuleSet::new(const { &[MODULE] });
 
 /// The adapter's name, in cases, batches and the registry.
 pub const NAME: AdapterName = AdapterName::new_static("unittest");
+
+/// How discovery's `pattern` reads `[...]` sets: as CPython's `fnmatch`
+/// does.
+const SETS: SetTranslation = SetTranslation::CPython;
 
 /// Why a test module with no test aye can see is refined.
 const NO_STATIC_TESTS: &str = "no test is visible statically; discovery imports the module to tell";
@@ -453,7 +457,7 @@ impl UnittestRecognizer {
             if dir == top || !dir.starts_with(start) {
                 return false;
             }
-        } else if !(valid_module_name(&name) && fnmatch(&name, &self.config.pattern.value)) {
+        } else if !(valid_module_name(&name) && fnmatch(&name, &self.config.pattern.value, SETS)) {
             return false;
         }
         dir.starts_with(start) && dir.ancestors().take_while(|d| *d != start).all(is_package)
@@ -627,7 +631,7 @@ impl Recognizer for UnittestRecognizer {
                 Claim::Ignore
             };
         }
-        if valid_module_name(name) && fnmatch(name, &self.config.pattern.value) {
+        if valid_module_name(name) && fnmatch(name, &self.config.pattern.value, SETS) {
             Claim::Tests
         } else {
             Claim::Ignore

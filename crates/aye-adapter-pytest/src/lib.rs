@@ -456,7 +456,7 @@
 
 mod config;
 mod context;
-mod fnmatch;
+mod glob;
 mod ids;
 mod marks;
 mod module;
@@ -479,6 +479,7 @@ use aye_config::ValueSource;
 use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 use aye_fs::normalize_absolute;
 use aye_protocol::AdapterContext;
+use aye_python_stdlib::fnmatch::{self, SetTranslation};
 use aye_static::{EnvVars, ProcessEnv};
 
 pub use config::{PytestConfig, split_xdist};
@@ -488,6 +489,13 @@ use crate::context::PytestContext;
 use crate::ids::IdOptions;
 use crate::marks::EmptyMark;
 use crate::support::{Summary, Supports};
+
+/// How pytest's patterns read `[...]` sets here (`python_files`,
+/// `python_classes`, `python_functions`, `norecursedirs`, the ignore globs,
+/// `--doctest-glob` and `testpaths`): as this adapter always has, which
+/// differs from CPython for a set whose first item is a reversed range
+/// followed by `!`.
+pub(crate) const SETS: SetTranslation = SetTranslation::Legacy;
 
 /// The pytest adapter's static face for one project.
 #[derive(Debug)]
@@ -1131,11 +1139,11 @@ impl PytestRecognizer {
                 .python_files
                 .value
                 .iter()
-                .any(|pattern| fnmatch::fnmatch_ex(pattern, &abs))
+                .any(|pattern| fnmatch::fnmatch_ex(pattern, &abs, SETS))
                 || self
                     .added_python_files(abs.parent().unwrap_or(&abs))
                     .iter()
-                    .any(|pattern| fnmatch::fnmatch_ex(pattern, &abs)))
+                    .any(|pattern| fnmatch::fnmatch_ex(pattern, &abs, SETS)))
     }
 
     /// What pytest's doctest plugin collects from `rel`, when it collects
@@ -1171,7 +1179,11 @@ impl PytestRecognizer {
         } else {
             &doctests.globs[..]
         };
-        if globs.iter().any(|glob| fnmatch::fnmatch_ex(glob, &abs)) && !ignored() {
+        if globs
+            .iter()
+            .any(|glob| fnmatch::fnmatch_ex(glob, &abs, SETS))
+            && !ignored()
+        {
             return Some(DoctestFile::Text);
         }
         None
@@ -1457,7 +1469,7 @@ impl PytestRecognizer {
             .config
             .ignore_glob
             .iter()
-            .any(|glob| fnmatch::fnmatch(&text, glob))
+            .any(|glob| fnmatch::fnmatch(&text, glob, SETS))
         {
             return Ignored::Yes;
         }
@@ -1490,7 +1502,7 @@ impl PytestRecognizer {
             let list = summary.collect_ignore_glob.as_ref().expect("picked");
             for (entry, conditional) in &list.entries {
                 let glob = normalize_absolute(&summary.dir.join(entry));
-                if fnmatch::fnmatch(&text, &glob.to_string_lossy()) {
+                if fnmatch::fnmatch(&text, &glob.to_string_lossy(), SETS) {
                     if !conditional {
                         return Ignored::Yes;
                     }
@@ -1676,7 +1688,7 @@ impl Recognizer for PytestRecognizer {
             }
             let mut roots: Vec<PathBuf> = Vec::new();
             for pattern in testpaths {
-                for found in fnmatch::glob(rootdir, pattern) {
+                for found in glob::glob(rootdir, pattern) {
                     let path = normalize_absolute(&rootdir.join(found));
                     if !roots.contains(&path) {
                         roots.push(path);
@@ -1709,7 +1721,7 @@ impl Recognizer for PytestRecognizer {
             .norecursedirs
             .value
             .iter()
-            .any(|pattern| fnmatch::fnmatch_ex(pattern, dir))
+            .any(|pattern| fnmatch::fnmatch_ex(pattern, dir, SETS))
         {
             return false;
         }

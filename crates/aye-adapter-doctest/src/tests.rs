@@ -265,7 +265,8 @@ fn docstrings_are_read_as_written_and_as_python_3_13_cleans_them() {
 
 #[test]
 fn fnmatch_follows_python() {
-    use crate::fnmatch::{fnmatch, fnmatch_ex};
+    let fnmatch = |name: &str, pattern: &str| fnmatch::fnmatch(name, pattern, SETS);
+    let fnmatch_ex = |pattern: &str, path: &Path| fnmatch::fnmatch_ex(pattern, path, SETS);
     assert!(fnmatch("test_x.txt", "test*.txt"));
     assert!(!fnmatch("x_test.txt", "test*.txt"));
     assert!(fnmatch("a.md", "*.[mM][dD]"));
@@ -285,7 +286,9 @@ fn fnmatch_follows_python() {
 /// the pytest adapter's.
 #[test]
 fn fnmatch_answers_are_pinned() {
-    aye_test::assert_fnmatch_pins(aye_test::FnmatchAnswers::Legacy, crate::fnmatch::fnmatch);
+    aye_test::assert_fnmatch_pins(aye_test::FnmatchAnswers::Legacy, |name, pattern| {
+        fnmatch::fnmatch(name, pattern, SETS)
+    });
 }
 
 // ---------------------------------------------------------------- names
