@@ -20,9 +20,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use aye_adapter::ast::visitor::{self, Visitor};
-use aye_adapter::ast::{self, CmpOp, Expr, ExprCall, Stmt, StmtClassDef, StmtFunctionDef};
+use aye_adapter::ast::{self, Expr, ExprCall, Stmt, StmtClassDef, StmtFunctionDef};
 use aye_adapter::{LineIndex, Ranged, TextRange};
 use aye_python_semantic::c3::{InconsistentMro, linearize};
+use aye_python_semantic::flow::is_main_guard;
 use aye_python_stdlib::builtins::{DYNAMIC_CALLS, READING_BUILTINS};
 use aye_python_stdlib::modules::STDLIB;
 use aye_python_stdlib::unittest::{
@@ -266,20 +267,6 @@ fn not_callable(expr: &Expr) -> bool {
                 | Expr::DictComp(_)
                 | Expr::Generator(_)
         )
-}
-
-/// `__name__ == "__main__"`, either way round: false when imported.
-fn is_main_guard(test: &Expr) -> bool {
-    let Expr::Compare(cmp) = test else {
-        return false;
-    };
-    if cmp.ops.as_ref() != [CmpOp::Eq] || cmp.comparators.len() != 1 {
-        return false;
-    }
-    let is_name = |e: &Expr| matches!(e, Expr::Name(n) if n.id.as_str() == "__name__");
-    let is_main = |e: &Expr| matches!(e, Expr::StringLiteral(s) if s.value.to_str() == "__main__");
-    let right = &cmp.comparators[0];
-    (is_name(&cmp.left) && is_main(right)) || (is_main(&cmp.left) && is_name(right))
 }
 
 /// `TYPE_CHECKING` or `typing.TYPE_CHECKING`: false at runtime.

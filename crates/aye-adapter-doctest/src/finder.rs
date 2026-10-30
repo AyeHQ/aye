@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 use aye_adapter::ast::{self, Expr, Stmt};
 use aye_adapter::{Ranged, SourceFile, TextRange, TextSize};
+use aye_python_semantic::flow::is_main_guard;
 
 use crate::parser;
 
@@ -220,21 +221,6 @@ fn docstring_of(body: &[Stmt]) -> Option<&ast::ExprStringLiteral> {
         },
         _ => None,
     }
-}
-
-/// Whether `test` is `__name__ == "__main__"`, which is never true when the
-/// module is imported by name.
-fn is_main_guard(test: &Expr) -> bool {
-    let Expr::Compare(compare) = test else {
-        return false;
-    };
-    if compare.ops.len() != 1 || !matches!(compare.ops[0], ast::CmpOp::Eq) {
-        return false;
-    }
-    let is_name = |e: &Expr| matches!(e, Expr::Name(n) if n.id.as_str() == "__name__");
-    let is_main = |e: &Expr| matches!(e, Expr::StringLiteral(s) if s.value.to_str() == "__main__");
-    let (left, right) = (compare.left.as_ref(), &compare.comparators[0]);
-    (is_name(left) && is_main(right)) || (is_main(left) && is_name(right))
 }
 
 /// A constant condition: `True`, `False`, `1`, `0`.

@@ -191,6 +191,7 @@ dependencies = [
  "aye-events",
  "aye-fs",
  "aye-protocol",
+ "aye-python-semantic",
  "aye-python-stdlib",
  "aye-static",
  "aye-test",

@@ -1,9 +1,9 @@
 //! What a body does while it runs: whether a function is a generator,
 //! which bindings exclude each other, what may skip or raise while a
-//! module is imported, and which of a module's or class body's statements
-//! may not run.
+//! module is imported, which of a module's or class body's statements
+//! may not run, and the `__main__` guard.
 
-use ruff_python_ast::{self as ast, Expr, Number, Operator, Stmt, UnaryOp};
+use ruff_python_ast::{self as ast, CmpOp, Expr, Number, Operator, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextSize};
 
 use crate::eval::NO_ID;
@@ -49,6 +49,20 @@ pub fn exclusive(a: &Bound<'_>, b: &Bound<'_>) -> bool {
         .zip(&b.branches)
         .take_while(|(x, y)| x.0 == y.0)
         .any(|(x, y)| x.1 != y.1)
+}
+
+/// `__name__ == "__main__"`, either way round: false when imported.
+pub fn is_main_guard(test: &Expr) -> bool {
+    let Expr::Compare(cmp) = test else {
+        return false;
+    };
+    if cmp.ops.as_ref() != [CmpOp::Eq] || cmp.comparators.len() != 1 {
+        return false;
+    }
+    let is_name = |e: &Expr| matches!(e, Expr::Name(n) if n.id.as_str() == "__name__");
+    let is_main = |e: &Expr| matches!(e, Expr::StringLiteral(s) if s.value.to_str() == "__main__");
+    let right = &cmp.comparators[0];
+    (is_name(&cmp.left) && is_main(right)) || (is_main(&cmp.left) && is_name(right))
 }
 
 /// A `pytest.skip` or `pytest.importorskip` call that runs while the module
