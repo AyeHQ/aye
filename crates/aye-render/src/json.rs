@@ -135,12 +135,12 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use aye_events::{
-    Certainty, Diagnostic, DiagnosticCode, Event, Failure, LifetimeId, Outcome, Record, Severity,
-    TestId, TestResult, WorkerIndex,
+    Certainty, Diagnostic, Event, Failure, LifetimeId, Outcome, Record, Severity, TestId,
+    TestResult, WorkerIndex,
 };
 use aye_stream::{
     Again, BlockedTests, Consumer, FirstBySignature, HeldSub, Keys, Left, Noted, Repeats, RunFacts,
-    SubOutcomes, Subject, Tally,
+    SeenDiagnostics, SubOutcomes, Subject, Tally,
 };
 
 use crate::{DetailLevel, Ladder, Level, ShowContext, ShowMode, failure, rerun, words};
@@ -175,10 +175,9 @@ pub struct JsonLines<W: Write> {
     /// Bad sub-outcomes of tests that haven't finished, held so that the
     /// first can carry the test's output and rerun.
     subs: SubOutcomes,
-    /// Diagnostics reported, by severity, code, path and message, so that
-    /// one every batch repeats (a framework rejecting its arguments) is
-    /// reported once.
-    diagnostics: HashSet<(&'static str, DiagnosticCode, String, String)>,
+    /// Diagnostics reported, so that one every batch repeats (a framework
+    /// rejecting its arguments) is reported once.
+    diagnostics: SeenDiagnostics,
     /// What the summary counts beside the tests' counts: modules skipped
     /// while collecting, failed lifetimes that kept no test from running.
     tally: Tally,
@@ -207,7 +206,7 @@ impl<W: Write> JsonLines<W> {
             signatures: FirstBySignature::new(),
             blocked: BlockedTests::new(),
             subs: SubOutcomes::new(),
-            diagnostics: HashSet::new(),
+            diagnostics: SeenDiagnostics::new(),
             tally: Tally::default(),
             keys: Keys::new(),
             failures: Vec::new(),
@@ -470,12 +469,7 @@ impl<W: Write> JsonLines<W> {
     fn diagnostic(&mut self, diagnostic: &Diagnostic) -> io::Result<()> {
         let severity = diagnostic.severity.as_str();
         if (diagnostic.severity != Severity::Error && !self.detailed())
-            || !self.diagnostics.insert((
-                severity,
-                diagnostic.code.clone(),
-                diagnostic.path.to_string(),
-                diagnostic.message.clone(),
-            ))
+            || !self.diagnostics.first(diagnostic)
         {
             return Ok(());
         }

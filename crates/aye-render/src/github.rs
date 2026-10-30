@@ -9,16 +9,16 @@
 //! finishes, so repeats can be counted, and capped: GitHub shows only the
 //! first few of a step anyway.
 
-use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::io::{self, Write};
 
 use aye_events::{
-    Diagnostic, DiagnosticCode, Event, Failure, LifetimeId, Outcome, Phase, Record, Severity,
-    TestId, TestResult, WorkerIndex,
+    Diagnostic, Event, Failure, LifetimeId, Outcome, Phase, Record, Severity, TestId, TestResult,
+    WorkerIndex,
 };
 use aye_stream::{
-    Again, BlockedTests, Consumer, DefinitionLines, FirstBySignature, Repeats, SubOutcomes,
+    Again, BlockedTests, Consumer, DefinitionLines, FirstBySignature, Repeats, SeenDiagnostics,
+    SubOutcomes,
 };
 
 use crate::{failure, words};
@@ -53,7 +53,7 @@ pub struct GithubAnnotations<W: Write> {
     written: bool,
     /// Error diagnostics annotated, so that one every batch repeats is
     /// annotated once.
-    errors: HashSet<(DiagnosticCode, String, String)>,
+    errors: SeenDiagnostics,
 }
 
 struct Annotation {
@@ -78,7 +78,7 @@ impl<W: Write> GithubAnnotations<W> {
             blocked: BlockedTests::new(),
             subs: SubOutcomes::new(),
             written: false,
-            errors: HashSet::new(),
+            errors: SeenDiagnostics::new(),
         }
     }
 
@@ -210,13 +210,7 @@ impl<W: Write> GithubAnnotations<W> {
     }
 
     fn diagnostic(&mut self, diagnostic: &Diagnostic) -> io::Result<()> {
-        if diagnostic.severity != Severity::Error
-            || !self.errors.insert((
-                diagnostic.code.clone(),
-                diagnostic.path.to_string(),
-                diagnostic.message.clone(),
-            ))
-        {
+        if diagnostic.severity != Severity::Error || !self.errors.first(diagnostic) {
             return Ok(());
         }
         let line = diagnostic.span.as_ref().and_then(|span| span.line);

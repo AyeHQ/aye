@@ -10,6 +10,8 @@ use aye_events::{
     SummaryKind,
 };
 
+use crate::SeenDiagnostics;
+
 /// Folds what the summaries count beside `run_finished`'s test counts, as
 /// text and JSON lines count it: modules skipped while collecting (each
 /// once), failed lifetimes that kept no test from running (each once, by
@@ -152,8 +154,8 @@ struct ErrorKinds {
     collection: u32,
     usage: u32,
     internal: u32,
-    /// Counted, by code, path and message.
-    seen: HashSet<(DiagnosticCode, String, String)>,
+    /// Counted, each once.
+    seen: SeenDiagnostics,
 }
 
 impl ErrorKinds {
@@ -161,12 +163,7 @@ impl ErrorKinds {
     /// whether it was. A batch stopped early is seen, but not counted: the
     /// summary's verdict and the stop notice say so.
     fn count(&mut self, diagnostic: &Diagnostic, origin: DiagnosticOrigin) -> bool {
-        let key = (
-            diagnostic.code.clone(),
-            diagnostic.path.to_string(),
-            diagnostic.message.clone(),
-        );
-        if !self.seen.insert(key) {
+        if !self.seen.first(diagnostic) {
             return false;
         }
         match diagnostic.code.class(origin).summary() {

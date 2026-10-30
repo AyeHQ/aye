@@ -10,7 +10,8 @@
 //! ([`SubOutcomes`], with which of its own failures repeat theirs:
 //! [`Repeats`]); tests a failed lifetime kept from running
 //! ([`BlockedTests`], with whether a lifetime is shown again: [`Again`]);
-//! the first failure of each signature ([`FirstBySignature`]); the line
+//! the first failure of each signature ([`FirstBySignature`]); the
+//! diagnostics that came already ([`SeenDiagnostics`]); the line
 //! each collected test is defined on ([`DefinitionLines`]); the run's facts
 //! ([`RunFacts`]); a stored run's log, indexed, for `aye show`
 //! ([`RunIndex`]); and how a file of a stored run changed since
@@ -36,6 +37,10 @@
 //!   the same way), a fold over the log alone, so a run's lines and `aye
 //!   show` later, given the whole log's keys, name a test alike. Tests and
 //!   lifetimes share one key space ([`Subject`]).
+//! - **Error diagnostics are shown once** ([`SeenDiagnostics`]): one every
+//!   batch repeats (the framework rejecting its arguments) is one line,
+//!   one annotation, one count. JSON lines shows a warning or info once
+//!   the same way; JUnit has a test case for each.
 //! - **What the summaries count beside the tests** (modules skipped while
 //!   collecting, failed lifetimes that kept no test from running, error
 //!   diagnostics by kind) is one fold, [`Tally`], which both summaries
@@ -49,6 +54,7 @@
 mod blocked;
 mod change;
 mod consumer;
+mod diagnostics;
 mod facts;
 mod index;
 mod keys;
@@ -60,6 +66,7 @@ mod tally;
 pub use blocked::{Again, BlockedTests, Left};
 pub use change::FileChange;
 pub use consumer::{Consumer, FailOnFinish, StopAfterError, Tee};
+pub use diagnostics::SeenDiagnostics;
 pub use facts::RunFacts;
 pub use index::{ItemIndex, ItemKind, RecordIndex, RunIndex, RunItem};
 pub use keys::{Keys, ShortKey, Subject};

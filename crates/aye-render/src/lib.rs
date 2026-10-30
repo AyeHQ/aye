@@ -92,9 +92,9 @@
 //!   `lifetime_finished`; no renderer pairs it with its `lifetime_started`
 //!   (only text at `-vvv` reads that, as a line of its own), and a test
 //!   whose failed lifetime never reports is shown on its own.
-//! - **Error diagnostics** are shown once: one that every batch repeats (the
-//!   framework rejecting its arguments) is one line, one annotation, one
-//!   count.
+//! - **Error diagnostics** are shown once (`aye_stream::SeenDiagnostics`):
+//!   one that every batch repeats (the framework rejecting its arguments)
+//!   is one line, one annotation, one count.
 //! - **Failure signatures** come from the engine; failures without one are
 //!   never grouped, and none is at L3: below it, a failure whose signature
 //!   an earlier one had names that one's key (`same as 3fae6`, `same_as`).
