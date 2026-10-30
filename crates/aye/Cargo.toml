@@ -35,6 +35,7 @@ aye-fs = { workspace = true }
 aye-history = { workspace = true }
 aye-protocol = { workspace = true }
 aye-provision = { workspace = true }
+aye-pytest = { workspace = true }
 aye-render = { workspace = true }
 aye-runner = { workspace = true }
 aye-select = { workspace = true }

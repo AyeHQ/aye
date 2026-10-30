@@ -150,6 +150,7 @@ dependencies = [
  "aye-history",
  "aye-protocol",
  "aye-provision",
+ "aye-pytest",
  "aye-render",
  "aye-runner",
  "aye-select",

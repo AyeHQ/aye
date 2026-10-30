@@ -140,7 +140,7 @@ mod tests {
             let args = RunArgs::try_parse_from(argv).unwrap();
             assert!(args.compat.native, "{argv:?}");
             assert_eq!(
-                crate::framework_args::replaced_run(&args.passthrough),
+                aye_pytest::argv::replaced_run(&args.passthrough),
                 None,
                 "{argv:?}"
             );

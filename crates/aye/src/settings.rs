@@ -131,7 +131,7 @@ impl RunSettings {
         // arguments after `--` that would replace the test run.
         framework_args::check_expressions(keyword.as_deref(), tags.as_deref())
             .map_err(anyhow::Error::msg)?;
-        if let Some(problem) = framework_args::replaced_run(&passthrough) {
+        if let Some(problem) = aye_pytest::argv::replaced_run(&passthrough) {
             return Err(anyhow::Error::msg(problem));
         }
         let cwd = std::env::current_dir().context("cannot read the current directory")?;

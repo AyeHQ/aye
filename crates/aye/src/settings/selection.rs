@@ -11,11 +11,11 @@
 
 use aye_adapter::FrameworkDefaults;
 use aye_events::AdapterName;
+use aye_pytest::argv::passed;
 use aye_select::Selection;
 
 use super::each;
 use crate::commands::run::select::{Pick, pick, unread};
-use crate::framework_args::passed;
 
 /// What static selection keeps: the positional arguments' `selectors`, the
 /// `-k` and `-m` expressions [`pick`] picks, and each adapter's

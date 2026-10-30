@@ -30,6 +30,7 @@ use aye_events::{
     ProjectPathRef, Severity, TestId,
 };
 use aye_fs::root_relative;
+use aye_pytest::argv::Passed;
 use aye_select::{
     DottedReading, LastFailed, Order, Reached, SelectedCase, Selection, Selector, SelectorIndex,
 };
@@ -37,7 +38,6 @@ use aye_select::{
 use super::collect::Collected;
 use super::exit::RunVerdict;
 use super::reach::{Reach, broken_conftest_dirs, explained_by_a_conftest};
-use crate::framework_args::Passed;
 use crate::positional::{Positional, Positionals};
 use crate::settings::RunSettings;
 use crate::stream::{Passes, Stream};
