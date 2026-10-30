@@ -153,6 +153,44 @@ fn what_names_nothing_is_a_not_found_diagnostic_in_the_stream() {
     }
 }
 
+/// Two arguments that read alike, the word `nope` and the path `./nope`
+/// (neither of which exists), are one selector to selection, and each
+/// that names nothing is reported as the first of them is: a word's
+/// `not-found`, or nothing beyond collection's for a missing path.
+#[test]
+fn arguments_that_read_alike_are_reported_as_the_first_of_them() {
+    let Some(python) = python() else { return };
+    let dir = project(&[("tests/test_a.py", PASSING)]);
+    let not_found = |args: &[&str]| {
+        let mut argv = vec!["--output", "json", "-vvv"];
+        argv.extend(args);
+        let (output, records) = logged(&python, dir.path(), &argv);
+        assert_eq!(code(&output), 4, "{args:?}: {}", stdout(&output));
+        events(&records, "diagnostic")
+            .iter()
+            .filter(|d| d["code"] == "not-found")
+            .map(|d| {
+                (
+                    d["path"].as_str().unwrap().to_owned(),
+                    d["message"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let missing = (
+        "nope".to_owned(),
+        "file or directory not found: ./nope".to_owned(),
+    );
+    assert_eq!(
+        not_found(&["nope", "./nope"]),
+        [
+            missing.clone(),
+            (String::new(), "not found: nope".to_owned())
+        ]
+    );
+    assert_eq!(not_found(&["./nope", "nope"]), [missing]);
+}
+
 #[test]
 fn paths_through_dot_dot_find_the_root() {
     let Some(python) = python() else { return };
@@ -389,6 +427,39 @@ fn dotted_names_and_keys_start_the_run_from_the_files_they_select() {
     let output = aye(&python, dir.path(), &["top"]);
     assert_eq!(code(&output), 0, "{}", stdout(&output));
     assert_eq!(summary(&output), "✓ 1 passed", "{}", stdout(&output));
+}
+
+/// A dotted name reaches what collection skipped by the rule the binary
+/// has read skips with since 0.0.1, which takes any parts, where selection
+/// reads a word as a dotted name only when each part is an identifier: so
+/// `test_my-mod` names a skipped `test_my-mod.py` whole (no `not-found`,
+/// the skip counted), and `test_my-mod.x` names something in it (the skip
+/// counted, and a `not-found`).
+#[test]
+fn a_word_reaches_what_collection_skipped_whatever_its_parts() {
+    let Some(python) = python() else { return };
+    let dir = project(&[
+        ("pyproject.toml", PYTEST_CONFIG),
+        ("test_a.py", PASSING),
+        (
+            "test_my-mod.py",
+            "import pytest\npytest.skip('later', allow_module_level=True)\n",
+        ),
+    ]);
+    let output = aye(&python, dir.path(), &["test_my-mod"]);
+    assert_eq!(code(&output), 5, "{}", stdout(&output));
+    assert_eq!(summary(&output), "no tests ran · 1 skipped");
+    let output = aye(&python, dir.path(), &["test_my-mod.x"]);
+    assert_eq!(code(&output), 4, "{}", stdout(&output));
+    assert_eq!(
+        summary(&output),
+        "usage error · 1 skipped · ! 1 usage error"
+    );
+    assert!(
+        stdout(&output).contains("not found: test_my-mod.x"),
+        "{}",
+        stdout(&output)
+    );
 }
 
 /// Recheck regression 4: a module or directory skipped while collecting

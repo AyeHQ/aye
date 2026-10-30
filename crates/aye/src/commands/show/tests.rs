@@ -454,6 +454,31 @@ fn keys_and_their_start_name_tests_and_the_start_of_several_is_a_usage_error() {
     );
 }
 
+/// Two arguments that read alike (the path `./nope` and the word `nope`,
+/// one selector to selection) and name nothing are each reported as the
+/// first of them, as given.
+#[test]
+fn arguments_that_read_alike_are_reported_as_the_first_of_them() {
+    let records = stamped(vec![
+        (Some(0), started("t.py::test_a")),
+        (Some(0), finished("t.py::test_a", Outcome::Passed)),
+    ]);
+    let log = RunIndex::of(&records);
+    let keys = Keys::of(&records);
+    let wanted = [
+        ("./nope", Wanted::Path("nope".to_owned())),
+        ("nope", Wanted::Test("nope".to_owned())),
+    ];
+    let Err(AyeError::Usage(err)) = choose(&log, &keys, &wanted, &meta("r7")) else {
+        panic!("nothing is named");
+    };
+    assert_eq!(
+        err.to_string(),
+        "./nope: no test of run r7 has that name; the closest:\n  t.py::test_a\n\
+         aye: error: ./nope: no test of run r7 has that name; the closest:\n  t.py::test_a"
+    );
+}
+
 #[test]
 fn the_whole_list_has_what_the_summary_counts_beside_the_tests() {
     let diagnostic = |severity, code: &str, path: &str| {

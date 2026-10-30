@@ -69,6 +69,84 @@ fn failed_first_runs_last_failures_first() {
     );
 }
 
+/// Under `--ff`, the cases a run collects are listed with what failed last
+/// first, each part in the arguments' order: a test's own id decides, so a
+/// `Partial` case is moved only by its narrowed ids (one an id with
+/// parameters asks for), never by its parameters' failures.
+#[test]
+fn failed_first_lists_what_failed_last_first_in_the_arguments_order() {
+    let Some(python) = python() else { return };
+    let dir = project(&[
+        (
+            "tests/test_a.py",
+            "def test_a1():\n    pass\n\ndef test_a2():\n    assert 0\n",
+        ),
+        (
+            "tests/test_b.py",
+            "def test_b1():\n    assert 0\n\ndef test_b2():\n    pass\n",
+        ),
+        (
+            "tests/test_p.py",
+            "import pytest\n\ndef cases():\n    return [0, 1]\n\n@pytest.mark.parametrize('n', cases())\ndef test_p(n):\n    assert n == 0\n",
+        ),
+    ]);
+    assert_eq!(code(&aye(&python, dir.path(), &[])), 1);
+    let ids = |args: &[&str]| {
+        let mut argv = vec!["--co", "--ff", "--output", "json", "-vvv"];
+        argv.extend(args);
+        let output = aye(&python, dir.path(), &argv);
+        assert_eq!(code(&output), 0, "{args:?}: {}", stdout(&output));
+        listed(&output)
+    };
+    assert_eq!(
+        ids(&[]),
+        [
+            "tests/test_a.py::test_a2",
+            "tests/test_b.py::test_b1",
+            "tests/test_p.py::test_p[1]",
+            "tests/test_a.py::test_a1",
+            "tests/test_b.py::test_b2",
+            "tests/test_p.py::test_p[0]",
+        ]
+    );
+    assert_eq!(
+        ids(&["tests/test_b.py", "tests/test_a.py"]),
+        [
+            "tests/test_b.py::test_b1",
+            "tests/test_a.py::test_a2",
+            "tests/test_b.py::test_b2",
+            "tests/test_a.py::test_a1",
+        ]
+    );
+    // The arguments after `--` are part of the refinement cache's key, so
+    // these get the static guess: `test_p`, `Partial`, whose own id didn't
+    // fail, stays in its place; narrowed to `[1]`, it comes first.
+    assert_eq!(
+        ids(&["--no-refine", "--", "--tb=short"]),
+        [
+            "tests/test_a.py::test_a2",
+            "tests/test_b.py::test_b1",
+            "tests/test_a.py::test_a1",
+            "tests/test_b.py::test_b2",
+            "tests/test_p.py::test_p",
+        ]
+    );
+    assert_eq!(
+        ids(&[
+            "--no-refine",
+            "tests/test_a.py",
+            "tests/test_p.py::test_p[1]",
+            "--",
+            "--tb=short"
+        ]),
+        [
+            "tests/test_a.py::test_a2",
+            "tests/test_p.py::test_p[1]",
+            "tests/test_a.py::test_a1",
+        ]
+    );
+}
+
 #[test]
 fn the_frameworks_own_k_and_m_select_statically() {
     let Some(python) = python() else { return };
