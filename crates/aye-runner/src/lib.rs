@@ -1,18 +1,20 @@
-//! Execution at scale. Interpreter discovery, the warm daemon and
-//! fork-per-run, the single spawn path every backend wraps (local, sandboxed,
-//! container, remote), the scheduler (affinity groups, duration-aware,
-//! dynamic hand-out, serial groups, crash recovery), capability routing, the
-//! sandbox policy and its enforcers, services provided into the worker, the
-//! transport, and the embedded worker (`python/aye_worker.py`) that hosts
-//! whichever engine executors the runner sends it.
+//! Execution at scale. The warm daemon and fork-per-run, the single spawn
+//! path every backend wraps (local, sandboxed, container, remote), the
+//! scheduler (affinity groups, duration-aware, dynamic hand-out, serial
+//! groups, crash recovery), capability routing, the sandbox policy and its
+//! enforcers, services provided into the worker, the transport, and the
+//! embedded worker (`python/aye_worker.py`) that hosts whichever adapters'
+//! executors the runner sends it.
 //!
 //! Owns: how tests run, where, and in what order. Does not own: what a test is
 //! or how one executes inside the framework; it calls the engine for that.
 //!
-//! Depends on: aye-engine, aye-events, aye-static. Must not depend on any
-//! `aye-engine-*`.
+//! Depends on: aye-engine, aye-events, aye-protocol, aye-static. Must not
+//! depend on any `aye-adapter-*`.
 //!
-//! Environments come from `aye-provision` (uv as a subprocess, or paths the
+//! The interpreter comes from `aye-provision`, which the binary asks: the
+//! runner starts the executable it is given ([`RunnerOptions::python`]).
+//! Later, environments come from it too (uv as a subprocess, or paths the
 //! user supplies); the runner requests them per matrix row and per backend,
 //! keys caches on what it gets back, and never installs anything itself.
 //!
@@ -38,19 +40,12 @@
 //! or its own crate).
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
-//! - **Interpreter discovery** ([`find_python`]), first match wins:
-//!   `--python`, `$AYE_PYTHON`, `[tool.aye] python`, `$VIRTUAL_ENV`, a
-//!   `.venv` in the working directory then the root, the interpreter beside
-//!   the `aye` binary (beside the file a link to it leads to: `uv tool
-//!   install` and pipx link it into `~/.local/bin` from the tool's
-//!   environment), `python3` then `python` on `PATH`. An explicit choice
-//!   that is a bare name is looked up on `PATH`. Until `aye-provision`
-//!   lands, this is the bring-your-own provisioner.
 //! - **One spawn path.** [`spawn`] starts `python -c <aye_worker source>`
 //!   ([`WORKER_SOURCE`]) in the user's working directory with its standard
-//!   streams piped, sends `hello` (aye's engine, then each executor's
-//!   modules once, in order, the executors and the services by name) and
-//!   reads until `ready`, refusing a worker of another protocol version.
+//!   streams piped, sends `hello` (aye's engine, the prelude the binary
+//!   gives every worker, then each runtime's modules, each once, in order;
+//!   the executors and the services) and reads until `ready`, refusing a
+//!   worker of another protocol version.
 //!   Runs, refinement and later backends all go through it. Workers get
 //!   `PYTHONIOENCODING=utf-8` and their own process group, so the terminal's
 //!   Ctrl-C reaches only aye, which stops them through a [`StopHandle`].
@@ -92,7 +87,7 @@
 //!   JSON can't hold become text, and lone surrogates become U+FFFD, as aye's
 //!   engine cleans text. What can't be written at all (a cycle) raises in
 //!   the executor; no invalid line is written.
-//! - **Transport.** Each worker line is a [`aye_engine::WorkerLine`]; a line
+//! - **Transport.** Each worker line is a [`aye_protocol::WorkerLine`]; a line
 //!   that isn't one is reported as a `protocol-error` diagnostic and the
 //!   worker carries on. A worker's death is noticed by its pid as well as by
 //!   the end of its stream, which a process its tests started may hold open.
@@ -138,9 +133,9 @@
 //!   first ([`Plan::first`], `--ff`) run first within their batch, in plan
 //!   order, across files, and the batches holding them are handed out first.
 //! - **The log.** The runner stamps `run`, `environment`, the run-wide `seq`
-//!   and `t_ms` with the [`Stamper`] the binary also uses for its own
-//!   records, keeps each worker record's `batch`, and brackets every worker
-//!   and batch with started and finished records.
+//!   and `t_ms` with the [`Stamper`](aye_events::Stamper) the binary also
+//!   uses for its own records, keeps each worker record's `batch`, and
+//!   brackets every worker and batch with started and finished records.
 //! - **`maxfail` is counted across workers.** Each batch is sent with what
 //!   is left of the budget. When it runs out, nothing more is handed out,
 //!   and busy workers end their batches as pytest's `-x` ends a session,
@@ -189,10 +184,10 @@
 //! - **An adapter that raises** outside any test (`failed`) ends its batch
 //!   with a `batch-failed` diagnostic and an internal error; its unfinished
 //!   tests are not reported, and the worker goes on with the next batch.
-//! - **Refinement** ([`Runner`] implements [`aye_engine::Refiner`]) starts a
+//! - **Refinement** ([`Runner`] implements [`aye_protocol::Refiner`]) starts a
 //!   fresh worker holding only that adapter's executor, and shuts it down,
 //!   unless the executor lists the session.
-//! - **Session listing** ([`aye_engine::Executor::lists_session`]). The
+//! - **Session listing** ([`aye_protocol::SessionMode::ListsSession`]). The
 //!   worker that refined is kept, with the first lane's environment, for the
 //!   next refinement of its adapter and then as the next run's first lane
 //!   (shut down when the runner is dropped, or when the run gives that lane
@@ -215,7 +210,7 @@
 //!   still pin some; once it has, a lane runs them itself), with one
 //!   `listing-differs` warning naming it. Echo (`-s`) is switched on for
 //!   the kept worker when the run takes it.
-//! - **A worker's session ends in a batch** ([`aye_engine::Batch::ends_session`]),
+//! - **A worker's session ends in a batch** ([`aye_protocol::Batch::ends_session`]),
 //!   so that what fails there is reported and its teardown isn't cut short
 //!   by the shutdown's grace: the batch a lane takes when nothing else of
 //!   its adapter is left for it (for the first lane, once no lane may still
@@ -227,20 +222,14 @@
 //!   whose session ended runs no other batch: a batch that comes back to
 //!   its lane (a crashed one's) gets a new worker.
 
-mod python;
 mod run;
 mod schedule;
 mod worker;
 
-pub use python::{PythonSource, find_python, venv_python};
-pub use run::{
-    BatchEnd, BatchSummary, Crash, Plan, RunSummary, Runner, RunnerOptions, Stamper, StopHandle,
-    StopReason, new_run_id,
-};
+pub use run::{BatchEnd, BatchSummary, Crash, Plan, RunSummary, Runner, RunnerOptions, StopHandle};
 pub use schedule::DEFAULT_WEIGHT;
 pub use worker::{
-    DEFAULT_SERVICES, Echo, Exit, Incoming, Killer, SpawnError, Worker, WorkerSpec, describe,
-    parse_line, spawn,
+    Echo, Exit, Incoming, Killer, SpawnError, Worker, WorkerSpec, describe, parse_line, spawn,
 };
 
 /// The worker, embedded at build time and run with `python -c`.
@@ -252,7 +241,7 @@ mod tests {
 
     #[test]
     fn the_worker_speaks_this_protocol() {
-        let line = format!("\nPROTOCOL = {}\n", aye_engine::PROTOCOL_VERSION);
+        let line = format!("\nPROTOCOL = {}\n", aye_protocol::PROTOCOL_VERSION);
         assert!(WORKER_SOURCE.contains(&line));
     }
 

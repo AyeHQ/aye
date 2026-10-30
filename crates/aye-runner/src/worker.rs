@@ -22,10 +22,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use aye_engine::{
-    ENGINE_MODULE, Executor, ExecutorSpec, ModuleSource, PROTOCOL_VERSION, Reply, Request,
-    WorkerLine, services,
-};
+use aye_engine::ENGINE;
+use aye_protocol::{ModuleSet, PROTOCOL_VERSION, Reply, Request, Runtime, ServiceName, WorkerLine};
 
 use aye_static::EnvVars;
 
@@ -64,9 +62,6 @@ const STRAY_LINES: usize = 20;
 /// How faulthandler (and `Py_FatalError`) starts a dump.
 const FATAL: &str = "Fatal Python error: ";
 
-/// The services a worker provides unless told otherwise.
-pub const DEFAULT_SERVICES: [&str; 2] = [services::CONTEXT, services::CLEANUP];
-
 /// Where a worker's output is echoed when it isn't captured (`-s`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Echo {
@@ -87,11 +82,16 @@ pub struct WorkerSpec {
     pub root: PathBuf,
     /// The directory the worker starts in.
     pub cwd: PathBuf,
-    /// The executors the worker instantiates. Their modules are installed
-    /// after aye's engine, in order, each name once.
-    pub executors: Vec<Executor>,
-    /// Services to provide, by name.
-    pub services: Vec<String>,
+    /// Installed after aye's engine and before every runtime's modules,
+    /// whatever the runtimes: the binary's prelude, aye's `pytest` module
+    /// and what it stands on.
+    pub prelude: ModuleSet,
+    /// The runtimes whose executors the worker builds. Their modules are
+    /// installed after the prelude, in order, each name once.
+    pub runtimes: Vec<Runtime>,
+    /// Services to provide: [`ServiceName::DEFAULT`] unless told
+    /// otherwise.
+    pub services: Vec<ServiceName>,
     /// Environment variables set on top of the inherited environment, after
     /// `PYTHONIOENCODING=utf-8`.
     pub env: Vec<(OsString, OsString)>,
@@ -112,35 +112,31 @@ impl WorkerSpec {
             python: python.into(),
             root: root.into(),
             cwd: cwd.into(),
-            executors: Vec::new(),
-            services: DEFAULT_SERVICES.iter().map(ToString::to_string).collect(),
+            prelude: ModuleSet::default(),
+            runtimes: Vec::new(),
+            services: ServiceName::DEFAULT.to_vec(),
             env: Vec::new(),
             echo: None,
             registry: None,
         }
     }
 
-    /// The handshake this spec sends.
+    /// The handshake this spec sends: aye's engine, the prelude, then each
+    /// runtime's modules, each name once, in that order.
     pub fn hello(&self) -> Request {
         let mut seen = HashSet::new();
-        let modules = std::iter::once(&ENGINE_MODULE)
-            .chain(self.executors.iter().flat_map(|e| e.modules))
-            .filter(|module| seen.insert(module.name))
-            .map(|module| ModuleSource::from(*module))
+        let modules = ENGINE
+            .iter()
+            .chain(self.prelude)
+            .chain(self.runtimes.iter().flat_map(|runtime| runtime.modules))
+            .filter(|module| seen.insert(&*module.name))
+            .cloned()
             .collect();
         Request::Hello {
             protocol: PROTOCOL_VERSION,
             root: self.root.to_string_lossy().into_owned(),
             modules,
-            executors: self
-                .executors
-                .iter()
-                .map(|e| ExecutorSpec {
-                    adapter: e.adapter.to_string(),
-                    entry: e.entry.to_string(),
-                    lists_session: e.lists_session,
-                })
-                .collect(),
+            executors: self.runtimes.iter().map(Runtime::spec).collect(),
             services: self.services.clone(),
         }
     }
@@ -915,35 +911,32 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use std::fmt::Write as _;
 
-    use aye_engine::EmbeddedModule;
-    use aye_events::Event;
+    use aye_engine::ENGINE_MODULE;
+    use aye_events::{AdapterName, BatchIndex, Event};
+    use aye_protocol::{EntryPoint, ModuleSource, SessionMode};
 
     use super::*;
 
-    const ONE: EmbeddedModule = EmbeddedModule {
-        name: "one",
-        source: "",
-    };
-    const TWO: EmbeddedModule = EmbeddedModule {
-        name: "two",
-        source: "",
-    };
+    const ONE: ModuleSource = ModuleSource::embedded("one", "");
+    const TWO: ModuleSource = ModuleSource::embedded("two", "");
 
     #[test]
-    fn hello_installs_the_engine_then_each_module_once() {
+    fn hello_installs_the_engine_the_prelude_then_each_module_once() {
+        const ZERO: ModuleSource = ModuleSource::embedded("zero", "");
         let mut spec = WorkerSpec::new("python", "/repo", "/repo");
-        spec.executors = vec![
-            Executor {
-                adapter: "a",
-                modules: &[ONE, TWO],
-                entry: "two:A",
-                lists_session: false,
+        spec.prelude = ModuleSet::new(const { &[ZERO, ONE] });
+        spec.runtimes = vec![
+            Runtime {
+                adapter: AdapterName::new_static("a"),
+                modules: ModuleSet::new(const { &[ONE, TWO] }),
+                entry: EntryPoint::new("two", "A"),
+                session: SessionMode::PerBatch,
             },
-            Executor {
-                adapter: "b",
-                modules: &[TWO, ENGINE_MODULE],
-                entry: "two:B",
-                lists_session: true,
+            Runtime {
+                adapter: AdapterName::new_static("b"),
+                modules: ModuleSet::new(const { &[TWO, ENGINE_MODULE] }),
+                entry: EntryPoint::new("two", "B"),
+                session: SessionMode::ListsSession,
             },
         ];
         let Request::Hello {
@@ -958,18 +951,16 @@ mod tests {
         };
         assert_eq!(protocol, PROTOCOL_VERSION);
         assert_eq!(root, "/repo");
-        let names: Vec<&str> = modules.iter().map(|m| m.name.as_str()).collect();
-        assert_eq!(names, ["aye_engine", "one", "two"]);
+        let names: Vec<&str> = modules.iter().map(|m| &*m.name).collect();
+        assert_eq!(names, ["aye_engine", "zero", "one", "two"]);
+        assert_eq!(modules, [ENGINE_MODULE, ZERO, ONE, TWO]);
         assert_eq!(executors.len(), 2);
-        assert_eq!(executors[1].entry, "two:B");
+        assert_eq!(executors[1].entry.to_string(), "two:B");
         assert_eq!(
-            executors
-                .iter()
-                .map(|e| e.lists_session)
-                .collect::<Vec<_>>(),
-            [false, true]
+            executors.iter().map(|e| e.session).collect::<Vec<_>>(),
+            [SessionMode::PerBatch, SessionMode::ListsSession]
         );
-        assert_eq!(services, ["context", "cleanup"]);
+        assert_eq!(services, ServiceName::DEFAULT);
     }
 
     #[test]
@@ -988,7 +979,7 @@ mod tests {
         assert_eq!(
             got[0],
             Incoming::Line(WorkerLine::Reply(Reply::BatchDone {
-                batch: 2,
+                batch: BatchIndex::from_u32(2),
                 status: None
             }))
         );
@@ -996,7 +987,7 @@ mod tests {
         let Incoming::Line(WorkerLine::Record(record)) = &got[2] else {
             panic!("expected a record: {:?}", got[2]);
         };
-        assert_eq!(record.envelope.batch, Some(2));
+        assert_eq!(record.envelope.batch, Some(BatchIndex::from_u32(2)));
         assert!(matches!(record.event, Event::TestStarted { .. }));
         assert!(matches!(&got[3], Incoming::Garbage { .. }));
         assert_eq!(got[4], Incoming::Eof);

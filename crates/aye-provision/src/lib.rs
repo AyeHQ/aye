@@ -1,5 +1,34 @@
-//! Environments: how the runner obtains an interpreter with the project's
-//! dependencies, for one Python version or for the whole matrix.
+//! The interpreter that runs the tests: what its user asked for
+//! ([`PythonRequest`], from a [`RequestSource`]), discovery ([`find`]), and
+//! the [`Interpreter`] found, with where it came from ([`PythonSource`]);
+//! and what the refinement cache's key holds of the environment refinement
+//! runs in ([`EnvironmentFingerprint`]): the interpreter, its venv's layout
+//! and installed packages, the variables its workers inherit and the
+//! framework's arguments, with the modules it installs
+//! ([`InstalledModules`]), whose content the key doesn't hold. Collection
+//! is handed the fingerprint and reads the interpreter through it.
+//!
+//! Decided (implementation, October 2026):
+//! - **Discovery**, first match wins: what `--python`, `$AYE_PYTHON` or
+//!   `[tool.aye] python` asks for (the binary picks the first given), then
+//!   `$VIRTUAL_ENV`, a `.venv` in the working directory then the root, the
+//!   interpreter beside the `aye` binary (beside the file a link to it leads
+//!   to: `uv tool install` and pipx link it into `~/.local/bin` from the
+//!   tool's environment), `python3` then `python` on `PATH`. A request that
+//!   is a bare name is looked up on `PATH`. An empty variable counts as
+//!   unset. Until provisioning lands, this is the bring-your-own provisioner.
+//! - **The fingerprint reads the interpreter's files** (its path, the file
+//!   it resolves to, that file's size and time, its venv's `pyvenv.cfg`,
+//!   the entries of its `site-packages` directories, the user's own outside
+//!   a venv, and their `.pth` files), never runs it: no interpreter query
+//!   before the handshake. One without `site-packages` of its own (a shim, a
+//!   wrapper script) has no digest, and the cache is off. The environment
+//!   is the binary's, handed down: the digest holds every variable workers
+//!   inherit, on purpose, but a few the shell changes between runs, and the
+//!   user's home and `PYTHONPATH` are read from it.
+//!
+//! Later, environments: how the runner obtains an interpreter with the
+//! project's dependencies, for one Python version or for the whole matrix.
 //!
 //! aye never creates virtualenvs or installs packages itself. It asks a
 //! `Provisioner` and keeps the result:
@@ -42,9 +71,27 @@
 //! always with warm environments); whether `requires-python` expands to a
 //! matrix on its own.
 //!
-//! Owns: the `Provisioner` trait, `Environment`, the cache key, the uv
-//! subprocess implementation, the bring-your-own implementation, and a fake
-//! for tests. Does not own: scheduling, routing or backends (`aye-runner`),
-//! nor the environment id type on the wire (`aye-events`).
+//! Owns: interpreter discovery and the environment's fingerprint; later the
+//! `Provisioner` trait, `Environment`, the cache key, the uv subprocess
+//! implementation, the bring-your-own implementation, and a fake for tests.
+//! Does not own: starting the interpreter, scheduling, routing or backends
+//! (`aye-runner`, which takes the executable it is given), the refinement
+//! cache (`aye-collect`, which keys entries on the fingerprint), nor the
+//! environment id type on the wire (`aye-events`).
 //!
-//! Depends on: aye-events. Must not depend on the runner or any engine.
+//! Depends on: aye-events (the digest, `ContentDigest`), aye-fs and
+//! aye-static (the environment it is handed). Must not depend on the
+//! runner or any engine.
+
+mod discovery;
+mod fingerprint;
+mod installed;
+mod layout;
+mod request;
+
+pub use discovery::{
+    DiscoveryEnv, Interpreter, PythonNotFound, PythonSource, VenvDir, find, venv_python,
+};
+pub use fingerprint::EnvironmentFingerprint;
+pub use installed::InstalledModules;
+pub use request::{PythonRequest, RequestSource};

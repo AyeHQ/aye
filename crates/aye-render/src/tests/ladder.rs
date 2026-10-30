@@ -4,16 +4,17 @@
 
 use std::collections::BTreeMap;
 
-use aye_events::{Event, Record};
+use aye_events::{Event, Record, RunNumber};
+use aye_stream::Keys;
 
 use super::{feed, lines, streams};
-use crate::{ColorChoice, JsonLines, Keys, ShowContext, ShowMode, Text, TextOptions};
+use crate::{ColorChoice, JsonLines, Level, RenderMode, ShowContext, ShowMode, Text, TextOptions};
 
 fn text(records: &[Record], verbosity: i8) -> String {
     let mut text = Text::new(
         Vec::new(),
         TextOptions {
-            verbosity,
+            verbosity: Level::from_count(verbosity.into()),
             color: ColorChoice::Never,
             live: false,
         },
@@ -23,7 +24,7 @@ fn text(records: &[Record], verbosity: i8) -> String {
 }
 
 fn json(records: &[Record], verbosity: i8) -> String {
-    let mut json = JsonLines::new(Vec::new(), verbosity);
+    let mut json = JsonLines::new(Vec::new(), Level::from_count(verbosity.into()));
     feed(&mut json, records);
     String::from_utf8(json.into_inner()).unwrap()
 }
@@ -351,7 +352,7 @@ fn shown(id: &str) -> Vec<Record> {
 
 fn context() -> ShowContext {
     ShowContext {
-        run: Some(81),
+        run: RunNumber::new(81),
         ago: Some("2 min ago".into()),
         stale: BTreeMap::new(),
     }
@@ -364,12 +365,16 @@ fn aye_show_a_key_is_its_detail_with_where_the_run_was() {
     let mut text = Text::new(
         Vec::new(),
         TextOptions {
-            verbosity: 1,
+            verbosity: Level::Verbose,
             color: ColorChoice::Never,
             live: false,
         },
     )
-    .for_show(ShowMode::Details, keys.clone(), context());
+    .with_mode(RenderMode::Show {
+        mode: ShowMode::Details,
+        keys: keys.clone(),
+        context: context(),
+    });
     feed(&mut text, &part);
     assert_eq!(
         String::from_utf8(text.into_inner()).unwrap(),
@@ -392,7 +397,11 @@ fn aye_show_a_key_is_its_detail_with_where_the_run_was() {
             "",
         ])
     );
-    let mut json = JsonLines::new(Vec::new(), 2).for_show(ShowMode::Details, keys, context());
+    let mut json = JsonLines::new(Vec::new(), Level::VeryVerbose).with_mode(RenderMode::Show {
+        mode: ShowMode::Details,
+        keys,
+        context: context(),
+    });
     feed(&mut json, &part);
     assert_eq!(
         String::from_utf8(json.into_inner()).unwrap(),
@@ -408,7 +417,7 @@ fn the_hint_and_the_colours_of_the_comparison() {
     let mut text = Text::new(
         Vec::new(),
         TextOptions {
-            verbosity: 1,
+            verbosity: Level::Verbose,
             color: ColorChoice::Always,
             live: false,
         },

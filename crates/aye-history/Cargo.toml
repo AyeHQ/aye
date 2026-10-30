@@ -12,6 +12,7 @@ authors.workspace = true
 [dependencies]
 aye-events = { workspace = true }
 aye-fs = { workspace = true }
+aye-stream = { workspace = true }
 flate2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

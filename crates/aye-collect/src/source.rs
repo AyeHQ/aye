@@ -2,11 +2,11 @@
 
 use std::path::Path;
 
-use aye_engine::{LineIndex, SourceFile, TextSize, ast};
-use aye_events::{Diagnostic, Severity, Span};
+use aye_adapter::{LineIndex, SourceFile, TextSize, ast};
+use aye_events::ProjectPath;
 use ruff_python_parser::ParseError;
 
-use crate::codes;
+use crate::diagnostic::CollectDiagnostic;
 
 /// A file as read and, when it is Python, parsed.
 pub(crate) struct Source {
@@ -29,9 +29,13 @@ impl Source {
     }
 
     /// The file as recognizers see it, when it parsed.
-    pub(crate) fn file<'a>(&'a self, rel: &'a str, abs: &'a Path) -> Option<SourceFile<'a>> {
+    pub(crate) fn file<'a>(
+        &'a self,
+        rel: &'a ProjectPath,
+        abs: &'a Path,
+    ) -> Option<SourceFile<'a>> {
         Some(SourceFile {
-            rel,
+            rel: rel.as_path(),
             abs,
             source: &self.text,
             module: self.module.as_ref()?,
@@ -43,16 +47,13 @@ impl Source {
 /// Read and parse a file. Only `.py` files are parsed; any other file a
 /// recognizer claims comes with its text and an empty module. `None` when the
 /// file can't be read; the diagnostic says why, or why it doesn't parse.
-pub(crate) fn load(abs: &Path, rel: &str) -> (Option<Source>, Option<Diagnostic>) {
+pub(crate) fn load(abs: &Path, rel: &ProjectPath) -> (Option<Source>, Option<CollectDiagnostic>) {
     let bytes = match std::fs::read(abs) {
         Ok(bytes) => bytes,
         Err(err) => {
-            let diagnostic = Diagnostic {
-                severity: Severity::Error,
-                code: codes::UNREADABLE.to_string(),
-                path: rel.to_string(),
-                span: None,
-                message: format!("cannot read: {err}"),
+            let diagnostic = CollectDiagnostic::Unreadable {
+                path: rel.clone().into(),
+                error: err.to_string(),
             };
             return (None, Some(diagnostic));
         }
@@ -91,22 +92,23 @@ fn empty_module() -> ast::ModModule {
         .into_syntax()
 }
 
-fn syntax_error(rel: &str, text: &str, lines: &LineIndex, err: &ParseError) -> Diagnostic {
+fn syntax_error(
+    rel: &ProjectPath,
+    text: &str,
+    lines: &LineIndex,
+    err: &ParseError,
+) -> CollectDiagnostic {
     let len = TextSize::try_from(text.len()).unwrap_or(TextSize::new(u32::MAX));
     let start = err.location.start().min(len);
     let end = err.location.end().min(len);
     let at = lines.line_column(start, text);
     let line = u32::try_from(at.line.get()).unwrap_or(u32::MAX);
-    Diagnostic {
-        severity: Severity::Error,
-        code: codes::SYNTAX_ERROR.to_string(),
-        path: rel.to_string(),
-        span: Some(Span {
-            path: rel.to_string(),
-            start: start.to_u32(),
-            end: end.to_u32(),
-            line: Some(line),
-        }),
-        message: format!("syntax error at {line}:{}: {}", at.column, err.error),
+    CollectDiagnostic::SyntaxError {
+        path: rel.clone(),
+        start: start.to_u32(),
+        end: end.to_u32(),
+        line,
+        column: at.column.get(),
+        error: err.error.to_string(),
     }
 }

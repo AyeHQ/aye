@@ -5,33 +5,40 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use aye_engine::{RefineRequest, Refined, Refiner, Setting};
-use aye_events::{Diagnostic, Severity};
+use aye_adapter::RefineReason;
+use aye_events::{ContentDigest, ProjectPath};
+use aye_protocol::{RefineRequest, Refined, Refiner};
 
+use crate::Collector;
+use crate::diagnostic::CollectDiagnostic;
+use crate::recognize::{Job, Recognized, TestFile};
 use crate::source::Source;
-use crate::standalone::{self, Scope};
-use crate::tree::Tree;
-use crate::{Collector, Job, Recognized, codes};
+use crate::walk::{AdapterId, FileId, Tree};
 
-/// The cache's own format, part of every key: entries written under other
-/// rules are never read.
-const FORMAT: &str = "refine-2";
+mod cache;
+mod key;
+pub(crate) mod standalone;
+
+pub(crate) use cache::Cacheability;
+use cache::RefineCache;
+use key::{AdapterKey, BaseKey, RunKey};
+use standalone::Scope;
 
 #[derive(Default)]
 pub(crate) struct Refinement {
     /// What a worker or the cache reported, by file and recognizer.
-    pub refined: HashMap<(usize, usize), Refined>,
+    pub refined: HashMap<(FileId, AdapterId), Refined>,
     /// Why a file kept its static guess, by file and recognizer.
-    pub fallbacks: HashMap<(usize, usize), Diagnostic>,
+    pub fallbacks: HashMap<(FileId, AdapterId), CollectDiagnostic>,
     /// Reported cases and diagnostics outside the requested files.
     pub stray: Vec<Stray>,
 }
 
 /// What one request's reply held outside the files it named.
 pub(crate) struct Stray {
-    pub recognizer: usize,
+    pub recognizer: AdapterId,
     /// The files the request named.
-    pub requested: Vec<usize>,
+    pub requested: Vec<FileId>,
     pub refined: Refined,
 }
 
@@ -42,60 +49,57 @@ impl Collector<'_> {
     pub(crate) fn refine(
         &self,
         tree: &Tree<'_>,
-        support: &HashMap<usize, Source>,
-        jobs: &[Job],
-        recognized: &[Recognized],
+        support: &HashMap<FileId, Source>,
+        test_files: &[TestFile],
         refiner: Option<&(dyn Refiner + Sync)>,
         seen: &Mutex<HashMap<PathBuf, bool>>,
     ) -> Refinement {
         let mut out = Refinement::default();
-        let mut digests: HashMap<usize, u128> = HashMap::new();
+        let mut digests: HashMap<FileId, ContentDigest> = HashMap::new();
         // Computed once, when a file first needs it.
-        let mut environment: Option<Option<u128>> = None;
+        let mut environment: Option<Option<ContentDigest>> = None;
         // By support file and recognizer: whether it is standalone.
-        let mut supports_standalone: HashMap<(usize, usize), bool> = HashMap::new();
+        let mut supports_standalone: HashMap<(FileId, AdapterId), bool> = HashMap::new();
         // By package `__init__.py` and recognizer: its digest when standalone.
-        let mut inits: HashMap<(PathBuf, usize), Option<u128>> = HashMap::new();
-        for (i, (adapter, recognizer)) in self.recognizers.iter().enumerate() {
-            let pending: Vec<(&Job, &Recognized, &str)> = jobs
+        let mut inits: HashMap<(PathBuf, AdapterId), Option<ContentDigest>> = HashMap::new();
+        for (i, (adapter, recognizer)) in self.recognizers.iter_enumerated() {
+            let pending: Vec<(&Job, &Recognized, &RefineReason)> = test_files
                 .iter()
-                .zip(recognized)
-                .filter_map(|(job, found)| {
+                .filter_map(|TestFile { job, found }| {
                     let (_, recognition) = found.by.iter().find(|(by, _)| *by == i)?;
-                    Some((job, found, recognition.refine.as_deref()?))
+                    Some((job, found, recognition.refine.as_ref()?))
                 })
                 .collect();
             if pending.is_empty() {
                 continue;
             }
             let context = recognizer.context();
-            let scope = self.scope(adapter, seen);
+            let scope = self.scope(adapter.as_str(), seen);
             let environment = *environment.get_or_insert_with(|| {
                 self.caching()
-                    .then(|| self.environment.digest(self.project.cwd))
-                    .flatten()
+                    .and_then(|environment| environment.digest(self.project.cwd))
             });
             let cache = match (self.options.cache_dir.as_deref(), environment) {
-                (Some(dir), Some(environment)) if !self.loads_by_name(&context, &scope) => {
-                    // The arguments after `--`, as adapters were given them.
-                    let mut args = Fnv::new();
-                    for arg in self.project.framework_args {
-                        args.part(arg.as_bytes());
-                    }
-                    Some(Cache::new(
-                        dir,
-                        &[
-                            FORMAT.as_bytes(),
-                            self.options.version.as_bytes(),
-                            self.project.root.as_os_str().as_encoded_bytes(),
-                            self.project.cwd.as_os_str().as_encoded_bytes(),
-                            &environment.to_le_bytes(),
-                            &args.finish().to_le_bytes(),
-                        ],
-                        adapter,
-                        &context,
-                        &recognizer.settings(),
-                    ))
+                (Some(dir), Some(environment))
+                    if !self.loads_by_name(context.as_value(), &scope) =>
+                {
+                    let run = RunKey {
+                        version: &self.options.version,
+                        root: self.project.root,
+                        cwd: self.project.cwd,
+                        environment,
+                        framework_args: self.project.framework_args,
+                    };
+                    let settings = recognizer.settings();
+                    let base = BaseKey::new(
+                        &run,
+                        &AdapterKey {
+                            name: adapter,
+                            context: context.as_value(),
+                            settings: &settings,
+                        },
+                    );
+                    Some(RefineCache::new(dir, adapter, base))
                 }
                 _ => None,
             };
@@ -104,9 +108,9 @@ impl Collector<'_> {
             for (job, found, reason) in pending {
                 let standalone = cache.is_some()
                     && found
-                        .dependence
+                        .cacheability
                         .iter()
-                        .any(|(by, why)| *by == i && why.is_none())
+                        .any(|(by, cacheability)| *by == i && cacheability.is_standalone())
                     && job.chain(i).iter().all(|&at| {
                         *supports_standalone.entry((at, i)).or_insert_with(|| {
                             let entry = &tree.entries[at];
@@ -114,44 +118,37 @@ impl Collector<'_> {
                                 .get(&at)
                                 .and_then(|source| source.file(&entry.rel, &entry.abs))
                                 .is_some_and(|file| {
-                                    standalone::dependence(file.module, &entry.abs, &scope)
-                                        .is_none()
+                                    standalone::cacheability(file.module, &entry.abs, &scope)
+                                        .is_standalone()
                                 })
                         })
                     });
                 let packages = if standalone {
-                    self.package_inits(&tree.entries[job.at].abs, i, &scope, &mut inits)
+                    self.package_inits(&tree.entries[job.file].abs, i, &scope, &mut inits)
                 } else {
                     None
                 };
                 let key = cache.as_ref().zip(found.digest).zip(packages).map(
                     |((cache, content), packages)| {
-                        let chain: Vec<(String, u128)> = job
+                        let runs_first: Vec<(ProjectPath, ContentDigest)> = job
                             .chain(i)
                             .iter()
                             .filter_map(|&at| {
                                 let source = support.get(&at)?;
-                                let hash =
-                                    *digests.entry(at).or_insert_with(|| digest(source.bytes()));
-                                Some((tree.entries[at].rel.clone(), hash))
+                                let digest = *digests
+                                    .entry(at)
+                                    .or_insert_with(|| ContentDigest::of(source.bytes()));
+                                Some((tree.entries[at].rel.clone(), digest))
                             })
                             .chain(packages)
                             .collect();
-                        cache.key(
-                            &tree.entries[job.at].rel,
-                            content,
-                            chain.iter().map(|(rel, hash)| (rel.as_str(), *hash)),
-                        )
+                        cache.key(&tree.entries[job.file].rel, content, &runs_first)
                     },
                 );
-                if let Some(hit) = cache
-                    .as_ref()
-                    .zip(key.as_deref())
-                    .and_then(|(c, k)| c.read(k))
-                {
-                    out.refined.insert((job.at, i), hit);
+                if let Some(hit) = cache.as_ref().zip(key).and_then(|(c, k)| c.read(k)) {
+                    out.refined.insert((job.file, i), hit);
                 } else {
-                    misses.push((job.at, reason, key));
+                    misses.push((job.file, reason, key));
                 }
             }
             if misses.is_empty() {
@@ -160,23 +157,22 @@ impl Collector<'_> {
 
             let Some(refiner) = refiner else {
                 for (at, reason, _) in misses {
-                    let message = format!(
-                        "{adapter} must import this file to know its tests ({reason}), \
-                         but refinement is off; keeping the static guess"
-                    );
-                    let diagnostic =
-                        fallback(Severity::Info, codes::NOT_REFINED, tree, at, message);
+                    let diagnostic = CollectDiagnostic::NotRefined {
+                        adapter: adapter.clone(),
+                        path: tree.entries[at].rel.clone(),
+                        reason: reason.clone(),
+                    };
                     out.fallbacks.insert((at, i), diagnostic);
                 }
                 continue;
             };
             let request = RefineRequest {
-                adapter: (*adapter).to_string(),
+                adapter: adapter.clone(),
                 files: misses
                     .iter()
                     .map(|(at, _, _)| tree.entries[*at].rel.clone())
                     .collect(),
-                context,
+                context: context.into(),
                 digests_only: false,
             };
             match refiner.refine(&request) {
@@ -188,7 +184,7 @@ impl Collector<'_> {
                         .collect();
                     let mut stray = Refined::default();
                     for case in reply.cases {
-                        match parts.get_mut(case.id.path()) {
+                        match parts.get_mut(case.id.path().as_str()) {
                             Some(part) => part.cases.push(case),
                             None => stray.cases.push(case),
                         }
@@ -203,12 +199,12 @@ impl Collector<'_> {
                     // conftest that failed to import, a usage error, cases
                     // from elsewhere) may have shaped every part: cache none.
                     let clean = stray.cases.is_empty() && stray.diagnostics.is_empty();
-                    let requested: Vec<usize> = misses.iter().map(|(at, _, _)| *at).collect();
+                    let requested: Vec<FileId> = misses.iter().map(|(at, _, _)| *at).collect();
                     for (at, _, key) in misses {
                         let part = parts
                             .remove(tree.entries[at].rel.as_str())
                             .unwrap_or_default();
-                        if let (Some(cache), Some(key), true) = (&cache, &key, clean) {
+                        if let (Some(cache), Some(key), true) = (&cache, key, clean) {
                             cache.write(key, &part);
                         }
                         out.refined.insert((at, i), part);
@@ -223,13 +219,11 @@ impl Collector<'_> {
                 }
                 Err(err) => {
                     for (at, _, _) in misses {
-                        let message = format!(
-                            "{adapter} could not import this file to know its tests ({}); \
-                             keeping the static guess",
-                            err.0
-                        );
-                        let diagnostic =
-                            fallback(Severity::Warning, codes::REFINE_FAILED, tree, at, message);
+                        let diagnostic = CollectDiagnostic::RefineFailed {
+                            adapter: adapter.clone(),
+                            path: tree.entries[at].rel.clone(),
+                            error: err.0.clone(),
+                        };
                         out.fallbacks.insert((at, i), diagnostic);
                     }
                 }
@@ -247,10 +241,10 @@ impl Collector<'_> {
     fn package_inits(
         &self,
         abs: &Path,
-        recognizer: usize,
+        recognizer: AdapterId,
         scope: &Scope<'_>,
-        memo: &mut HashMap<(PathBuf, usize), Option<u128>>,
-    ) -> Option<Vec<(String, u128)>> {
+        memo: &mut HashMap<(PathBuf, AdapterId), Option<ContentDigest>>,
+    ) -> Option<Vec<(ProjectPath, ContentDigest)>> {
         let root = self.project.root;
         let mut out = Vec::new();
         for dir in abs
@@ -262,142 +256,19 @@ impl Collector<'_> {
             if init == abs || !init.is_file() {
                 continue;
             }
-            let rel = aye_fs::relative_through_root(&init, root);
-            let hash = *memo.entry((init.clone(), recognizer)).or_insert_with(|| {
+            let rel = ProjectPath::as_written(aye_fs::relative_through_root(&init, root));
+            let digest = *memo.entry((init.clone(), recognizer)).or_insert_with(|| {
                 let (source, _) = crate::source::load(&init, &rel);
                 let source = source.filter(|s| !s.is_lossy())?;
                 let file = source.file(&rel, &init)?;
-                standalone::dependence(file.module, &init, scope)
-                    .is_none()
-                    .then(|| digest(source.bytes()))
+                standalone::cacheability(file.module, &init, scope)
+                    .is_standalone()
+                    .then(|| ContentDigest::of(source.bytes()))
             });
-            out.push((rel, hash?));
+            out.push((rel, digest?));
         }
         out.reverse();
         Some(out)
-    }
-}
-
-fn fallback(
-    severity: Severity,
-    code: &str,
-    tree: &Tree<'_>,
-    at: usize,
-    message: String,
-) -> Diagnostic {
-    Diagnostic {
-        severity,
-        code: code.to_string(),
-        path: tree.entries[at].rel.clone(),
-        span: None,
-        message,
-    }
-}
-
-/// Refinement results on disk, one JSON file per file and adapter:
-/// `<cache dir>/refine/<adapter>/<key>.json`.
-struct Cache {
-    /// The cache directory, created through `aye_fs::prepare_dir` so
-    /// that the state directory holding it is marked as a cache.
-    top: PathBuf,
-    dir: PathBuf,
-    /// Everything in the key that doesn't depend on the file.
-    base: u128,
-}
-
-impl Cache {
-    /// `parts` are the run's inputs (format, version, root, cwd,
-    /// environment, the project's framework arguments), hashed before the
-    /// adapter's own.
-    fn new(
-        cache_dir: &Path,
-        parts: &[&[u8]],
-        adapter: &str,
-        context: &serde_json::Value,
-        settings: &[Setting],
-    ) -> Self {
-        let mut hash = Fnv::new();
-        for part in parts {
-            hash.part(part);
-        }
-        hash.part(adapter.as_bytes());
-        hash.part(context.to_string().as_bytes());
-        // The content of the files the context names: pytest's inifile holds
-        // options aye doesn't read itself.
-        let mut strings = Vec::new();
-        strings_in(context, &mut strings);
-        for text in strings {
-            let path = Path::new(text);
-            if path.is_absolute()
-                && let Ok(bytes) = std::fs::read(path)
-            {
-                hash.part(text.as_bytes());
-                hash.part(&bytes);
-            }
-        }
-        for setting in settings {
-            hash.part(setting.name.as_bytes());
-            hash.part(setting.value.as_bytes());
-        }
-        Self {
-            top: cache_dir.to_path_buf(),
-            dir: cache_dir.join(aye_fs::REFINE_CACHE).join(adapter),
-            base: hash.finish(),
-        }
-    }
-
-    fn key<'a>(
-        &self,
-        rel: &str,
-        digest: u128,
-        support: impl Iterator<Item = (&'a str, u128)>,
-    ) -> String {
-        let mut hash = Fnv::new();
-        hash.part(&self.base.to_le_bytes());
-        hash.part(rel.as_bytes());
-        hash.part(&digest.to_le_bytes());
-        for (rel, digest) in support {
-            hash.part(rel.as_bytes());
-            hash.part(&digest.to_le_bytes());
-        }
-        format!("{:032x}", hash.finish())
-    }
-
-    fn path(&self, key: &str) -> PathBuf {
-        self.dir.join(format!("{key}.json"))
-    }
-
-    /// An entry, when it holds a clean result (see [`Cache::cacheable`]).
-    fn read(&self, key: &str) -> Option<Refined> {
-        let bytes = std::fs::read(self.path(key)).ok()?;
-        serde_json::from_slice(&bytes).ok().filter(Self::cacheable)
-    }
-
-    /// Only a clean result is cached: one with cases and no diagnostic. An
-    /// import error or a module-level skip may be the environment's, and
-    /// fixed without touching the file; a file with no tests at all costs
-    /// little to refine again, and a stale one would hide tests.
-    fn cacheable(refined: &Refined) -> bool {
-        !refined.cases.is_empty() && refined.diagnostics.is_empty()
-    }
-
-    /// Best effort: a cache that can't be written only costs time. Written
-    /// aside and renamed, so a concurrent run never reads half an entry.
-    fn write(&self, key: &str, refined: &Refined) {
-        if !Self::cacheable(refined) {
-            return;
-        }
-        let Ok(bytes) = serde_json::to_vec(refined) else {
-            return;
-        };
-        let aside = self.dir.join(format!("{key}.{}.tmp", std::process::id()));
-        let written = aye_fs::prepare_dir(&self.top)
-            .and_then(|()| std::fs::create_dir_all(&self.dir))
-            .and_then(|()| std::fs::write(&aside, bytes))
-            .and_then(|()| std::fs::rename(&aside, self.path(key)));
-        if written.is_err() {
-            let _ = std::fs::remove_file(&aside);
-        }
     }
 }
 
@@ -430,44 +301,12 @@ impl Collector<'_> {
         let texts = strings
             .into_iter()
             .chain(self.project.framework_args.iter().map(String::as_str))
-            .chain(self.environment.framework_args.iter().map(String::as_str));
+            .chain(
+                self.environment
+                    .iter()
+                    .flat_map(|environment| &environment.framework_args)
+                    .map(String::as_str),
+            );
         standalone::loads_by_name(texts, scope).is_some()
-    }
-}
-
-/// The content digest of a file.
-pub(crate) fn digest(bytes: &[u8]) -> u128 {
-    let mut hash = Fnv::new();
-    hash.bytes(bytes);
-    hash.finish()
-}
-
-/// FNV-1a, 128 bits: stable across builds and platforms, unlike `std`'s
-/// hasher, which is all a cache key needs.
-pub(crate) struct Fnv(u128);
-
-impl Fnv {
-    const OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
-    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
-
-    pub(crate) fn new() -> Self {
-        Self(Self::OFFSET)
-    }
-
-    fn bytes(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.0 = (self.0 ^ u128::from(byte)).wrapping_mul(Self::PRIME);
-        }
-    }
-
-    /// Length-prefixed, so that consecutive parts can't run into each other.
-    pub(crate) fn part(&mut self, bytes: &[u8]) {
-        let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        self.bytes(&len.to_le_bytes());
-        self.bytes(bytes);
-    }
-
-    pub(crate) fn finish(&self) -> u128 {
-        self.0
     }
 }

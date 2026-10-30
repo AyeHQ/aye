@@ -1,18 +1,19 @@
 use std::time::Duration;
 
 use aye_events::{
-    Assertion, Captured, Counts, Event, ExitCode, Failure, Outcome, Phase, Record, TestId,
-    TestResult,
+    Assertion, BatchIndex, Captured, Counts, Event, ExitCode, Failure, FailureSignature, Outcome,
+    Phase, Record, TestId, TestResult, WorkerIndex,
 };
+use aye_stream::Consumer;
 
 use super::{feed, lines, streams};
-use crate::{ColorChoice, Reporter, Text, TextOptions};
+use crate::{ColorChoice, Level, Text, TextOptions};
 
 fn text(records: &[Record], verbosity: i8) -> String {
     let mut text = Text::new(
         Vec::new(),
         TextOptions {
-            verbosity,
+            verbosity: Level::from_count(verbosity.into()),
             color: ColorChoice::Never,
             live: false,
         },
@@ -330,7 +331,7 @@ fn a_failed_workers_error_is_whole_from_very_verbose() {
         exit_status: Some(1),
         error: Some(error),
     });
-    record.envelope.worker = Some(2);
+    record.envelope.worker = Some(WorkerIndex::from_u32(2));
     let records = [record];
     let out = text(&records, 0);
     assert!(
@@ -459,7 +460,7 @@ fn warnings_are_grouped_by_code_below_very_verbose() {
         records.push(Record::new(Event::Diagnostic(aye_events::Diagnostic {
             severity: aye_events::Severity::Warning,
             code: (*code).into(),
-            path: format!("tests/t{i}.py"),
+            path: format!("tests/t{i}.py").into(),
             span: None,
             message: "never runs".into(),
         })));
@@ -639,11 +640,11 @@ fn long_explanations_and_output_are_cut_below_very_verbose() {
 
 #[test]
 fn colour_is_honoured() {
-    let colored = |records: &[Record], verbosity| {
+    let colored = |records: &[Record], verbosity: i8| {
         let mut text = Text::new(
             Vec::new(),
             TextOptions {
-                verbosity,
+                verbosity: Level::from_count(verbosity.into()),
                 color: ColorChoice::Always,
                 live: false,
             },
@@ -684,7 +685,7 @@ fn locations_are_hyperlinks_on_a_live_terminal_with_colour() {
         let mut text = Text::new(
             Vec::new(),
             TextOptions {
-                verbosity: 0,
+                verbosity: Level::Default,
                 color,
                 live: true,
             },
@@ -709,14 +710,14 @@ fn the_header_comes_once_when_the_first_worker_starts() {
         .position(|record| matches!(record.event, Event::WorkerStarted { .. }))
         .unwrap();
     for record in &records[..started] {
-        text.report(record).unwrap();
+        text.consume(record).unwrap();
     }
     assert_eq!(text.into_inner(), [] as [u8; 0]);
     let mut text = Text::new(Vec::new(), TextOptions::default());
     let mut twice = records.clone();
     twice.insert(started, records[started].clone());
     for record in &twice[..=started + 1] {
-        text.report(record).unwrap();
+        text.consume(record).unwrap();
     }
     assert_eq!(
         String::from_utf8(text.into_inner()).unwrap(),
@@ -760,8 +761,8 @@ fn renderers_can_move_between_threads() {
     send::<crate::JsonLines<std::fs::File>>();
     send::<crate::Junit>();
     send::<crate::GithubAnnotations<std::io::Stdout>>();
-    send::<crate::Tee<'static>>();
-    assert_eq!(TextOptions::default().verbosity, 0);
+    send::<aye_stream::Tee<'static>>();
+    assert_eq!(TextOptions::default().verbosity, Level::Default);
 }
 
 /// What the pytest adapter sends for a test that failed only through a
@@ -773,12 +774,12 @@ fn subtest_failure_stream() -> Vec<Record> {
     parent.failures.push(Failure {
         phase: Some(Phase::Test),
         message: "contains 1 failed subtest".into(),
-        signature: "16b555694f3fa454".into(),
+        signature: FailureSignature::new("16b555694f3fa454"),
         detail: Some("contains 1 failed subtest".into()),
         ..Failure::default()
     });
     parent.reproduce = Some(aye_events::Reproduce {
-        command: vec!["aye".into(), id.0.clone()],
+        command: vec!["aye".into(), id.as_str().to_owned()],
         inputs: std::collections::BTreeMap::new(),
     });
     vec![
@@ -795,7 +796,7 @@ fn subtest_failure_stream() -> Vec<Record> {
                     path: "tests/test_s.py".into(),
                     line: 4,
                 }),
-                signature: "5ca1ab1e".into(),
+                signature: FailureSignature::new("5ca1ab1e"),
                 ..Failure::default()
             }),
             duration: Duration::ZERO,
@@ -961,7 +962,7 @@ fn errors_are_named_for_what_they_are_and_shown_once() {
     ]
     .map(|mut record| {
         if matches!(record.event, Event::Diagnostic(_)) {
-            record.envelope.batch = Some(0);
+            record.envelope.batch = Some(BatchIndex::from_u32(0));
         }
         record
     });
@@ -1007,7 +1008,7 @@ fn what_the_command_line_names_and_doesnt_exist_is_a_usage_error() {
         "tests/test_a.py",
         "tests/test_a.py::test_x[9]: pytest found no such test",
     );
-    record.envelope.batch = Some(3);
+    record.envelope.batch = Some(BatchIndex::from_u32(3));
     let out = text(
         &[
             record,
@@ -1113,7 +1114,7 @@ fn live_text(records: &[Record], live: bool) -> String {
     let mut text = Text::new(
         Vec::new(),
         TextOptions {
-            verbosity: 0,
+            verbosity: Level::Default,
             color: ColorChoice::Never,
             live,
         },
