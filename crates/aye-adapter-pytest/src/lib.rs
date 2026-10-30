@@ -480,7 +480,7 @@ use aye_adapter::{
 use aye_config::ValueSource;
 use aye_events::{AffinityKey, Certainty, Diagnostic, DiagnosticCode, DiagnosticPath, Severity};
 use aye_protocol::AdapterContext;
-use aye_pytest::config;
+use aye_pytest::config::{self, ConfigRules};
 use aye_pytest::conftest::{in_confcutdir, initial_dirs};
 use aye_pytest::doctest::{self, DoctestFile};
 use aye_pytest::pathlib::{compute_module_name, resolve_package_path};
@@ -489,7 +489,6 @@ use aye_python_semantic::module_resolver::{absolute_imports, find_module, found_
 use aye_python_semantic::namespace::Namespace;
 use aye_python_semantic::sys_path::SysPath;
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
-use aye_python_stdlib::glob;
 use aye_python_stdlib::identifier::is_identifier;
 use aye_python_stdlib::os_path::normalize_absolute;
 use aye_python_stdlib::unittest;
@@ -1560,15 +1559,7 @@ impl Recognizer for PytestRecognizer {
                     })
                     .collect();
             }
-            let mut roots: Vec<PathBuf> = Vec::new();
-            for pattern in testpaths {
-                for found in glob::glob(rootdir, pattern, SETS) {
-                    let path = normalize_absolute(&rootdir.join(found));
-                    if !roots.contains(&path) {
-                        roots.push(path);
-                    }
-                }
-            }
+            let roots = ConfigRules::Exact.testpaths(rootdir, testpaths, SETS);
             if !roots.is_empty() {
                 return roots;
             }

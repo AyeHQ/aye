@@ -13,32 +13,8 @@ use aye_config::{Sourced, ValueSource};
 use aye_python_stdlib::os_path;
 use aye_static::EnvVars;
 
+use super::{ConfigRules, DEFAULT_NORECURSEDIRS, FileValues, Found};
 use crate::argv::{MaxFail, ShortOptions};
-
-/// The files pytest looks for in each directory, in its order
-/// (`locate_config`).
-const CONFIG_NAMES: [&str; 7] = [
-    "pytest.toml",
-    ".pytest.toml",
-    "pytest.ini",
-    ".pytest.ini",
-    "pyproject.toml",
-    "tox.ini",
-    "setup.cfg",
-];
-
-/// pytest's default `norecursedirs`.
-pub(crate) const DEFAULT_NORECURSEDIRS: [&str; 9] = [
-    "*.egg",
-    ".*",
-    "_darcs",
-    "build",
-    "CVS",
-    "dist",
-    "node_modules",
-    "venv",
-    "{arch}",
-];
 
 /// A value from a configuration file.
 #[derive(Debug, Clone, PartialEq)]
@@ -49,6 +25,21 @@ enum Value {
 }
 
 impl Value {
+    /// What the file holds, as the approximate rules read it: INI values as
+    /// text, TOML values as TOML gives them.
+    fn of_file(values: FileValues) -> BTreeMap<String, Self> {
+        match values {
+            FileValues::Ini(values) => values
+                .into_iter()
+                .map(|(key, value)| (key, Self::Text(value)))
+                .collect(),
+            FileValues::Toml(table) | FileValues::IniOptions(table) => table
+                .iter()
+                .map(|(key, value)| (key.clone(), Self::from_toml(value)))
+                .collect(),
+        }
+    }
+
     fn from_toml(value: &toml::Value) -> Self {
         match value {
             toml::Value::String(s) => Self::Text(s.clone()),
@@ -129,104 +120,42 @@ struct Ini {
 type Section = (String, BTreeMap<String, Value>);
 
 /// The pytest settings in `path`, `None` when it holds none (pytest's
-/// `load_config_dict_from_file`).
+/// `load_config_dict_from_file`, by the approximate rules).
 fn load(path: &Path) -> Result<Option<Section>, AdapterError> {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let bad = |e: aye_config::ConfigError| AdapterError::Config(e.to_string());
-    let extension = path.extension().map(|e| e.to_string_lossy().into_owned());
-    match extension.as_deref() {
-        Some("ini") => {
-            let sections = crate::ini::read_ini(path).map_err(bad)?;
-            if let Some(section) = sections.get("pytest") {
-                let values = section
-                    .iter()
-                    .map(|(k, v)| (k.clone(), Value::Text(v.clone())))
-                    .collect();
-                return Ok(Some(("[pytest]".into(), values)));
-            }
-            if name == "pytest.ini" || name == ".pytest.ini" {
-                return Ok(Some(("[pytest]".into(), BTreeMap::new())));
-            }
-            Ok(None)
-        }
-        Some("cfg") => {
-            let sections = crate::ini::read_ini(path).map_err(bad)?;
-            Ok(sections.get("tool:pytest").map(|section| {
-                let values = section
-                    .iter()
-                    .map(|(k, v)| (k.clone(), Value::Text(v.clone())))
-                    .collect();
-                ("[tool:pytest]".to_string(), values)
-            }))
-        }
-        Some("toml") => {
-            let doc = aye_config::read_toml(path).map_err(bad)?;
-            let table = |t: &toml::Table| -> BTreeMap<String, Value> {
-                t.iter()
-                    .map(|(k, v)| (k.clone(), Value::from_toml(v)))
-                    .collect()
-            };
-            if name == "pytest.toml" || name == ".pytest.toml" {
-                let values = doc
-                    .get("pytest")
-                    .and_then(toml::Value::as_table)
-                    .map(table)
-                    .unwrap_or_default();
-                return Ok(Some(("[pytest]".into(), values)));
-            }
-            let Some(tool_pytest) = doc
-                .get("tool")
-                .and_then(|t| t.get("pytest"))
-                .and_then(toml::Value::as_table)
-            else {
-                return Ok(None);
-            };
-            let mut native = tool_pytest.clone();
-            let ini_options = native.remove("ini_options");
-            if !native.is_empty() {
-                return Ok(Some(("[tool.pytest]".into(), table(&native))));
-            }
-            Ok(ini_options
-                .as_ref()
-                .and_then(toml::Value::as_table)
-                .map(|t| ("[tool.pytest.ini_options]".to_string(), table(t))))
-        }
-        _ => Ok(None),
-    }
+    Ok(ConfigRules::Approximate
+        .load(path)?
+        .map(|(section, values)| (section.to_string(), Value::of_file(values))))
 }
 
-/// pytest's `locate_config` from `start` upward: the first file holding
-/// pytest configuration, else the first `pyproject.toml` met.
+/// pytest's `locate_config` from `start` upward, by the approximate rules:
+/// the first file holding pytest configuration, else the first
+/// `pyproject.toml` met.
 fn locate(start: &Path) -> Result<Ini, AdapterError> {
-    let mut bare: Option<PathBuf> = None;
-    for dir in start.ancestors() {
-        for name in CONFIG_NAMES {
-            let path = dir.join(name);
-            if !path.is_file() {
-                continue;
-            }
-            if name == "pyproject.toml" && bare.is_none() {
-                bare = Some(path.clone());
-            }
-            if let Some((section, values)) = load(&path)? {
-                return Ok(Ini {
-                    rootdir: Some(dir.to_path_buf()),
-                    file: Some(path),
-                    section,
-                    values,
-                    configured: true,
-                });
-            }
-        }
-    }
-    Ok(bare.map_or_else(Ini::default, |path| Ini {
-        rootdir: path.parent().map(Path::to_path_buf),
-        file: Some(path),
-        ..Ini::default()
-    }))
+    Ok(
+        match ConfigRules::Approximate.locate(&[start.to_path_buf()])? {
+            Some(Found {
+                rootdir,
+                file,
+                contents: Some((section, values)),
+            }) => Ini {
+                rootdir: Some(rootdir),
+                file: Some(file),
+                section: section.to_string(),
+                values: Value::of_file(values),
+                configured: true,
+            },
+            Some(Found {
+                rootdir,
+                file,
+                contents: None,
+            }) => Ini {
+                rootdir: Some(rootdir),
+                file: Some(file),
+                ..Ini::default()
+            },
+            None => Ini::default(),
+        },
+    )
 }
 
 /// The options pytest's command line (addopts, `PYTEST_ADDOPTS`, the

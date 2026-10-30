@@ -53,7 +53,7 @@ const REPLACING: &[(&[&str], &str, &str)] = &[
 ];
 
 /// The first argument after `--` that would replace the framework's test
-/// run (see [`REPLACING`]), as a usage error; `None` when there is none.
+/// run (see `REPLACING`), as a usage error; `None` when there is none.
 /// Long options are matched whole, since pytest doesn't take abbreviations;
 /// `-h` and `-V` also inside a cluster of short flags. A lone `--` ends the
 /// options, as in pytest.

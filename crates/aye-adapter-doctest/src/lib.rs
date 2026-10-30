@@ -329,12 +329,12 @@ use aye_events::{
     AdapterName, AffinityKey, Case, Certainty, Diagnostic, DiagnosticCode, Severity, Span,
 };
 use aye_protocol::{AdapterContext, EntryPoint, ModuleSet, ModuleSource, Runtime, SessionMode};
+use aye_pytest::config::ConfigRules;
 use aye_pytest::conftest;
 use aye_pytest::doctest;
 use aye_pytest::names;
 use aye_pytest::pathlib::resolve_pkg_root_and_module_name;
 use aye_python_stdlib::fnmatch::{self, SetTranslation};
-use aye_python_stdlib::glob;
 use aye_python_stdlib::os_path;
 
 pub use aye_pytest::env::DoctestEnv;
@@ -771,14 +771,11 @@ impl DoctestRecognizer {
                 .collect();
         }
         if project.cwd == self.config.rootdir && !self.config.testpaths.is_empty() {
-            let mut roots = Vec::new();
-            for pattern in &self.config.testpaths {
-                for found in glob::glob_absolute(&self.config.rootdir, pattern, SETS) {
-                    if !roots.contains(&found) {
-                        roots.push(found);
-                    }
-                }
-            }
+            let roots = ConfigRules::Approximate.testpaths(
+                &self.config.rootdir,
+                &self.config.testpaths,
+                SETS,
+            );
             if !roots.is_empty() {
                 return roots;
             }

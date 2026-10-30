@@ -3,21 +3,214 @@
 //! on, read with the INI reader ([`crate::ini`]) and `aye-config`'s TOML
 //! loader, with the options `addopts`, `PYTEST_ADDOPTS` and the arguments
 //! after `--` add, in pytest's order.
+//!
+//! Two sets of rules find them ([`ConfigRules`]): pytest's own, which
+//! [`PytestConfig`] reads by, the pytest adapter's; and the doctest
+//! adapter's approximation of them ([`approximate`]). Both look for the
+//! same files (`CONFIG_NAMES`) the same way, and differ where the rules
+//! say.
+
+pub mod approximate;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use aye_adapter::{AdapterError, Project, Setting};
+use aye_config::{ConfigError, Sourced, ValueSource, read_toml, split_args};
+use aye_fs::common_ancestor;
+use aye_python_stdlib::fnmatch::SetTranslation;
+use aye_python_stdlib::glob;
+use aye_python_stdlib::os_path::{self, normalize_absolute};
+use aye_static::{EnvVars, ProcessEnv};
+
 use crate::argv::{Lifted, MaxFail, option_values, without_addopts_override};
 use crate::ini::{self, ini_section};
 
-pub mod approximate;
-use aye_adapter::{AdapterError, Project, Setting};
-use aye_config::{Sourced, ValueSource, read_toml, split_args};
-use aye_fs::common_ancestor;
-use aye_python_stdlib::os_path;
-use aye_static::{EnvVars, ProcessEnv};
+/// Which rules find pytest's rootdir, its configuration file and what the
+/// file says: pytest 9.1.1's, or the doctest adapter's approximation of
+/// them, aye 0.0.1's, which it keeps until it switches to pytest's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigRules {
+    /// pytest 9.1.1's (`_pytest/config/findpaths.py` and its option
+    /// parsing): the pytest adapter's, [`PytestConfig`].
+    Exact,
+    /// The doctest adapter's, [`approximate::ApproximateConfig`]. They
+    /// differ from pytest's in which `-c` wins (aye's own, then the last of
+    /// `PYTEST_ADDOPTS` and the arguments after `--`), where the rootdir
+    /// falls back to (the project root: no `setup.py` rule, no search from
+    /// each path given), `--rootdir` (made absolute, its variables not
+    /// expanded, not checked; an empty one counts), how the options are
+    /// read (a scan of its own), how a file's values read (`load`: no error
+    /// for a `setup.cfg` with `[pytest]`, nor for `[tool.pytest]` beside
+    /// `[tool.pytest.ini_options]`, whose values are kept as TOML gives
+    /// them) and the glob `testpaths` is expanded with ([`Self::testpaths`]).
+    Approximate,
+}
 
-/// Config file names, in the order pytest 9 tries them in each directory.
+/// What a configuration file holds for pytest, as written, before either
+/// rules reads its values.
+enum FileValues {
+    /// An INI file's section (`[pytest]`, `[tool:pytest]`).
+    Ini(ini::Section),
+    /// A table of native TOML (`[tool.pytest]`, `pytest.toml`'s
+    /// `[pytest]`).
+    Toml(toml::Table),
+    /// `[tool.pytest.ini_options]`.
+    IniOptions(toml::Table),
+}
+
+/// A configuration file [`ConfigRules::locate`] found.
+struct Found {
+    /// Its directory: pytest's rootdir.
+    rootdir: PathBuf,
+    file: PathBuf,
+    /// Its pytest section and what it holds; `None` for a `pyproject.toml`
+    /// that holds none, found when nothing else is.
+    contents: Option<(&'static str, FileValues)>,
+}
+
+impl ConfigRules {
+    /// `load_config_dict_from_file`: the section of `path` that holds
+    /// pytest's configuration, and what it holds; `None` when it holds
+    /// none. The exact rules refuse a `setup.cfg`'s `[pytest]`, and
+    /// `[tool.pytest]` beside `[tool.pytest.ini_options]`; an `ini_options`
+    /// that isn't a table is an empty one for them, and no configuration
+    /// for the approximate rules.
+    fn load(self, path: &Path) -> Result<Option<(&'static str, FileValues)>, AdapterError> {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
+        let config_error = |error: ConfigError| AdapterError::Config(error.to_string());
+        match extension {
+            "ini" => match ini_section(path, "pytest").map_err(config_error)? {
+                Some(values) => Ok(Some(("[pytest]", FileValues::Ini(values)))),
+                None if name == "pytest.ini" || name == ".pytest.ini" => {
+                    Ok(Some(("[pytest]", FileValues::Ini(ini::Section::new()))))
+                }
+                None => Ok(None),
+            },
+            "cfg" => {
+                let mut sections = ini::read_ini(path).map_err(config_error)?;
+                if let Some(values) = sections.remove("tool:pytest") {
+                    Ok(Some(("[tool:pytest]", FileValues::Ini(values))))
+                } else if self == Self::Exact && sections.contains_key("pytest") {
+                    Err(AdapterError::Config(format!(
+                        "{}: [pytest] section in setup.cfg files is no longer supported, change to [tool:pytest] instead.",
+                        path.display()
+                    )))
+                } else {
+                    Ok(None)
+                }
+            }
+            "toml" => {
+                let doc = read_toml(path).map_err(config_error)?;
+                if name == "pytest.toml" || name == ".pytest.toml" {
+                    let table = doc
+                        .get("pytest")
+                        .and_then(toml::Value::as_table)
+                        .cloned()
+                        .unwrap_or_default();
+                    return Ok(Some(("[pytest]", FileValues::Toml(table))));
+                }
+                let Some(tool) = doc
+                    .get("tool")
+                    .and_then(|t| t.get("pytest"))
+                    .and_then(toml::Value::as_table)
+                else {
+                    return Ok(None);
+                };
+                let mut native = tool.clone();
+                let ini_options = native.remove("ini_options");
+                match (self, native.is_empty(), ini_options) {
+                    (Self::Exact, false, Some(_)) => Err(AdapterError::Config(format!(
+                        "{}: Cannot use both [tool.pytest] (native TOML types) and [tool.pytest.ini_options] (string-based INI format) simultaneously.",
+                        path.display()
+                    ))),
+                    (_, false, _) => Ok(Some(("[tool.pytest]", FileValues::Toml(native)))),
+                    (Self::Exact, true, Some(ini)) => Ok(Some((
+                        "[tool.pytest.ini_options]",
+                        FileValues::IniOptions(ini.as_table().cloned().unwrap_or_default()),
+                    ))),
+                    (Self::Approximate, true, Some(toml::Value::Table(ini))) => Ok(Some((
+                        "[tool.pytest.ini_options]",
+                        FileValues::IniOptions(ini),
+                    ))),
+                    (_, true, _) => Ok(None),
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// `locate_config`: the first file holding pytest's configuration,
+    /// from each of `starts` upward, in each directory in [`CONFIG_NAMES`]'
+    /// order; failing that, the first `pyproject.toml` met.
+    fn locate(self, starts: &[PathBuf]) -> Result<Option<Found>, AdapterError> {
+        let mut first_pyproject: Option<PathBuf> = None;
+        for start in starts {
+            for base in start.ancestors() {
+                for name in CONFIG_NAMES {
+                    let path = base.join(name);
+                    if !path.is_file() {
+                        continue;
+                    }
+                    if name == "pyproject.toml" && first_pyproject.is_none() {
+                        first_pyproject = Some(path.clone());
+                    }
+                    if let Some(contents) = self.load(&path)? {
+                        return Ok(Some(Found {
+                            rootdir: base.to_path_buf(),
+                            file: path,
+                            contents: Some(contents),
+                        }));
+                    }
+                }
+            }
+        }
+        Ok(first_pyproject.map(|path| Found {
+            rootdir: path.parent().expect("a file has a parent").to_path_buf(),
+            file: path,
+            contents: None,
+        }))
+    }
+
+    /// The paths `testpaths` names, when pytest is run from the rootdir:
+    /// each pattern glob-expanded from it (`[...]` sets read with `sets`),
+    /// in order, each path once. The exact rules expand them as pytest's
+    /// `glob`; the approximate rules with the doctest adapter's own glob,
+    /// `glob_absolute`.
+    pub fn testpaths(
+        self,
+        rootdir: &Path,
+        testpaths: &[String],
+        sets: SetTranslation,
+    ) -> Vec<PathBuf> {
+        let mut roots: Vec<PathBuf> = Vec::new();
+        for pattern in testpaths {
+            let found: Vec<PathBuf> = match self {
+                Self::Exact => glob::glob(rootdir, pattern, sets)
+                    .into_iter()
+                    .map(|found| normalize_absolute(&rootdir.join(found)))
+                    .collect(),
+                Self::Approximate => glob::glob_absolute(rootdir, pattern, sets),
+            };
+            for path in found {
+                if !roots.contains(&path) {
+                    roots.push(path);
+                }
+            }
+        }
+        roots
+    }
+}
+
+/// The files pytest looks for in each directory, in the order it tries
+/// them (`locate_config`).
 const CONFIG_NAMES: [&str; 7] = [
     "pytest.toml",
     ".pytest.toml",
@@ -56,6 +249,39 @@ enum Raw {
 #[derive(Debug, Default)]
 struct RawConfig {
     values: BTreeMap<String, (Raw, ValueSource)>,
+}
+
+impl RawConfig {
+    /// What the file at `path` holds in `section`, as the exact rules read
+    /// it: `[tool.pytest.ini_options]`' values made Python's text.
+    fn of_file(path: &Path, section: &str, values: FileValues) -> Self {
+        let source = || ValueSource::file(path, section);
+        let mut config = Self::default();
+        match values {
+            FileValues::Ini(values) => {
+                for (key, value) in values {
+                    config.values.insert(key, (Raw::Ini(value), source()));
+                }
+            }
+            FileValues::Toml(table) => {
+                for (key, value) in table {
+                    config.values.insert(key, (Raw::Toml(value), source()));
+                }
+            }
+            FileValues::IniOptions(table) => {
+                for (key, value) in table {
+                    let raw = match value {
+                        toml::Value::Array(items) => {
+                            Raw::IniList(items.iter().map(python_str).collect())
+                        }
+                        other => Raw::Ini(python_str(&other)),
+                    };
+                    config.values.insert(key, (raw, source()));
+                }
+            }
+        }
+        config
+    }
 }
 
 /// The resolved pytest configuration for one project.
@@ -205,10 +431,6 @@ pub enum ImportMode {
     Importlib,
 }
 
-fn config_error(error: impl std::fmt::Display) -> AdapterError {
-    AdapterError::Config(error.to_string())
-}
-
 /// Python's `str()` of a TOML scalar, as `[tool.pytest.ini_options]`
 /// stringifies values.
 fn python_str(value: &toml::Value) -> String {
@@ -220,111 +442,13 @@ fn python_str(value: &toml::Value) -> String {
     }
 }
 
-/// `load_config_dict_from_file`: the pytest options in `path`, with the
-/// section they came from, or `None` when the file holds no pytest
-/// configuration.
+/// `load_config_dict_from_file` by the exact rules: the pytest options in
+/// `path`, with the section they came from, or `None` when the file holds
+/// no pytest configuration.
 fn load_config(path: &Path) -> Result<Option<(RawConfig, String)>, AdapterError> {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default();
-    let extension = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default();
-    let from_ini = |section: &str, values: ini::Section| {
-        let mut config = RawConfig::default();
-        for (key, value) in values {
-            config.values.insert(
-                key,
-                (
-                    Raw::Ini(value),
-                    ValueSource::file(path, format!("[{section}]")),
-                ),
-            );
-        }
-        (config, format!("[{section}]"))
-    };
-    match extension {
-        "ini" => match ini_section(path, "pytest").map_err(config_error)? {
-            Some(values) => Ok(Some(from_ini("pytest", values))),
-            None if name == "pytest.ini" || name == ".pytest.ini" => {
-                Ok(Some((RawConfig::default(), "[pytest]".into())))
-            }
-            None => Ok(None),
-        },
-        "cfg" => {
-            let sections = ini::read_ini(path).map_err(config_error)?;
-            if let Some(values) = sections.get("tool:pytest") {
-                Ok(Some(from_ini("tool:pytest", values.clone())))
-            } else if sections.contains_key("pytest") {
-                Err(AdapterError::Config(format!(
-                    "{}: [pytest] section in setup.cfg files is no longer supported, change to [tool:pytest] instead.",
-                    path.display()
-                )))
-            } else {
-                Ok(None)
-            }
-        }
-        "toml" => {
-            let doc = read_toml(path).map_err(config_error)?;
-            let native = |table: &toml::Table, location: &str| {
-                let mut config = RawConfig::default();
-                for (key, value) in table {
-                    config.values.insert(
-                        key.clone(),
-                        (Raw::Toml(value.clone()), ValueSource::file(path, location)),
-                    );
-                }
-                config
-            };
-            if name == "pytest.toml" || name == ".pytest.toml" {
-                let table = doc
-                    .get("pytest")
-                    .and_then(toml::Value::as_table)
-                    .cloned()
-                    .unwrap_or_default();
-                return Ok(Some((native(&table, "[pytest]"), "[pytest]".into())));
-            }
-            let Some(tool) = doc
-                .get("tool")
-                .and_then(|t| t.get("pytest"))
-                .and_then(toml::Value::as_table)
-            else {
-                return Ok(None);
-            };
-            let mut toml_mode = tool.clone();
-            let ini_mode = toml_mode.remove("ini_options");
-            match (toml_mode.is_empty(), ini_mode) {
-                (false, Some(_)) => Err(AdapterError::Config(format!(
-                    "{}: Cannot use both [tool.pytest] (native TOML types) and [tool.pytest.ini_options] (string-based INI format) simultaneously.",
-                    path.display()
-                ))),
-                (false, None) => Ok(Some((
-                    native(&toml_mode, "[tool.pytest]"),
-                    "[tool.pytest]".into(),
-                ))),
-                (true, Some(ini)) => {
-                    let location = "[tool.pytest.ini_options]";
-                    let mut config = RawConfig::default();
-                    for (key, value) in ini.as_table().into_iter().flatten() {
-                        let raw = match value {
-                            toml::Value::Array(items) => {
-                                Raw::IniList(items.iter().map(python_str).collect())
-                            }
-                            other => Raw::Ini(python_str(other)),
-                        };
-                        config
-                            .values
-                            .insert(key.clone(), (raw, ValueSource::file(path, location)));
-                    }
-                    Ok(Some((config, location.into())))
-                }
-                (true, None) => Ok(None),
-            }
-        }
-        _ => Ok(None),
-    }
+    Ok(ConfigRules::Exact
+        .load(path)?
+        .map(|(section, values)| (RawConfig::of_file(path, section, values), section.into())))
 }
 
 struct Located {
@@ -333,35 +457,21 @@ struct Located {
     config: RawConfig,
 }
 
-/// `locate_config`: the first directory, from each of `args` upward, with a
-/// config file holding pytest configuration; failing that, the first
-/// `pyproject.toml` seen.
+/// `locate_config` by the exact rules: the first directory, from each of
+/// `args` upward, with a config file holding pytest configuration; failing
+/// that, the first `pyproject.toml` seen.
 fn locate_config(args: &[PathBuf]) -> Result<Option<Located>, AdapterError> {
-    let mut first_pyproject: Option<PathBuf> = None;
-    for arg in args {
-        for base in arg.ancestors() {
-            for name in CONFIG_NAMES {
-                let path = base.join(name);
-                if !path.is_file() {
-                    continue;
-                }
-                if name == "pyproject.toml" && first_pyproject.is_none() {
-                    first_pyproject = Some(path.clone());
-                }
-                if let Some((config, _)) = load_config(&path)? {
-                    return Ok(Some(Located {
-                        rootdir: base.to_path_buf(),
-                        inifile: path,
-                        config,
-                    }));
-                }
-            }
+    Ok(ConfigRules::Exact.locate(args)?.map(|found| {
+        let config = found
+            .contents
+            .map_or_else(RawConfig::default, |(section, values)| {
+                RawConfig::of_file(&found.file, section, values)
+            });
+        Located {
+            rootdir: found.rootdir,
+            inifile: found.file,
+            config,
         }
-    }
-    Ok(first_pyproject.map(|path| Located {
-        rootdir: path.parent().expect("a file has a parent").to_path_buf(),
-        inifile: path,
-        config: RawConfig::default(),
     }))
 }
 
