@@ -196,7 +196,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use aye_adapter::{Project, Recognizer};
-use aye_events::{AdapterName, Case, Diagnostic, ProjectPath, Severity};
+use aye_events::{AdapterName, Case, Diagnostic, ProjectPath, ProjectPathRef, Severity};
 use aye_fs::normalize_absolute;
 use aye_index::IndexSlice;
 use aye_protocol::Refiner;
@@ -246,6 +246,23 @@ pub struct Collection {
     pub interrupted: bool,
 }
 
+/// The paths a run starts from, when collection walked more than they hold
+/// (with dotted names or keys among the arguments, the whole project):
+/// absolute, spelled from `root`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StartPaths<'a> {
+    pub paths: &'a [PathBuf],
+    pub root: &'a Path,
+}
+
+impl StartPaths<'_> {
+    /// Whether the file `path`, relative to the root, lies in one of them.
+    pub fn hold(self, path: ProjectPathRef<'_>) -> bool {
+        let file = normalize_absolute(&self.root.join(path.as_str()));
+        self.paths.iter().any(|start| file.starts_with(start))
+    }
+}
+
 /// How far collection has got, for a live display: reported while the walk
 /// goes on and before refinement starts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -273,22 +290,19 @@ impl Collection {
     /// claimed file with none (one that failed to import) is left out.
     /// With dotted names or keys among the arguments, collection walked
     /// the whole project to resolve them, but the user's run is `pytest
-    /// <the paths it starts from>` (`within`: those paths, absolute, with
-    /// the root): only the files in those paths are its session, and
-    /// listing the others would load conftests that run never loads (a
-    /// `test*` directory's, whose hooks reach every test).
+    /// <the paths it starts from>` (`within`): only the files in those
+    /// paths are its session, and listing the others would load conftests
+    /// that run never loads (a `test*` directory's, whose hooks reach every
+    /// test).
     pub fn session_files(
         &self,
-        within: Option<(&[PathBuf], &Path)>,
+        within: Option<StartPaths<'_>>,
     ) -> BTreeMap<AdapterName, Vec<ProjectPath>> {
         let mut files: BTreeMap<AdapterName, Vec<ProjectPath>> = BTreeMap::new();
         let mut seen: HashSet<(&AdapterName, &str)> = HashSet::new();
         for case in &self.cases {
             let path = case.id.path();
-            let reached = within.is_none_or(|(paths, root)| {
-                let file = normalize_absolute(&root.join(path.as_str()));
-                paths.iter().any(|start| file.starts_with(start))
-            });
+            let reached = within.is_none_or(|within| within.hold(path));
             if reached && seen.insert((&case.adapter, path.as_str())) {
                 files
                     .entry(case.adapter.clone())

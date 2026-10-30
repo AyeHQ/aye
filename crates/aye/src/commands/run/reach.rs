@@ -30,6 +30,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use aye_collect::StartPaths;
 use aye_events::{Case, Diagnostic, DiagnosticCode, ProjectPathRef, Severity};
 use aye_fs::{normalize_absolute, root_relative};
 use aye_select::{DottedReading, Reached, Selection, Selector};
@@ -102,6 +103,15 @@ impl Reach {
             selected,
             unmatched: false,
         })
+    }
+
+    /// The paths the user's run starts from (`selected`), which bound its
+    /// session ([`aye_collect::Collection::session_files`]).
+    pub(super) fn start_paths<'a>(&'a self, root: &'a Path) -> StartPaths<'a> {
+        StartPaths {
+            paths: &self.selected,
+            root,
+        }
     }
 
     /// Whether a diagnostic collection reported is the run's. A `skipped`

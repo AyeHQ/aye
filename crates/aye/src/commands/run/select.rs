@@ -88,7 +88,7 @@ pub(super) fn select(
     let session_files = collection.session_files(
         reach
             .as_ref()
-            .map(|reach| (reach.selected.as_slice(), settings.root.as_path())),
+            .map(|reach| reach.start_paths(&settings.root)),
     );
     let selected = selection.apply(collection.cases);
     let skips = skips(&collection.diagnostics, reach.as_ref(), &settings.root);

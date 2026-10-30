@@ -2794,7 +2794,10 @@ fn with_dotted_names_the_session_is_what_the_run_starts_from() {
         ("lib.py::lib.f", "doctest"),
     ]);
     let starts = [root.join("tests"), root.join("lib.py")];
-    let files = collection.session_files(Some((&starts, root)));
+    let files = collection.session_files(Some(StartPaths {
+        paths: &starts,
+        root,
+    }));
     assert_eq!(files["pytest"], ["tests/test_a.py", "tests/sub/test_s.py"]);
     assert_eq!(files["doctest"], ["lib.py"]);
 }
