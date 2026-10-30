@@ -1,10 +1,10 @@
-//! Execution at scale. Interpreter discovery, the warm daemon and
-//! fork-per-run, the single spawn path every backend wraps (local, sandboxed,
-//! container, remote), the scheduler (affinity groups, duration-aware,
-//! dynamic hand-out, serial groups, crash recovery), capability routing, the
-//! sandbox policy and its enforcers, services provided into the worker, the
-//! transport, and the embedded worker (`python/aye_worker.py`) that hosts
-//! whichever adapters' executors the runner sends it.
+//! Execution at scale. The warm daemon and fork-per-run, the single spawn
+//! path every backend wraps (local, sandboxed, container, remote), the
+//! scheduler (affinity groups, duration-aware, dynamic hand-out, serial
+//! groups, crash recovery), capability routing, the sandbox policy and its
+//! enforcers, services provided into the worker, the transport, and the
+//! embedded worker (`python/aye_worker.py`) that hosts whichever adapters'
+//! executors the runner sends it.
 //!
 //! Owns: how tests run, where, and in what order. Does not own: what a test is
 //! or how one executes inside the framework; it calls the engine for that.
@@ -12,7 +12,9 @@
 //! Depends on: aye-engine, aye-events, aye-protocol, aye-static. Must not
 //! depend on any `aye-adapter-*`.
 //!
-//! Environments come from `aye-provision` (uv as a subprocess, or paths the
+//! The interpreter comes from `aye-provision`, which the binary asks: the
+//! runner starts the executable it is given ([`RunnerOptions::python`]).
+//! Later, environments come from it too (uv as a subprocess, or paths the
 //! user supplies); the runner requests them per matrix row and per backend,
 //! keys caches on what it gets back, and never installs anything itself.
 //!
@@ -38,14 +40,6 @@
 //! or its own crate).
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
-//! - **Interpreter discovery** ([`find_python`]), first match wins:
-//!   `--python`, `$AYE_PYTHON`, `[tool.aye] python`, `$VIRTUAL_ENV`, a
-//!   `.venv` in the working directory then the root, the interpreter beside
-//!   the `aye` binary (beside the file a link to it leads to: `uv tool
-//!   install` and pipx link it into `~/.local/bin` from the tool's
-//!   environment), `python3` then `python` on `PATH`. An explicit choice
-//!   that is a bare name is looked up on `PATH`. Until `aye-provision`
-//!   lands, this is the bring-your-own provisioner.
 //! - **One spawn path.** [`spawn`] starts `python -c <aye_worker source>`
 //!   ([`WORKER_SOURCE`]) in the user's working directory with its standard
 //!   streams piped, sends `hello` (aye's engine, the prelude the binary
@@ -228,12 +222,10 @@
 //!   whose session ended runs no other batch: a batch that comes back to
 //!   its lane (a crashed one's) gets a new worker.
 
-mod python;
 mod run;
 mod schedule;
 mod worker;
 
-pub use python::{PythonSource, find_python, venv_python};
 pub use run::{BatchEnd, BatchSummary, Crash, Plan, RunSummary, Runner, RunnerOptions, StopHandle};
 pub use schedule::DEFAULT_WEIGHT;
 pub use worker::{

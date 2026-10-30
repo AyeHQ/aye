@@ -1,5 +1,19 @@
-//! Environments: how the runner obtains an interpreter with the project's
-//! dependencies, for one Python version or for the whole matrix.
+//! The interpreter that runs the tests: what its user asked for
+//! ([`PythonRequest`], from a [`RequestSource`]), discovery ([`find`]), and
+//! the [`Interpreter`] found, with where it came from ([`PythonSource`]).
+//!
+//! Decided (implementation, October 2026):
+//! - **Discovery**, first match wins: what `--python`, `$AYE_PYTHON` or
+//!   `[tool.aye] python` asks for (the binary picks the first given), then
+//!   `$VIRTUAL_ENV`, a `.venv` in the working directory then the root, the
+//!   interpreter beside the `aye` binary (beside the file a link to it leads
+//!   to: `uv tool install` and pipx link it into `~/.local/bin` from the
+//!   tool's environment), `python3` then `python` on `PATH`. A request that
+//!   is a bare name is looked up on `PATH`. An empty variable counts as
+//!   unset. Until provisioning lands, this is the bring-your-own provisioner.
+//!
+//! Later, environments: how the runner obtains an interpreter with the
+//! project's dependencies, for one Python version or for the whole matrix.
 //!
 //! aye never creates virtualenvs or installs packages itself. It asks a
 //! `Provisioner` and keeps the result:
@@ -42,9 +56,19 @@
 //! always with warm environments); whether `requires-python` expands to a
 //! matrix on its own.
 //!
-//! Owns: the `Provisioner` trait, `Environment`, the cache key, the uv
-//! subprocess implementation, the bring-your-own implementation, and a fake
-//! for tests. Does not own: scheduling, routing or backends (`aye-runner`),
-//! nor the environment id type on the wire (`aye-events`).
+//! Owns: interpreter discovery; later the `Provisioner` trait,
+//! `Environment`, the cache key, the uv subprocess implementation, the
+//! bring-your-own implementation, and a fake for tests. Does not own:
+//! starting the interpreter, scheduling, routing or backends
+//! (`aye-runner`), which takes the executable it is given, nor the
+//! environment id type on the wire (`aye-events`).
 //!
 //! Depends on: aye-events. Must not depend on the runner or any engine.
+
+mod discovery;
+mod request;
+
+pub use discovery::{
+    DiscoveryEnv, Interpreter, PythonNotFound, PythonSource, VenvDir, find, venv_python,
+};
+pub use request::{PythonRequest, RequestSource};

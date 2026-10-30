@@ -149,6 +149,7 @@ dependencies = [
  "aye-fs",
  "aye-history",
  "aye-protocol",
+ "aye-provision",
  "aye-render",
  "aye-runner",
  "aye-select",
@@ -314,6 +315,8 @@ name = "aye-provision"
 version = "0.0.1"
 dependencies = [
  "aye-events",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]
@@ -337,6 +340,7 @@ dependencies = [
  "aye-engine",
  "aye-events",
  "aye-protocol",
+ "aye-provision",
  "aye-static",
  "serde_json",
  "tempfile",

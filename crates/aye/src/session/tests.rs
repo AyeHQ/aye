@@ -783,6 +783,49 @@ fn a_path_through_another_name_of_the_root_is_spelled_from_the_root() {
     );
 }
 
+/// `--python`, then `$AYE_PYTHON`, then `[tool.aye] python`: the first
+/// given is the request, the command line's and the environment's from the
+/// current directory, the configuration's from the root.
+#[test]
+fn the_interpreter_asked_for_is_the_first_given() {
+    let (root, cwd) = (Path::new("/root"), Path::new("/root/sub"));
+    let tool_aye = |python: Option<&str>| aye_config::AyeSettings {
+        python: python.map(|python| aye_config::Sourced::default_value(PathBuf::from(python))),
+        ..Default::default()
+    };
+    let asked = |flag: Option<&str>, env: Option<&str>, config: Option<&str>| {
+        python_request(
+            flag.map(Path::new),
+            env.map(std::ffi::OsStr::new),
+            &tool_aye(config),
+            root,
+            cwd,
+        )
+    };
+    let file = |path: &str, source| Some((PythonRequest::File(PathBuf::from(path)), source));
+    assert_eq!(
+        asked(Some("flag/python"), Some("env/python"), Some("cfg/python")),
+        file("/root/sub/flag/python", RequestSource::Flag)
+    );
+    assert_eq!(
+        asked(None, Some("env/python"), Some("cfg/python")),
+        file("/root/sub/env/python", RequestSource::Env)
+    );
+    assert_eq!(
+        asked(None, None, Some("cfg/python")),
+        file("/root/cfg/python", RequestSource::Config)
+    );
+    // An empty `$AYE_PYTHON` counts as unset.
+    assert_eq!(
+        asked(None, Some(""), Some("python3")),
+        Some((
+            PythonRequest::ExecutableName("python3".to_string()),
+            RequestSource::Config
+        ))
+    );
+    assert_eq!(asked(None, Some(""), None), None);
+}
+
 /// `--output`, else `[tool.aye] output`, else text, and where it came
 /// from, as `aye config` shows it.
 #[test]

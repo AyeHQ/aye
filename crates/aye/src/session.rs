@@ -21,6 +21,7 @@ use aye_events::{
 use aye_fs::{StateBucket, StateDir, normalize_absolute, relative_below_root, root_relative};
 use aye_history::{History, RunWriter, StoredRunId};
 use aye_protocol::{MaxFail, Policy, Refiner};
+use aye_provision::{DiscoveryEnv, Interpreter, PythonRequest, PythonSource, RequestSource};
 use aye_render::{
     ColorChoice, GithubAnnotations, JsonLines, Junit, JunitDuration, JunitFamily, JunitLogging,
     JunitOptions, Reporter, Tally, Tee, Text, TextOptions,
@@ -58,8 +59,8 @@ pub(crate) struct Session {
     /// same order.
     defaults: Vec<(AdapterName, FrameworkDefaults)>,
     selection: Selection,
-    python: PathBuf,
-    python_source: aye_runner::PythonSource,
+    /// The interpreter that runs the tests, and where it came from.
+    interpreter: Interpreter,
     workers: u32,
     /// The environment aye started in, read once: what the adapters, the
     /// interpreter's discovery and the reporters read.
@@ -117,17 +118,23 @@ impl Session {
         }
 
         let tool_aye = AyeSettings::load(&root)?;
-        let (python, python_source) = aye_runner::find_python(
-            args.python.as_deref(),
-            tool_aye
-                .python
-                .as_ref()
-                .and_then(|python| python.value.to_str()),
+        let discovery = DiscoveryEnv {
+            virtual_env: env.get_os(EnvVars::VIRTUAL_ENV).map(ToOwned::to_owned),
+            path: env.get_os(EnvVars::PATH).map(ToOwned::to_owned),
+            current_exe: std::env::current_exe().ok(),
+        };
+        let interpreter = aye_provision::find(
+            python_request(
+                args.python.as_deref(),
+                env.get_os(EnvVars::AYE_PYTHON),
+                &tool_aye,
+                &root,
+                &cwd,
+            ),
+            &discovery,
             &root,
             &cwd,
-            &env,
-        )
-        .context("no Python interpreter found: pass --python, or set [tool.aye] python")?;
+        )?;
         let project = Project {
             root: &root,
             cwd: &cwd,
@@ -203,8 +210,7 @@ impl Session {
             prepared,
             defaults,
             selection,
-            python,
-            python_source,
+            interpreter,
             workers,
             env,
         })
@@ -215,11 +221,11 @@ impl Session {
     }
 
     pub(crate) fn python(&self) -> &Path {
-        &self.python
+        &self.interpreter.executable
     }
 
-    pub(crate) const fn python_source(&self) -> aye_runner::PythonSource {
-        self.python_source
+    pub(crate) const fn python_source(&self) -> PythonSource {
+        self.interpreter.source
     }
 
     pub(crate) const fn workers(&self) -> u32 {
@@ -272,7 +278,7 @@ impl Session {
 
         let run_id = RunId::random();
         let runner = Runner::new(RunnerOptions {
-            python: self.python.clone(),
+            python: self.interpreter.executable.clone(),
             root: self.root.clone(),
             cwd: self.cwd.clone(),
             workers: self.workers,
@@ -357,7 +363,7 @@ impl Session {
             },
         )
         .with_environment(Environment {
-            interpreter: Some(self.python.clone()),
+            interpreter: Some(self.interpreter.executable.clone()),
             framework_args: self.args.passthrough.clone(),
             variables: None,
         })
@@ -1711,6 +1717,32 @@ fn pick(given: Option<&str>, framework: Passed) -> Pick {
         Passed::Unknown => Pick::Unknown,
         Passed::Unset => given.map_or(Pick::Own, |expr| Pick::Given(expr.to_string())),
     }
+}
+
+/// The interpreter asked for: `--python`, else `$AYE_PYTHON` (`env`, unless
+/// it is empty), else `[tool.aye] python`. The first two are relative to
+/// the current directory, the configuration's to the project root.
+fn python_request(
+    flag: Option<&Path>,
+    env: Option<&std::ffi::OsStr>,
+    tool_aye: &AyeSettings,
+    root: &Path,
+    cwd: &Path,
+) -> Option<(PythonRequest, RequestSource)> {
+    if let Some(flag) = flag {
+        return Some((PythonRequest::parse(flag, cwd), RequestSource::Flag));
+    }
+    if let Some(env) = env.filter(|env| !env.is_empty()) {
+        return Some((
+            PythonRequest::parse(Path::new(env), cwd),
+            RequestSource::Env,
+        ));
+    }
+    let config = tool_aye.python.as_ref()?;
+    Some((
+        PythonRequest::parse(&config.value, root),
+        RequestSource::Config,
+    ))
 }
 
 /// The output format, and where it came from: `--output`, else

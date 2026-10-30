@@ -304,7 +304,7 @@ fn python() -> Option<PathBuf> {
         return Some(python.into());
     }
     let venv = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv");
-    aye_runner::venv_python(&venv)
+    aye_provision::venv_python(&venv)
 }
 
 macro_rules! python_or_skip {
