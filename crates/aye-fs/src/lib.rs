@@ -39,7 +39,7 @@ mod write;
 
 pub use path::{
     absolute, common_ancestor, expand_path, normalize_absolute, normpath, relative_below_root,
-    relative_through_root, relative_to, root_relative, slashed,
+    relative_through_root, relative_to, resolved_common_ancestor, root_relative, slashed,
 };
 pub use state::{HISTORY_TEMPORARY, REFINE_CACHE, StateBucket, StateDir, prepare_dir};
 pub use write::atomic_write;
