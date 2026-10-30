@@ -84,7 +84,7 @@ pub(crate) struct Summary {
     /// (`name.__test__ = …`). pytest collects them whatever their name.
     pub tests: HashSet<String>,
     /// Module-level functions that may make classes (see
-    /// [`crate::module::makes_classes`]).
+    /// [`makes_classes`]).
     pub factories: HashSet<String>,
     /// What its code (`pytest_configure`, usually) changes in pytest's
     /// configuration that collection depends on.
@@ -293,7 +293,7 @@ impl Summary {
             let tests = match bound.binding {
                 Binding::Class(class) => set || class_sets_test(&class.body),
                 Binding::Function(def) => {
-                    if crate::module::makes_classes(&def.body) {
+                    if makes_classes(&def.body) {
                         out.factories.insert(name.to_string());
                     }
                     set
@@ -747,6 +747,63 @@ fn ignore_list<'a>(ns: &Namespace<'a>, lookup: Lookup<'_, 'a>, name: &str) -> Op
         }
     }
     Some(list)
+}
+
+/// Whether a body (a function's, nested ones included) may make a class
+/// pytest collects whatever its name: a class statement, `type(…)` with
+/// three arguments, `types.new_class`, or a `__test__` it sets.
+pub(crate) fn makes_classes(body: &[Stmt]) -> bool {
+    use aye_adapter::ast::visitor::Visitor;
+
+    let mut finder = ClassMaker(false);
+    for stmt in body {
+        finder.visit_stmt(stmt);
+    }
+    finder.0
+}
+
+/// The walk behind [`makes_classes`].
+pub(crate) struct ClassMaker(bool);
+
+impl ClassMaker {
+    /// [`makes_classes`] for an expression (a lambda's body).
+    pub(crate) fn expr(expr: &Expr) -> bool {
+        use aye_adapter::ast::visitor::Visitor;
+
+        let mut finder = Self(false);
+        finder.visit_expr(expr);
+        finder.0
+    }
+}
+
+impl<'a> aye_adapter::ast::visitor::Visitor<'a> for ClassMaker {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        if matches!(stmt, Stmt::ClassDef(_)) {
+            self.0 = true;
+        }
+        if !self.0 {
+            aye_adapter::ast::visitor::walk_stmt(self, stmt);
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::Call(call)
+                if matches!(&*call.func, Expr::Name(n) if n.id.as_str() == "type")
+                    && call.arguments.args.len() + call.arguments.keywords.len() >= 3 =>
+            {
+                self.0 = true;
+            }
+            Expr::Attribute(attr) if matches!(attr.attr.id.as_str(), "new_class" | "__test__") => {
+                self.0 = true;
+            }
+            Expr::Name(name) if name.id.as_str() == "__test__" => self.0 = true,
+            _ => {}
+        }
+        if !self.0 {
+            aye_adapter::ast::visitor::walk_expr(self, expr);
+        }
+    }
 }
 
 #[cfg(test)]

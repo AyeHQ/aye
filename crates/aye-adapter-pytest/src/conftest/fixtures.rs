@@ -352,7 +352,7 @@ fn value_fixture<'a>(
                 return None;
             }
             if let Some(path) = lookup.path(&call.func)
-                && (path.starts_with("builtins.") || crate::module::no_tests(&path))
+                && (path.starts_with("builtins.") || super::no_tests(&path))
             {
                 return None;
             }
@@ -371,7 +371,7 @@ fn value_fixture<'a>(
                 }
                 binding_fixture(lookup, name, &target, is_method, depth + 1)
             }
-            Resolved::Path(path) if crate::module::no_tests(&path) => None,
+            Resolved::Path(path) if super::no_tests(&path) => None,
             Resolved::Path(path) if path.starts_with("builtins.") => None,
             _ => Some(FixtureDef::opaque(name)),
         },

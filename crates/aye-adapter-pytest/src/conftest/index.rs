@@ -277,7 +277,7 @@ impl Supports {
             ..Exports::default()
         };
         for (local, module, attribute) in &summary.from_imports {
-            if !wanted(local) || crate::module::no_tests(module) {
+            if !wanted(local) || super::no_tests(module) {
                 continue;
             }
             match self.attribute(module, attribute, &summary.dir, bases, visiting) {
@@ -295,7 +295,7 @@ impl Supports {
             }
         }
         for module in &summary.star_imports {
-            if crate::module::no_tests(module) {
+            if super::no_tests(module) {
                 continue;
             }
             let Some(path) = self.resolve(module, &summary.dir, bases) else {
@@ -381,7 +381,7 @@ impl Supports {
         if !first && is_unittest_base(path) {
             return true;
         }
-        if crate::module::no_tests(path) {
+        if super::no_tests(path) {
             return false;
         }
         if visiting.len() > 16 {
@@ -497,7 +497,7 @@ impl Supports {
         visiting: &mut Vec<(PathBuf, String)>,
         check: &NameCheck<'_>,
     ) -> bool {
-        if crate::module::no_tests(path) || visiting.len() > 16 {
+        if super::no_tests(path) || visiting.len() > 16 {
             return false;
         }
         let level = path.chars().take_while(|c| *c == '.').count();
@@ -599,7 +599,7 @@ impl Supports {
         if is_unittest_base(path) {
             return true;
         }
-        if crate::module::no_tests(path) {
+        if super::no_tests(path) {
             return false;
         }
         if visiting.len() > 16 {
@@ -704,7 +704,7 @@ impl Supports {
             .iter()
             .find(|(local, ..)| local == attribute)
         {
-            if crate::module::no_tests(from) {
+            if super::no_tests(from) {
                 Attribute::No
             } else {
                 self.attribute(from, name, &source.dir, bases, visiting)
@@ -717,7 +717,7 @@ impl Supports {
             };
             if public {
                 for star in source.star_imports.iter().rev() {
-                    if crate::module::no_tests(star) {
+                    if super::no_tests(star) {
                         continue;
                     }
                     match self.attribute(star, attribute, &source.dir, bases, visiting) {

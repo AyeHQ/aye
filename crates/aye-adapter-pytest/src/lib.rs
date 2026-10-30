@@ -464,8 +464,8 @@ mod conftest;
 mod context;
 pub mod embedded;
 mod marks;
-mod module;
 mod options;
+mod predict;
 mod recognizer;
 
 #[cfg(test)]
@@ -532,7 +532,7 @@ pub(crate) const PYTEST: Framework = Framework {
 pub struct PytestRecognizer {
     root: PathBuf,
     config: PytestConfig,
-    settings: module::Settings,
+    settings: predict::Settings,
     supports: Supports,
     /// Project modules `-p NAME` loads (from addopts or `PYTEST_ADDOPTS`),
     /// then those `PYTEST_PLUGINS` names, in order: plugins of the whole
@@ -703,7 +703,7 @@ impl PytestRecognizer {
                 .iter()
                 .any(|p| p.strip_prefix("no:").is_some_and(|n| n.trim() == name))
         };
-        let settings = module::Settings {
+        let settings = predict::Settings {
             python_classes: config.python_classes.value.clone(),
             python_functions: config.python_functions.value.clone(),
             ids: IdOptions {
@@ -1482,7 +1482,7 @@ struct ProjectImports<'r> {
     own_dirs: &'r [PathBuf],
 }
 
-impl module::Imports for ProjectImports<'_> {
+impl predict::Imports for ProjectImports<'_> {
     fn may_be_unittest(&self, path: &str) -> bool {
         self.supports.may_be_unittest(path, self.dir, self.bases)
     }
@@ -1495,7 +1495,7 @@ impl module::Imports for ProjectImports<'_> {
         if self.supports.project_unittest(path, self.dir, self.bases) {
             return true;
         }
-        if module::no_tests(path) || self.supports.resolvable(path, self.dir, self.bases) {
+        if conftest::no_tests(path) || self.supports.resolvable(path, self.dir, self.bases) {
             return false;
         }
         let name = path.rsplit('.').next().unwrap_or(path);
@@ -1677,10 +1677,10 @@ impl Recognizer for PytestRecognizer {
             plugins.extend(expanded.map(|s| (s, PLUGIN_OF_SCOPED_CONFTEST)));
         }
         let global = self.global_hooks();
-        let mut scope = module::Scope {
+        let mut scope = predict::Scope {
             global_hooks: global.keys().cloned().collect(),
             global_hook_sources: global.clone(),
-            ..module::Scope::default()
+            ..predict::Scope::default()
         };
         // A collection ini value a support module in scope changes at
         // runtime (`config.addinivalue_line("python_functions", …)` in a
@@ -1710,7 +1710,7 @@ impl Recognizer for PytestRecognizer {
             scope.hooks_unknown |= summary.hooks_unknown();
             scope.patched.extend(summary.patched.iter().cloned());
             scope.reflective |= summary.reflective;
-            scope.imports_module |= module::names_module(&summary.modules, file.rel.as_str());
+            scope.imports_module |= predict::names_module(&summary.modules, file.rel.as_str());
         }
         // Fixtures the test module imports from project files register
         // with its own.
@@ -1718,7 +1718,7 @@ impl Recognizer for PytestRecognizer {
         let mut namespace = Namespace::build(&file.module.body, PYTEST);
         // What support files do to modules holds here too.
         namespace.assume_patched(scope.patched.iter().cloned(), scope.reflective);
-        if !module::reached(&namespace, &scope, file.rel.as_str()).is_empty() {
+        if !predict::reached(&namespace, &scope, file.rel.as_str()).is_empty() {
             // Its names may change in ways the module's code doesn't show:
             // none is a constant.
             namespace.assume_reached();
@@ -1739,7 +1739,7 @@ impl Recognizer for PytestRecognizer {
                 break exports;
             }
         };
-        scope.module_imports = module::ModuleImports {
+        scope.module_imports = predict::ModuleImports {
             fixtures: exports.fixtures[own.fixtures.len()..].to_vec(),
             maybe: exports.maybe_fixtures,
             any: exports.any_fixture,
@@ -1773,7 +1773,7 @@ impl Recognizer for PytestRecognizer {
                             .chain(&summary.registered)
                             .any(|name| {
                                 !BUILTIN_PLUGINS.contains(&name.as_str())
-                                    && !module::no_tests(name)
+                                    && !conftest::no_tests(name)
                                     && self.supports.module(name, &summary.dir, &bases).is_none()
                             })
                     });
@@ -1786,7 +1786,7 @@ impl Recognizer for PytestRecognizer {
             path_unknown,
             own_dirs: &own_dirs,
         };
-        let mut recognition = module::recognize(
+        let mut recognition = predict::recognize(
             &self.settings,
             &scope,
             &imports,
