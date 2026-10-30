@@ -1,7 +1,7 @@
 //! Python's `fnmatch`, and pytest's `fnmatch_ex` and name options, which
 //! match with it.
 //!
-//! A pattern is compiled into tokens ([`FnPattern`]) and matched by one
+//! A pattern is compiled into tokens (`FnPattern`) and matched by one
 //! iterative matcher, `*` backtracking to the last star. How its `[...]`
 //! sets are read is a [`SetTranslation`]: CPython's, or the reading aye's
 //! pytest and doctest adapters have always had, which differs from it for

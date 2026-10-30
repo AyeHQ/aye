@@ -27,9 +27,10 @@
 //! Depends on: aye-adapter, aye-config (the INI and TOML loaders, where a
 //! setting came from, the worker count), aye-engine (the modules its
 //! front-end runs on), aye-events, aye-fs (pytest's common ancestor),
-//! aye-protocol, aye-python-stdlib (`fnmatch`, `glob`, `os.path`),
-//! aye-static (the variables it reads by name). Must not be depended on by
-//! any runner crate; only the binary links it.
+//! aye-protocol, aye-python-stdlib (`fnmatch`, `glob`, `os.path`, the
+//! reprs, builtins and `re` patterns static values need, identifiers,
+//! unittest's bases), aye-static (the variables it reads by name). Must not
+//! be depended on by any runner crate; only the binary links it.
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **The project scan covers what pytest's session can load**: the

@@ -17,7 +17,8 @@
 //!
 //! Depends on: aye-adapter, aye-config (`[tool.aye.unittest]`, where a
 //! setting came from), aye-events, aye-protocol, aye-python-stdlib
-//! (`fnmatch`, `os.path`, unittest's loader rules).
+//! (`fnmatch`, `os.path`, the builtins, the standard library's modules,
+//! unittest's loader rules).
 //!
 //! Decided (implementation, October 2026), each revisable until 0.1.0:
 //! - **The reference is `python -m unittest discover` on Python 3.13**

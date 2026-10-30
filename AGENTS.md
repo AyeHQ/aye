@@ -25,7 +25,7 @@ Leaf crates (depend on no aye crate):
 - `crates/aye-static`: `EnvVars`, every environment variable aye reads by name or sets, and `ProcessEnv`, the environment as aye read it, once, in the binary
 - `crates/aye-fs`: lexical path algebra (`normpath`, `normalize_absolute`, `absolute`, the relativizers, `expand_path`) and the state directory, `.aye` (`StateDir`, its buckets, the cache markers, `atomic_write`)
 
-Runner crates (engine-agnostic; must never depend on an `aye-adapter-*` crate):
+Runner crates (engine-agnostic; must never depend on an `aye-adapter-*` crate or a framework library):
 
 - `crates/aye`: the binary, a library whose `main` `main.rs` calls (the command line as clap reads it, `cli/`; the environment it reads once, `EnvironmentOptions`; each command's settings, resolved once in `settings/`; its positional arguments, each read as a path, an id or a word, `Positional`s, in `positional.rs`; the commands in `commands/`: the run, in `commands/run/` (collect, reach, select, plan, the stop signals, and `RunVerdict`, which decides its exit code), `aye config` and `aye show`, in `commands/show/`; a run's event stream, `stream/`, the passes that rewrite its records and the sink they go to; `AyeError`, what ends it before a run's stream starts; the `Printer`, through which it writes everything beside the stream; the adapter registry, each adapter's `AdapterTraits`, which adapters a project runs, and the prelude every worker installs: aye's `pytest` module and what it stands on)
 - `crates/aye-events`: the wire types (events, outcomes and `OutcomeTrail`, failures with `ComparisonOp`, `CompareKind` and `FailureSignature`, `RerunCommand`, collected cases, `FrameworkStatus`, `StopReason`), the identities and paths they hold (`TestId`, `TestKey`, `AdapterName`, `LifetimeId`, `Scope`, `AffinityKey`, `RunId`, `RunNumber`, `WorkerIndex`, `BatchIndex`, `ProjectPath`, `DiagnosticPath`, `FramePath`), the envelope's `Stamper`, the diagnostic codes and their classification (`DiagnosticCode`, `ErrorClass`), FNV-1a (`Fnv64`, `Fnv128`) and `ContentDigest`, and the schema version
@@ -41,6 +41,10 @@ The engine crate (what workers run; the runner embeds it):
 
 - `crates/aye-engine`: aye's engine, in Python (`python/`: `aye_engine.py`, the model, the assertion rewriter, the native engine), standard library only, embedded in the binary (`ENGINE`, which every worker installs first); and the vocabulary's full definitions
 
+Framework libraries (what the adapters share; only the adapter crates depend on them):
+
+- `crates/aye-python-stdlib`: CPython's standard library behaviour in Rust (`fnmatch` with both readings of sets named, `glob` and the doctest adapter's approximation, `os.path`, reprs, builtins, `re` patterns, identifiers, the standard library's modules, unittest's loader rules); where the adapters' copies differed, each behaviour kept under a name
+
 Adapter crates (one framework each, implementing `aye-adapter`; only the binary links them):
 
 - `crates/aye-adapter-pytest`: aye's own `pytest` module, the pytest front-end and its executor (`python/native/`), standard library only; pytest's configuration and the static recognizer (`src/`); referee plain pytest
@@ -49,7 +53,7 @@ Adapter crates (one framework each, implementing `aye-adapter`; only the binary 
 
 Test support (not published; each crate names it by path, as a dev-dependency):
 
-- `crates/aye-test`: what the crates' tests share: the interpreter they run (`test_python`), aye run in a hermetic environment (`TestContext`), what snapshots of its output leave out, its output read back, and fixtures
+- `crates/aye-test`: what the crates' tests share: the interpreter they run (`test_python`), aye run in a hermetic environment (`TestContext`), what snapshots of its output leave out, its output read back, fixtures, and the `fnmatch` pins
 
 Each crate's `lib.rs` states its responsibility, boundaries and dependencies; read it before adding code there.
 
@@ -84,7 +88,7 @@ Cargo manages the Rust dependencies (`Cargo.lock`), and uv manages the Python on
 - The worker, aye's engine and every executor import only the standard library. The pytest front-end and its executor import aye's own `pytest` module, never pytest: nothing aye ships imports pytest.
 - Schema changes that remove or rename a field bump `SCHEMA_VERSION`.
 - `ruff_python_*` crates are pinned exactly. Bump them together, with the MSRV.
-- Rust names an environment variable only through `aye_static::EnvVars`, and a variable aye starts reading or setting, in Rust or in the Python it sends to workers, joins the catalogue. The binary reads the environment once (`EnvironmentOptions`, over `ProcessEnv::from_process`) and hands it down (an adapter reads `Project.env`, the refinement cache's key `EnvironmentFingerprint.variables`); `clippy.toml` disallows `std::env::var` and its kin everywhere else, but for the tests' own settings, each with an `#[expect]`.
+- Rust names an environment variable only through `aye_static::EnvVars` (but for `~`'s expansion as Python does it, in `aye-fs` and `aye-python-stdlib`, which can't depend on `aye-static` and spell the home directory's variables as Python does), and a variable aye starts reading or setting, in Rust or in the Python it sends to workers, joins the catalogue. The binary reads the environment once (`EnvironmentOptions`, over `ProcessEnv::from_process`) and hands it down (an adapter reads `Project.env`, the refinement cache's key `EnvironmentFingerprint.variables`); `clippy.toml` disallows `std::env::var` and its kin everywhere else, but for the tests' own settings, each with an `#[expect]`.
 - A lint the code breaks on purpose gets `#[expect(lint, reason = "…")]`, not `#[allow]`.
 - A new crate gets an entry in `release-please-config.json` and, if it is published, in `[workspace.dependencies]` between the `x-release-please` markers; CI checks the first. A crate that isn't published (`aye-test`) is named by path, as a dev-dependency, which `cargo publish` strips.
 
