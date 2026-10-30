@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use aye_adapter::{FrameworkDefaults, JunitDefaults};
 use aye_events::IdPrefix;
 use aye_protocol::MaxFail;
+use aye_pytest::session::deselect_ids;
 use serde::Serialize;
 
 use crate::DoctestRecognizer;
@@ -144,5 +145,22 @@ fn truth(text: &str) -> Option<bool> {
         "y" | "yes" | "t" | "true" | "on" | "1" => Some(true),
         "n" | "no" | "f" | "false" | "off" | "0" => Some(false),
         _ => None,
+    }
+}
+
+impl DoctestRecognizer {
+    /// The context ([`Recognizer::context`]), built the first time it is
+    /// asked for.
+    pub(crate) fn doctest_context(&self) -> &DoctestContext {
+        self.context.get_or_init(|| DoctestContext::new(self))
+    }
+
+    /// pytest's `--deselect` prefixes as prefixes of aye's ids, which are
+    /// relative to the project root rather than the rootdir; none when the
+    /// rootdir is outside the root. The binary drops this adapter's cases
+    /// they name and counts them as deselected, as pytest does with its
+    /// doctest items.
+    fn deselect_ids(&self) -> Vec<String> {
+        deselect_ids(&self.config.rootdir, &self.root, &self.config.deselect)
     }
 }

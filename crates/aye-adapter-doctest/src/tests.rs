@@ -10,12 +10,16 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use aye_adapter::{
-    Adapter, Claim, LineIndex, Project, Recognition, Recognizer, RefineReason, SourceFile,
+    Adapter, Claim, LineIndex, Project, Recognition, Recognizer, RefineReason, Requested,
+    SourceFile,
 };
 use aye_events::{Certainty, DiagnosticCode};
+use aye_python_stdlib::fnmatch;
 
 use super::*;
+use crate::module::NO_STATIC_DOCTESTS;
 use crate::parser::{clean_doc, docstring, expand_tabs, parse};
+use crate::project_scan::{assigns_module, computes_module};
 
 // ---------------------------------------------------------------- helpers
 
