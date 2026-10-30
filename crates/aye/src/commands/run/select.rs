@@ -30,7 +30,7 @@ use aye_events::{
     Severity, TestId,
 };
 use aye_fs::root_relative;
-use aye_select::{Named, Selection, Selector, SelectorIndex, dotted_reach};
+use aye_select::{Named, SelectedCase, Selection, Selector, SelectorIndex, dotted_reach};
 
 use super::collect::Collected;
 use super::exit::RunVerdict;
@@ -113,14 +113,11 @@ pub(super) fn select(
     // Errors so far belong to collection; only later ones are the run's.
     let errors = out.sink.take_errors();
 
-    let mut cases: Vec<Case> = Vec::with_capacity(selected.cases.len());
-    for case in &selected.cases {
-        for id in selected.ids_for(case) {
-            let mut case = case.clone();
-            case.id = id;
-            cases.push(case);
-        }
-    }
+    let mut cases: Vec<Case> = selected
+        .cases
+        .into_iter()
+        .flat_map(SelectedCase::into_cases)
+        .collect();
     if settings.failed_first {
         aye_select::failed_first(&mut cases, last_failed);
     }

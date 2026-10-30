@@ -32,8 +32,8 @@
 //!   layout is selected by path. Callers that know an argument is a path
 //!   on disk build it with [`Selector::path`].
 //! - **Parameters known only at runtime.** `path::test[x]` keeps a
-//!   `Partial` case `path::test` as `Unknown` and narrows it: the case's
-//!   entry in [`Selected::narrowed`] lists the parameter ids to hand the
+//!   `Partial` case `path::test` as `Unknown` and narrows it: the kept
+//!   case runs as those parameter ids ([`RunAs::Params`]), handed to the
 //!   engine in its place, so only `[x]` runs. A key selects the case whose
 //!   own id has it; keys of parameter ids that collection cannot know are
 //!   for the caller to resolve (from history) into ids.
@@ -105,7 +105,7 @@ mod truth;
 
 pub use expression::{Expression, Kwarg, ParseError, Value};
 pub use order::failed_first;
-pub use selection::{AdapterSelection, Selected, Selection, SelectorIndex};
+pub use selection::{AdapterSelection, RunAs, Selected, SelectedCase, Selection, SelectorIndex};
 pub use selector::{Named, Selector, dotted_reach};
 pub use truth::Truth;
 

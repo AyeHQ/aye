@@ -20,7 +20,35 @@ fn tagged(mut case: Case, tags: &[&str]) -> Case {
 }
 
 fn ids(selected: &Selected) -> Vec<&str> {
-    selected.cases.iter().map(|c| c.id.as_str()).collect()
+    selected.cases.iter().map(|c| c.case.id.as_str()).collect()
+}
+
+/// The kept cases.
+fn kept(selected: &Selected) -> Vec<Case> {
+    selected.cases.iter().map(|c| c.case.clone()).collect()
+}
+
+/// The kept cases that run only as some of their parameter ids, by id,
+/// with those ids.
+fn narrowed(selected: &Selected) -> BTreeMap<TestId, Vec<TestId>> {
+    selected
+        .cases
+        .iter()
+        .filter_map(|c| match &c.run_as {
+            RunAs::Whole => None,
+            RunAs::Params(ids) => Some((c.case.id.clone(), ids.clone())),
+        })
+        .collect()
+}
+
+/// The ids to hand the engine for `case`: those of its kept case, else
+/// its own.
+fn ids_for(selected: &Selected, case: &Case) -> Vec<TestId> {
+    selected
+        .cases
+        .iter()
+        .find(|c| c.case.id == case.id)
+        .map_or_else(|| vec![case.id.clone()], SelectedCase::ids)
 }
 
 fn failed(ids: &[&str]) -> Vec<TestId> {
@@ -65,9 +93,9 @@ fn the_default_selects_everything() {
     let selection = Selection::default();
     assert!(selection.is_empty());
     let selected = selection.apply(project());
-    assert_eq!(selected.cases, project());
+    assert_eq!(kept(&selected), project());
     assert_eq!(selected.deselected, 0);
-    assert!(selected.narrowed.is_empty() && selected.unmatched.is_empty());
+    assert!(narrowed(&selected).is_empty() && selected.unmatched.is_empty());
 }
 
 #[test]
@@ -278,14 +306,44 @@ fn a_param_id_keeps_a_partial_case_and_narrows_it() {
         ]
     );
     assert_eq!(
-        selected.ids_for(&total),
+        ids_for(&selected, &total),
         failed(&[
             "tests/test_cart.py::test_total[b]",
             "tests/test_cart.py::test_total[a]"
         ])
     );
     let add = exact("tests/test_cart.py::test_add[eur]");
-    assert_eq!(selected.ids_for(&add), vec![add.id]);
+    assert_eq!(ids_for(&selected, &add), vec![add.id]);
+}
+
+/// A kept case runs as itself, or as one case for each parameter id it is
+/// narrowed to: the case under that id.
+#[test]
+fn a_kept_case_runs_whole_or_as_its_parameter_ids() {
+    let selected = Selection::default()
+        .with_ids([
+            "tests/test_cart.py::test_total[b]",
+            "tests/test_cart.py::test_total[a]",
+            "tests/test_cart.py::test_add[eur]",
+        ])
+        .apply(project());
+    let run: Vec<Case> = selected
+        .cases
+        .into_iter()
+        .flat_map(SelectedCase::into_cases)
+        .collect();
+    let total = |params: &str| Case {
+        id: TestId::new(format!("tests/test_cart.py::test_total[{params}]")),
+        ..tagged(partial("tests/test_cart.py::test_total"), &["db"])
+    };
+    assert_eq!(
+        run,
+        [
+            total("b"),
+            total("a"),
+            exact("tests/test_cart.py::test_add[eur]")
+        ]
+    );
 }
 
 #[test]
@@ -294,7 +352,7 @@ fn a_whole_selector_wins_over_a_narrowing_one() {
         .with_ids(["tests/test_cart.py::test_total[a]", "tests/test_cart.py"])
         .apply(project());
     assert_eq!(selected.cases.len(), 3);
-    assert!(selected.narrowed.is_empty());
+    assert!(narrowed(&selected).is_empty());
 }
 
 #[test]
@@ -354,7 +412,7 @@ fn a_keyword_miss_on_a_partial_case_is_unknown() {
 
     let selected = keyword("big").apply(project());
     assert_eq!(ids(&selected), ["tests/test_cart.py::test_total"]);
-    assert!(selected.narrowed.is_empty());
+    assert!(narrowed(&selected).is_empty());
 }
 
 #[test]
@@ -428,7 +486,7 @@ fn deselected_by_an_expression_is_still_matched() {
         .with_keyword("nothing")
         .unwrap()
         .apply(project());
-    assert_eq!(selected.cases, [] as [aye_events::Case; 0]);
+    assert_eq!(kept(&selected), [] as [aye_events::Case; 0]);
     assert_eq!(selected.unmatched, [] as [SelectorIndex; 0]);
 }
 
@@ -446,7 +504,7 @@ fn an_empty_keyword_expression_is_off() {
 fn a_blank_tag_expression_matches_nothing() {
     assert!(tags("").tags.is_none());
     let selected = tags(" ").apply(project());
-    assert_eq!(selected.cases, [] as [aye_events::Case; 0]);
+    assert_eq!(kept(&selected), [] as [aye_events::Case; 0]);
     assert_eq!(selected.deselected, 6);
 }
 
@@ -686,7 +744,7 @@ fn deselect_prefixes_drop_and_count_their_adapters_cases() {
         .with_ids(["tests/test_cart.py::test_add[eur]"])
         .with_deselect("pytest", ["tests/test_cart.py::test_add[eur]"])
         .apply(project());
-    assert_eq!(selected.cases, [] as [aye_events::Case; 0]);
+    assert_eq!(kept(&selected), [] as [aye_events::Case; 0]);
     assert_eq!(selected.deselected, 1);
     assert_eq!(selected.unmatched, [] as [SelectorIndex; 0]);
     assert!(
@@ -747,7 +805,7 @@ fn last_failed_narrows_a_partial_case_to_its_failed_params() {
         ]
     );
     assert_eq!(
-        selected.narrowed,
+        narrowed(&selected),
         BTreeMap::from([(
             TestId::new("tests/test_cart.py::test_total"),
             failed(&[
@@ -772,7 +830,7 @@ fn last_failed_files_and_directories_select_what_they_contain() {
         .with_last_failed(failed(&["tests/test_cart.py"]))
         .apply(project());
     assert_eq!(selected.cases.len(), 3);
-    assert!(selected.narrowed.is_empty());
+    assert!(narrowed(&selected).is_empty());
     let selected = Selection::default()
         .with_last_failed(failed(&["tests/auth"]))
         .apply(project());
@@ -792,7 +850,7 @@ fn last_failed_meets_explicit_narrowing() {
     let selected = wanted()
         .with_last_failed(failed(&["t.py::test_total[b]", "t.py::test_total[c]"]))
         .apply(cases());
-    assert_eq!(selected.ids_for(&total), failed(&["t.py::test_total[b]"]));
+    assert_eq!(ids_for(&selected, &total), failed(&["t.py::test_total[b]"]));
 
     // None of the wanted parameters failed: nothing selected failed, so
     // everything selected runs.
@@ -800,7 +858,7 @@ fn last_failed_meets_explicit_narrowing() {
         .with_last_failed(failed(&["t.py::test_total[c]"]))
         .apply(cases());
     assert_eq!(
-        selected.ids_for(&total),
+        ids_for(&selected, &total),
         failed(&["t.py::test_total[a]", "t.py::test_total[b]"])
     );
 
@@ -810,7 +868,7 @@ fn last_failed_meets_explicit_narrowing() {
         .apply(cases());
     assert_eq!(selected.cases.len(), 1);
     assert_eq!(
-        selected.ids_for(&total),
+        ids_for(&selected, &total),
         failed(&["t.py::test_total[a]", "t.py::test_total[b]"])
     );
 }

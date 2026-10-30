@@ -70,10 +70,10 @@ impl AdapterSelection {
 /// The outcome of [`Selection::apply`].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Selected {
-    /// The kept cases: in the order of the positional arguments that select
-    /// them, and in the order they came for one argument (or when there are
-    /// none).
-    pub cases: Vec<Case>,
+    /// The kept cases, each with what of it runs: in the order of the
+    /// positional arguments that select them, and in the order they came
+    /// for one argument (or when there are none).
+    pub cases: Vec<SelectedCase>,
     /// How many cases the positional arguments select (all of them, when
     /// there are none) that the expressions, `--deselect` or last failed
     /// then dropped, as pytest counts "deselected". Cases no positional
@@ -81,24 +81,53 @@ pub struct Selected {
     /// under last failed, those its last-failed plugin drops while
     /// collecting (see the crate docs).
     pub deselected: u32,
-    /// Kept `Partial` cases wanted only for some of their parameter ids (by
-    /// `path::test[x]`, or because only those failed last time): the ids to
-    /// hand the engine in place of the case's own, in the order of the
-    /// arguments that asked for them.
-    pub narrowed: BTreeMap<TestId, Vec<TestId>>,
     /// Positional arguments that matched no case, in order. An argument
     /// another one subsumes (`tests/t.py` beside `tests`, or a repeat) is
     /// never listed, as pytest drops it before collecting.
     pub unmatched: Vec<SelectorIndex>,
 }
 
-impl Selected {
-    /// The ids to hand the engine for a kept case.
-    pub fn ids_for(&self, case: &Case) -> Vec<TestId> {
-        self.narrowed
-            .get(&case.id)
-            .cloned()
-            .unwrap_or_else(|| vec![case.id.clone()])
+/// A case [`Selection::apply`] keeps, and what of it runs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectedCase {
+    pub case: Case,
+    pub run_as: RunAs,
+}
+
+/// What of a kept case runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunAs {
+    /// The case, by its own id.
+    Whole,
+    /// Only some parameter ids of a `Partial` case (by `path::test[x]`, or
+    /// because only those failed last time): the ids to hand the engine in
+    /// place of the case's own, in the order of the arguments that asked
+    /// for them.
+    Params(Vec<TestId>),
+}
+
+impl SelectedCase {
+    /// The ids to hand the engine for it.
+    pub fn ids(&self) -> Vec<TestId> {
+        match &self.run_as {
+            RunAs::Whole => vec![self.case.id.clone()],
+            RunAs::Params(ids) => ids.clone(),
+        }
+    }
+
+    /// The cases a run runs for it: the case under each id to hand the
+    /// engine ([`SelectedCase::ids`]).
+    pub fn into_cases(self) -> Vec<Case> {
+        match self.run_as {
+            RunAs::Whole => vec![self.case],
+            RunAs::Params(ids) => ids
+                .into_iter()
+                .map(|id| Case {
+                    id,
+                    ..self.case.clone()
+                })
+                .collect(),
+        }
     }
 }
 
@@ -282,10 +311,12 @@ impl Selection {
             ..Selected::default()
         };
         for (_, case, narrow) in kept {
-            if !narrow.is_empty() {
-                selected.narrowed.insert(case.id.clone(), narrow);
-            }
-            selected.cases.push(case);
+            let run_as = if narrow.is_empty() {
+                RunAs::Whole
+            } else {
+                RunAs::Params(narrow)
+            };
+            selected.cases.push(SelectedCase { case, run_as });
         }
         selected
     }

@@ -88,7 +88,11 @@ pub(super) fn choose(
     if !selectors.is_empty() {
         let selection = Selection::default().with_ids(selectors.iter().map(|(_, s)| *s));
         let selected = selection.apply(names.iter().map(|name| index.case(name)).collect());
-        let kept: HashSet<TestId> = selected.cases.into_iter().map(|case| case.id).collect();
+        let kept: HashSet<TestId> = selected
+            .cases
+            .into_iter()
+            .map(|selected| selected.case.id)
+            .collect();
         chosen.extend(
             index
                 .items
