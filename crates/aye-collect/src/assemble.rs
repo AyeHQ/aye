@@ -4,12 +4,12 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use aye_events::{Case, Diagnostic, ProjectPathRef, Severity, TestId};
+use aye_events::{Case, Diagnostic, ProjectPath, ProjectPathRef, Severity, TestId};
 
 use crate::diagnostic::CollectDiagnostic;
 use crate::recognize::TestFile;
 use crate::refine::Refinement;
-use crate::walk::{AdapterId, FileId, Tree, WalkKey};
+use crate::walk::{AdapterId, FileId, Tree, WalkKey, walk_cmp};
 use crate::{Collection, Collector, Prepared};
 
 impl Collector<'_> {
@@ -22,8 +22,8 @@ impl Collector<'_> {
     ) -> Collection {
         /// One file's diagnostics, and its final cases by recognizer.
         struct Merged {
-            /// The file's path, empty for what belongs to no file.
-            rel: String,
+            /// The file's path; `None` for what belongs to no file.
+            rel: Option<ProjectPath>,
             notes: Vec<Diagnostic>,
             groups: Vec<(AdapterId, Vec<Case>)>,
         }
@@ -36,7 +36,7 @@ impl Collector<'_> {
         for stray in std::mem::take(&mut refinement.stray) {
             let mut rest = Vec::new();
             for case in stray.refined.cases {
-                match package_anchor(tree, &stray.requested, case.id.path().as_str()) {
+                match package_anchor(tree, &stray.requested, case.id.path()) {
                     Some(at) => anchored
                         .entry(at)
                         .or_default()
@@ -49,11 +49,12 @@ impl Collector<'_> {
 
         // Paths a reply said something about outside the requested files
         // (a directory a conftest skipped): that explains every file below.
-        let explained: Vec<&str> = unanchored
+        let explained: Vec<ProjectPathRef<'_>> = unanchored
             .iter()
             .flat_map(|(_, _, diagnostics)| diagnostics)
             .map(|d| d.path.as_str())
             .filter(|path| !path.is_empty())
+            .map(ProjectPathRef::as_written)
             .collect();
         let mut files = Vec::new();
         let mut refined_files = 0;
@@ -94,10 +95,9 @@ impl Collector<'_> {
             // or a directory it is in (a conftest skipped it), has had its
             // explanation.
             let quiet = notes.iter().all(|d| d.path != rel.as_str())
-                && !explained.iter().any(|dir| {
-                    rel.as_path()
-                        .starts_with_dir(ProjectPathRef::as_written(dir))
-                });
+                && !explained
+                    .iter()
+                    .any(|dir| rel.as_path().starts_with_dir(*dir));
             if found.parsed
                 && quiet
                 && !fell_back
@@ -118,7 +118,7 @@ impl Collector<'_> {
                 notes.push(note.into());
             }
             files.push(Merged {
-                rel: rel.as_str().to_owned(),
+                rel: Some(rel.clone()),
                 notes,
                 groups,
             });
@@ -130,7 +130,7 @@ impl Collector<'_> {
             let mut by_file: BTreeMap<WalkKey, Vec<(AdapterId, Vec<Case>)>> = BTreeMap::new();
             for (i, case) in cases {
                 let groups = by_file
-                    .entry(WalkKey::new(case.id.path().as_str()))
+                    .entry(WalkKey(case.id.path().to_project_path()))
                     .or_default();
                 match groups.iter_mut().find(|(by, _)| *by == i) {
                     Some((_, group)) => group.push(case),
@@ -139,27 +139,34 @@ impl Collector<'_> {
             }
             let Some(start) = files
                 .iter()
-                .position(|f| f.rel == tree.entries[anchor].rel.as_str())
+                .position(|f| f.rel.as_ref() == Some(&tree.entries[anchor].rel))
             else {
                 continue;
             };
             for (key, groups) in by_file {
                 // Past the package's files that come before it in the walk.
                 let mut at = start + 1;
-                while at < files.len()
-                    && files[at].rel.starts_with(package)
-                    && WalkKey::new(&files[at].rel) < key
+                while files
+                    .get(at)
+                    .and_then(|f| f.rel.as_ref())
+                    .is_some_and(|rel| {
+                        rel.as_str().starts_with(package)
+                            && walk_cmp(rel.as_path(), key.0.as_path()).is_lt()
+                    })
                 {
                     at += 1;
                 }
-                if files.get(at).is_some_and(|f| f.rel == key.0) {
+                if files
+                    .get(at)
+                    .is_some_and(|f| f.rel.as_ref() == Some(&key.0))
+                {
                     files[at].groups.extend(groups);
                     files[at].groups.sort_by_key(|(i, _)| *i);
                 } else {
                     files.insert(
                         at,
                         Merged {
-                            rel: key.0,
+                            rel: Some(key.0),
                             notes: Vec::new(),
                             groups,
                         },
@@ -169,7 +176,7 @@ impl Collector<'_> {
         }
         for (i, cases, diagnostics) in unanchored {
             files.push(Merged {
-                rel: String::new(),
+                rel: None,
                 notes: diagnostics,
                 groups: vec![(i, cases)],
             });
@@ -232,12 +239,17 @@ const INIT: &str = "__init__.py";
 /// importing a package can make tests in files of it the walk didn't claim
 /// (unittest's `load_tests` discovering another pattern), which belong at
 /// the package's place.
-fn package_anchor(tree: &Tree<'_>, requested: &[FileId], path: &str) -> Option<FileId> {
+fn package_anchor(
+    tree: &Tree<'_>,
+    requested: &[FileId],
+    path: ProjectPathRef<'_>,
+) -> Option<FileId> {
     requested
         .iter()
         .filter_map(|&at| {
             let package = tree.entries[at].rel.as_str().strip_suffix(INIT)?;
-            let holds = (package.is_empty() || package.ends_with('/')) && path.starts_with(package);
+            let holds = (package.is_empty() || package.ends_with('/'))
+                && path.as_str().starts_with(package);
             holds.then_some((package.len(), at))
         })
         .max_by_key(|(len, _)| *len)

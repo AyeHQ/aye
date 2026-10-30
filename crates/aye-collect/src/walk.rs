@@ -12,7 +12,7 @@ use crate::diagnostic::CollectDiagnostic;
 mod order;
 mod tree;
 
-pub(crate) use order::{WalkKey, walk_order};
+pub(crate) use order::{WalkKey, walk_cmp, walk_order};
 pub(crate) use tree::{AdapterId, FileId, RecognizerSet, Tree};
 
 /// How often a walk reports and asks whether to go on, in entries.
