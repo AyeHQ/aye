@@ -39,7 +39,7 @@ use aye_python_semantic::flow::exclusive;
 use aye_python_semantic::namespace::{Binding, Bound, Namespace};
 use aye_python_semantic::resolve::{Lookup, Resolved};
 
-use crate::marks::{Decorator, Scoped, decorator};
+use crate::marks::{Decorator, FixtureScope, decorator};
 
 /// A fixture definition, as far as parametrization is concerned.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,7 +54,7 @@ pub(crate) struct FixtureDef {
     /// Defined with `params=`.
     pub params: bool,
     pub autouse: bool,
-    pub scope: Scoped,
+    pub scope: FixtureScope,
     /// The fixtures it requests.
     pub args: Vec<String>,
     /// Whether the name is a fixture at runtime depends on a branch that
@@ -79,7 +79,7 @@ impl FixtureDef {
             explicit_name: false,
             params: false,
             autouse: false,
-            scope: Scoped::Function,
+            scope: FixtureScope::FUNCTION,
             args,
             conditional: false,
             opaque: false,
@@ -90,7 +90,7 @@ impl FixtureDef {
     /// Something bound to `name` that may be a fixture aye can't read.
     pub(super) fn opaque(name: &str) -> Self {
         Self {
-            scope: Scoped::Unknown,
+            scope: FixtureScope::UNKNOWN,
             opaque: true,
             ..Self::named(name, Vec::new())
         }
@@ -207,7 +207,7 @@ fn fixture_options<'a>(lookup: Lookup<'_, 'a>, call: &'a ExprCall, out: &mut Fix
                 }
             }
             "params" => out.params = !matches!(keyword.value, Expr::NoneLiteral(_)),
-            "scope" => out.scope = Scoped::of(lookup, &keyword.value),
+            "scope" => out.scope = FixtureScope::of(lookup, &keyword.value),
             "autouse" => out.autouse = lookup.boolean(&keyword.value) != Some(false),
             _ => {}
         }
@@ -274,7 +274,7 @@ pub(crate) fn fixture_of<'a>(
                 found.opaque |= def.opaque;
                 found.any_name |= def.any_name;
                 if found.scope != def.scope {
-                    found.scope = Scoped::Unknown;
+                    found.scope = FixtureScope::UNKNOWN;
                 }
                 for arg in def.args {
                     if !found.args.contains(&arg) {

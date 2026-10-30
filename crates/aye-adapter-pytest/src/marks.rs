@@ -9,5 +9,5 @@ mod pytestmark;
 pub(crate) mod ids;
 
 pub(crate) use mark::{Decorator, Mark, decorator, mark, timeout, usefixtures};
-pub(crate) use parametrize::{EmptyMark, Scoped, SetTimeout, parametrize};
+pub(crate) use parametrize::{EmptyMark, FixtureScope, SetTimeout, parametrize};
 pub(crate) use pytestmark::{MarkList, mark_collection, pytestmark};

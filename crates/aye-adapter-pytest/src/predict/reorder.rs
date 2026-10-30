@@ -7,14 +7,14 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::marks::Scoped;
+use crate::marks::FixtureScope;
 
 /// pytest's `ParamArgKey` for a class- or module-scoped parameter: tests
 /// sharing one share the parameter's setup, and pytest moves them
 /// together. The file is implied (keys are per file).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct ParamKey {
-    pub(super) scope: Scoped,
+    pub(super) scope: FixtureScope,
     pub(super) argname: String,
     pub(super) index: usize,
     /// For class scope, the class (its node id); `None` for functions
@@ -90,7 +90,7 @@ pub(super) fn reorder_items(keys: &[Vec<ParamKey>]) -> Vec<usize> {
         done
     }
 
-    const SCOPES: [Scoped; 2] = [Scoped::Module, Scoped::Class];
+    const SCOPES: [FixtureScope; 2] = [FixtureScope::MODULE, FixtureScope::CLASS];
     let mut indexes: Vec<Index> = SCOPES
         .iter()
         .map(|scope| {

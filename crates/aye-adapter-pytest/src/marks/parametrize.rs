@@ -43,7 +43,10 @@
 //!   aye doesn't read under an explicit id (`pytest.param(make(), id="x")`)
 //!   is taken as built.
 
+use std::cmp::Ordering;
+
 use aye_adapter::ast::{Expr, ExprCall};
+use aye_events::Scope;
 use aye_python_semantic::eval::{Elem, Value, deref};
 use aye_python_semantic::resolve::Lookup;
 
@@ -100,32 +103,64 @@ pub(crate) struct Parametrize {
     /// Per parameter set, what its first `timeout` mark sets.
     pub timeouts: Vec<SetTimeout>,
     /// `scope=`, when given (and not `None`).
-    pub scope: Option<Scoped>,
+    pub scope: Option<FixtureScope>,
 }
 
-/// A fixture's or a parametrization's scope.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum Scoped {
-    Function,
-    Class,
-    Module,
-    Package,
-    Session,
+/// A fixture's or a parametrization's scope: one of pytest's five, or
+/// none aye can read (`None`; never [`Scope::Other`]). It orders narrowest
+/// first, the opposite of [`Scope`], and the scope aye can't read last: the
+/// narrowest of several is their least.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct FixtureScope(Option<Scope>);
+
+impl FixtureScope {
+    pub(crate) const FUNCTION: Self = Self(Some(Scope::Function));
+    pub(crate) const CLASS: Self = Self(Some(Scope::Class));
+    pub(crate) const MODULE: Self = Self(Some(Scope::Module));
     /// Not a literal aye can read.
-    Unknown,
+    pub(crate) const UNKNOWN: Self = Self(None);
+
+    /// The scope an expression names: a literal of one of pytest's five
+    /// names, else [`Self::UNKNOWN`].
+    pub(crate) fn of<'a>(lookup: Lookup<'_, 'a>, expr: &'a Expr) -> Self {
+        Self(
+            lookup
+                .string(expr)
+                .map(|name| Scope::from(name.as_str()))
+                .filter(|scope| Scope::ALL.contains(scope)),
+        )
+    }
+
+    /// Whether aye reads it.
+    pub(crate) fn is_known(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Whether pytest reorders the tests sharing a parameter of this scope
+    /// within their file (`reorder_items`): class and module.
+    pub(crate) fn reorders_its_file(&self) -> bool {
+        matches!(self.0, Some(Scope::Class | Scope::Module))
+    }
+
+    /// Whether pytest reorders the tests sharing a parameter of this scope
+    /// across the session's files, as far as aye can tell: package, session,
+    /// or a scope it can't read.
+    pub(crate) fn reorders_the_session(&self) -> bool {
+        matches!(self.0, Some(Scope::Package | Scope::Session) | None)
+    }
 }
 
-impl Scoped {
-    /// The scope an expression names.
-    pub(crate) fn of<'a>(lookup: Lookup<'_, 'a>, expr: &'a Expr) -> Self {
-        match lookup.string(expr).as_deref() {
-            Some("function") => Self::Function,
-            Some("class") => Self::Class,
-            Some("module") => Self::Module,
-            Some("package") => Self::Package,
-            Some("session") => Self::Session,
-            _ => Self::Unknown,
-        }
+/// Narrowest first, then the scope aye can't read: [`Scope`]'s order
+/// (widest first) reversed, `None` after them all.
+impl Ord for FixtureScope {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.0.cmp(&self.0)
+    }
+}
+
+impl PartialOrd for FixtureScope {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -329,16 +364,16 @@ pub(crate) fn parametrize(mark: &Mark<'_, '_>, empty: &EmptyMark) -> Result<Para
     // `Scope.from_user`: a name other than pytest's five fails collection.
     let scope = match args.slots[4] {
         None | Some(Expr::NoneLiteral(_)) => None,
-        Some(expr) => match Scoped::of(lookup, expr) {
-            Scoped::Unknown => match lookup.string(expr) {
+        Some(expr) => match FixtureScope::of(lookup, expr) {
+            scope if scope.is_known() => Some(scope),
+            unknown => match lookup.string(expr) {
                 Some(name) => {
                     return Err(format!(
                         "parametrize() got an unexpected scope value '{name}'"
                     ));
                 }
-                None => Some(Scoped::Unknown),
+                None => Some(unknown),
             },
-            scope => Some(scope),
         },
     };
 
@@ -534,4 +569,68 @@ fn made_by_builtin<'a>(lookup: Lookup<'_, 'a>, call: &'a ExprCall) -> bool {
     lookup
         .path(&call.func)
         .is_some_and(|path| path.starts_with("builtins."))
+}
+
+#[cfg(test)]
+mod tests {
+    use aye_adapter::TextSize;
+    use aye_python_semantic::namespace::Namespace;
+
+    use super::*;
+    use crate::PYTEST;
+
+    /// The scope `expr`, a Python expression, names.
+    fn scope(expr: &str) -> FixtureScope {
+        let source = format!("{expr}\n");
+        let parsed = ruff_python_parser::parse_module(&source).unwrap();
+        let body = &parsed.syntax().body;
+        let namespace = Namespace::build(body, PYTEST);
+        let lookup = Lookup {
+            module: &namespace,
+            class: None,
+            source: &source,
+            at: TextSize::try_from(source.len()).unwrap(),
+        };
+        FixtureScope::of(lookup, &body[0].as_expr_stmt().unwrap().value)
+    }
+
+    /// pytest's five names are read, and nothing else; they order narrowest
+    /// first and a scope aye can't read last, which is what the narrowest of
+    /// an indirect parametrization's fixtures is taken by.
+    #[test]
+    fn fixture_scopes_order_narrowest_first() {
+        let known = [
+            "'function'",
+            "'class'",
+            "'module'",
+            "'package'",
+            "'session'",
+        ]
+        .map(scope);
+        assert!(known.iter().all(FixtureScope::is_known));
+        assert!(known.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(
+            known[..3],
+            [
+                FixtureScope::FUNCTION,
+                FixtureScope::CLASS,
+                FixtureScope::MODULE
+            ]
+        );
+        for unread in ["'Session'", "'dynamic'", "make()", "SCOPE", "1"] {
+            let unread = scope(unread);
+            assert_eq!(unread, FixtureScope::UNKNOWN);
+            assert!(known.iter().all(|scope| *scope < unread));
+        }
+        let narrowest = [known[4].clone(), FixtureScope::UNKNOWN, known[1].clone()];
+        assert_eq!(narrowest.iter().min(), Some(&FixtureScope::CLASS));
+        let file: Vec<bool> = known.iter().map(FixtureScope::reorders_its_file).collect();
+        assert_eq!(file, [false, true, true, false, false]);
+        let session: Vec<bool> = known
+            .iter()
+            .map(FixtureScope::reorders_the_session)
+            .collect();
+        assert_eq!(session, [false, false, false, true, true]);
+        assert!(FixtureScope::UNKNOWN.reorders_the_session());
+    }
 }

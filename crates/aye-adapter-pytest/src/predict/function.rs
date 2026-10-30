@@ -17,7 +17,7 @@ use super::closure::Closure;
 use super::reorder::ParamKey;
 use crate::conftest::default_argnames;
 use crate::marks::ids::parameterset_ids;
-use crate::marks::{self, Decorator, Mark, Scoped, SetTimeout, decorator};
+use crate::marks::{self, Decorator, FixtureScope, Mark, SetTimeout, decorator};
 
 /// Something callable bound to a test name.
 #[derive(Clone, Copy)]
@@ -322,14 +322,14 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
         // fixtures'. Class and module scopes make pytest reorder the file's
         // tests (`reorder_items`), which `reorder` models; package and
         // session scopes reorder across files.
-        let mut scopes: Vec<Scoped> = Vec::new();
+        let mut scopes: Vec<FixtureScope> = Vec::new();
         if runtime.is_none() {
             let defs = self.fixture_defs(frames);
             for p in &parsed {
                 let indirect_all =
                     !p.indirect.is_empty() && p.argnames.iter().all(|a| p.indirect.contains(a));
-                let scope = match p.scope {
-                    Some(scope) => scope,
+                let scope = match &p.scope {
+                    Some(scope) => scope.clone(),
                     None if indirect_all => p
                         .argnames
                         .iter()
@@ -337,13 +337,13 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
                             defs.iter()
                                 .rev()
                                 .find(|d| d.name == *a)
-                                .map_or(Scoped::Unknown, |d| d.scope)
+                                .map_or(FixtureScope::UNKNOWN, |d| d.scope.clone())
                         })
                         .min()
-                        .unwrap_or(Scoped::Function),
-                    None => Scoped::Function,
+                        .unwrap_or(FixtureScope::FUNCTION),
+                    None => FixtureScope::FUNCTION,
                 };
-                if matches!(scope, Scoped::Package | Scoped::Session | Scoped::Unknown) {
+                if scope.reorders_the_session() {
                     runtime = Some(format!(
                         "{name}: parameters of a session-wide or unknown scope reorder tests at runtime"
                     ));
@@ -397,13 +397,13 @@ impl<'s, 'a> ModuleRecognizer<'s, 'a> {
                         *timeout
                     };
                     let mut keys = keys.clone();
-                    if matches!(scope, Scoped::Class | Scoped::Module) {
+                    if scope.reorders_its_file() {
                         for argname in &p.argnames {
                             let key = ParamKey {
-                                scope: *scope,
+                                scope: scope.clone(),
                                 argname: argname.clone(),
                                 index,
-                                class: (*scope == Scoped::Class)
+                                class: (*scope == FixtureScope::CLASS)
                                     .then(|| class_key.clone())
                                     .flatten(),
                             };
